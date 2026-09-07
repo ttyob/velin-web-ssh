@@ -1,3 +1,29 @@
 #!/bin/sh
 set -eu
-exit 0
+
+. "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/common"
+
+log_uninstall() {
+  if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+    printf '%s\n' "$1" >> "$TRIM_TEMP_LOGFILE"
+  fi
+}
+
+delete_data=$(printf '%s' "${wizard_delete_data:-false}" | tr '[:upper:]' '[:lower:]')
+case "$delete_data" in
+  1|true|yes|on)
+    case "$DATA_ROOT" in
+      ""|/|/var|/var/apps)
+        log_uninstall "拒绝清理无效的应用数据目录：$DATA_ROOT"
+        exit 1
+        ;;
+    esac
+    if [ -d "$DATA_ROOT" ]; then
+      find "$DATA_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    fi
+    log_uninstall "已删除 Velin Web SSH 应用数据：$DATA_ROOT"
+    ;;
+  *)
+    log_uninstall "已保留 Velin Web SSH 应用数据：$DATA_ROOT"
+    ;;
+esac

@@ -2,4 +2,3 @@
 set -eu
 . "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/common"
 "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/main" stop || true
-# Keep TRIM_PKGVAR so an uninstall does not silently remove the database or keys.

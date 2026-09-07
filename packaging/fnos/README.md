@@ -34,3 +34,7 @@ sudo -u velin env \
 Set `VELIN_RESET_PASSWORD` in the command environment to choose the new
 password instead of generating a temporary one. The command restores the
 service to its previous running state after the reset.
+
+The uninstall wizard keeps application data by default. Select the destructive
+option only when the database, master key, credentials, backups, and logs
+should all be removed.

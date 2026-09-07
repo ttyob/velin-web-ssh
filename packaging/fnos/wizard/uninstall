@@ -1,0 +1,33 @@
+[
+  {
+    "stepTitle": "卸载 Velin Web SSH",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "可以仅卸载应用并保留配置，也可以同时删除数据库、主密钥、凭据、备份和日志。"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_delete_data",
+        "label": "应用数据处理方式",
+        "initValue": "false",
+        "options": [
+          {
+            "label": "保留应用数据，便于以后重新安装",
+            "value": "false"
+          },
+          {
+            "label": "删除全部应用数据（不可恢复）",
+            "value": "true"
+          }
+        ],
+        "rules": [
+          {
+            "required": true,
+            "message": "请选择应用数据处理方式"
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -46,30 +46,35 @@ const cookieName = "velin_session"
 const csrfCookieName = "velin_csrf"
 
 type API struct {
-	cfg        config.Config
-	store      *store.Store
-	vault      *security.Vault
-	terminals  *terminal.Manager
-	forwards   *forward.Manager
-	agents     *agent.Manager
-	webProxies *webProxyManager
-	desktops   *remotedesktop.Manager
-	tailscale  *tailnet.Manager
-	started    time.Time
-	requests   atomic.Int64
-	websockets atomic.Int64
-	httpTotal  atomic.Uint64
-	httpErrors atomic.Uint64
-	httpNanos  atomic.Uint64
-	http2xx    atomic.Uint64
-	http3xx    atomic.Uint64
-	http4xx    atomic.Uint64
-	http5xx    atomic.Uint64
-	wsTotal    atomic.Uint64
-	taskQueue  chan commandTaskRequest
-	backupMu   sync.Mutex
-	captchaMu  sync.Mutex
-	captchas   map[string]loginCaptcha
+	cfg             config.Config
+	store           *store.Store
+	vault           *security.Vault
+	terminals       *terminal.Manager
+	forwards        *forward.Manager
+	agents          *agent.Manager
+	webProxies      *webProxyManager
+	desktops        *remotedesktop.Manager
+	tailscale       *tailnet.Manager
+	started         time.Time
+	requests        atomic.Int64
+	websockets      atomic.Int64
+	httpTotal       atomic.Uint64
+	httpErrors      atomic.Uint64
+	httpNanos       atomic.Uint64
+	http2xx         atomic.Uint64
+	http3xx         atomic.Uint64
+	http4xx         atomic.Uint64
+	http5xx         atomic.Uint64
+	wsTotal         atomic.Uint64
+	taskQueue       chan commandTaskRequest
+	backupMu        sync.Mutex
+	captchaMu       sync.Mutex
+	captchas        map[string]loginCaptcha
+	updateMu        sync.Mutex
+	updateCache     updateInfo
+	updateCheckedAt time.Time
+	updateClient    *http.Client
+	updateURL       string
 }
 
 type contextKey string
@@ -106,7 +111,7 @@ func newAPI(cfg config.Config, s *store.Store, v *security.Vault, t *terminal.Ma
 	desktops := remotedesktop.NewManager(s, v, t, cfg.GuacdAddr, cfg.DesktopProxyAddr, cfg.RDPDriveDir)
 	desktops.SetDialer(dialer)
 	forwards.SetDialer(dialer)
-	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha)}
+	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha), updateClient: &http.Client{Timeout: 10 * time.Second}, updateURL: defaultReleaseURL}
 	a.restoreAIModelConfig()
 	a.restoreHostPortWebServices()
 	go a.commandTaskWorker()
@@ -184,6 +189,7 @@ func (a *API) Router() http.Handler {
 		r.Put("/api/workspace", a.saveWorkspace)
 		r.Get("/api/preferences", a.preferences)
 		r.Put("/api/preferences", a.savePreferences)
+		r.Get("/api/system/update", a.update)
 		r.Get("/api/data/export", a.exportData)
 		r.Post("/api/data/import/openssh", a.importOpenSSH)
 		r.Get("/api/snippets", a.snippets)

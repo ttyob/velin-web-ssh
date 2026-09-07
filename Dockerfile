@@ -7,13 +7,14 @@ RUN npm run build
 
 FROM golang:1.25.13-alpine AS go-build
 ARG GOPROXY=https://goproxy.cn,direct
+ARG VELIN_VERSION=dev
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /velin ./cmd/velin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X velin-webssh/internal/version.Current=${VELIN_VERSION}" -o /velin ./cmd/velin
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates ffmpeg && addgroup -S velin && adduser -S -G velin velin

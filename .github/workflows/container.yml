@@ -73,6 +73,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VELIN_VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -102,10 +104,12 @@ jobs:
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
       - name: Build Windows desktop application
+        env:
+          VELIN_VERSION: ${{ github.ref_name }}
         shell: pwsh
         run: |
           $env:Path = "$(go env GOPATH)\bin;$env:Path"
-          wails.exe build -platform windows/amd64 -clean -m -s -skipbindings
+          wails.exe build -platform windows/amd64 -clean -m -s -skipbindings -ldflags "-X velin-webssh/internal/version.Current=$env:VELIN_VERSION"
       - name: Package Windows desktop release
         shell: pwsh
         run: |
@@ -193,7 +197,7 @@ jobs:
             package="velin-linux-web-${arch}"
             mkdir -p "release/${package}/web"
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build \
-              -trimpath -ldflags="-s -w" -o "release/${package}/velin-web" ./cmd/velin
+              -trimpath -ldflags="-s -w -X velin-webssh/internal/version.Current=${{ github.ref_name }}" -o "release/${package}/velin-web" ./cmd/velin
             cp -R web/dist "release/${package}/web/dist"
             cp .env.example README.md "release/${package}/"
             tar -C release -czf "release/${package}.tar.gz" "${package}"

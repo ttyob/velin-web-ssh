@@ -1363,6 +1363,70 @@ body {
   border-radius: var(--radius-sm);
 }
 
+.security-state.warning {
+  border-color: #765d35;
+  background: #322a1d;
+  color: #e8bd73;
+}
+
+.update-panel {
+  min-width: 0;
+  padding: 18px 22px 26px;
+}
+
+.update-version-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.update-version-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.update-version-grid small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.update-version-grid strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-error {
+  color: #e6aeae !important;
+}
+
+.update-actions {
+  justify-content: flex-start;
+  margin-top: 18px;
+}
+
+.update-release-link {
+  text-decoration: none;
+}
+
+.update-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: #e8bd73;
+  box-shadow: 0 0 0 3px #e8bd7330;
+}
+
 .totp-secret {
   border-color: var(--line);
 }

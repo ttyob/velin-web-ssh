@@ -204,7 +204,7 @@ func runDesktop() (runErr error) {
 			_ = s.Close()
 			return err
 		}
-		created, lookupErr := s.UserByUsername(cfg.AdminUser)
+		created, _, lookupErr := s.UserByUsername(cfg.AdminUser)
 		if lookupErr != nil {
 			_ = s.Close()
 			return lookupErr

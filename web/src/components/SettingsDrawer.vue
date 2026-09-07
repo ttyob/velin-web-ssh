@@ -39,6 +39,7 @@ import type {
   SecurityPolicy,
   TailscaleConfig,
   TerminalSession,
+  UpdateCheck,
   User,
 } from "../types";
 import ToolsDrawer from "./ToolsDrawer.vue";
@@ -107,6 +108,18 @@ const lockPINConfigured = ref(false),
   lockPINSetupOpen = ref(false),
   savingLockPIN = ref(false),
   lockPINForm = ref({ pin: "", confirm: "" });
+const updateCheck = ref<UpdateCheck>({
+  currentVersion: "dev",
+  latestVersion: "",
+  versionKnown: false,
+  updateAvailable: false,
+  releaseURL: "",
+  releaseName: "",
+  publishedAt: "",
+  checkedAt: "",
+});
+const updateCheckBusy = ref(false);
+const updateCheckError = ref("");
 let preferenceSaveTimer: number | undefined;
 let preferenceSaveInFlight = false;
 let preferenceSaveQueued = false;
@@ -217,13 +230,27 @@ async function load() {
       apiKey: "",
       clearAPIKey: false,
 		};
-		tailscaleForm.value = {
+	tailscaleForm.value = {
 			enabled: tailscale.value.enabled,
 			hostname: tailscale.value.hostname,
 			controlURL: tailscale.value.controlURL,
 			authKey: "",
 			clearAuthKey: false,
-		};
+	};
+  void checkForUpdate();
+}
+async function checkForUpdate(force = false) {
+  if (updateCheckBusy.value) return;
+  updateCheckBusy.value = true;
+  updateCheckError.value = "";
+  try {
+    const suffix = force ? "?refresh=1" : "";
+    updateCheck.value = await api<UpdateCheck>(`/api/system/update${suffix}`);
+  } catch (error) {
+    updateCheckError.value = error instanceof Error ? error.message : "检查更新失败";
+  } finally {
+    updateCheckBusy.value = false;
+  }
 }
 function normalizePIN(value: string) {
   return value.replace(/\D/g, "").slice(0, 6);
@@ -759,6 +786,10 @@ function forwardBatch(text: string, sessionIDs: string[]) {
         <button :class="{ active: tab === 'tasks' }" @click="tab = 'tasks'">
           <ListTodo :size="17" /><span>任务队列</span>
         </button>
+        <button :class="{ active: tab === 'updates' }" @click="tab = 'updates'">
+          <Download :size="17" /><span>版本更新</span>
+          <i v-if="updateCheck.updateAvailable" class="update-dot" aria-label="有新版本" />
+        </button>
       </nav>
       <section
         class="settings-content"
@@ -780,6 +811,68 @@ function forwardBatch(text: string, sessionIDs: string[]) {
           @deleted="emit('credentialDeleted', $event)"
         />
         <TaskPanel v-if="tab === 'tasks'" :sessions="sessions" />
+        <div v-if="tab === 'updates'" class="update-panel">
+          <div class="settings-section">
+            <div class="security-heading">
+              <div>
+                <h3>版本更新</h3>
+                <p>检查 GitHub 上的最新稳定 Release。</p>
+              </div>
+              <span
+                class="security-state"
+                :class="{
+                  enabled: updateCheck.versionKnown && !updateCheck.updateAvailable,
+                  warning: updateCheck.updateAvailable,
+                }"
+              >
+                {{
+                  updateCheckBusy
+                    ? "检查中"
+                    : updateCheckError
+                      ? "检查失败"
+                      : !updateCheck.versionKnown
+                        ? "开发版本"
+                        : updateCheck.updateAvailable
+                          ? "发现新版本"
+                          : "已是最新"
+                }}
+              </span>
+            </div>
+            <div class="update-version-grid">
+              <div>
+                <small>当前版本</small>
+                <strong>{{ updateCheck.currentVersion }}</strong>
+              </div>
+              <div>
+                <small>最新版本</small>
+                <strong>{{ updateCheck.latestVersion || "--" }}</strong>
+              </div>
+            </div>
+            <p v-if="updateCheckError" class="setting-note update-error">
+              {{ updateCheckError }}
+            </p>
+            <p v-else-if="updateCheck.releaseName" class="setting-note">
+              {{ updateCheck.releaseName }}
+              <span v-if="updateCheck.publishedAt">
+                · {{ new Date(updateCheck.publishedAt).toLocaleDateString() }}
+              </span>
+            </p>
+            <div class="row-actions update-actions">
+              <el-button
+                :icon="RefreshCw"
+                :loading="updateCheckBusy"
+                @click="checkForUpdate(true)"
+              >检查更新</el-button>
+              <a
+                v-if="updateCheck.releaseURL"
+                class="el-button el-button--primary update-release-link"
+                :href="updateCheck.releaseURL"
+                target="_blank"
+                rel="noreferrer"
+              >查看 Release</a>
+            </div>
+          </div>
+        </div>
         <el-tabs
           v-if="
             ['terminal', 'devices', 'users', 'admin', 'network', 'ai'].includes(tab)

@@ -46,6 +46,16 @@ export interface TailscaleStatus {
   authUrl?: string;
   health?: string[];
 }
+export interface UpdateCheck {
+  currentVersion: string;
+  latestVersion: string;
+  versionKnown: boolean;
+  updateAvailable: boolean;
+  releaseURL: string;
+  releaseName: string;
+  publishedAt: string;
+  checkedAt: string;
+}
 export interface Snippet {
   id: string;
   userID?: string;

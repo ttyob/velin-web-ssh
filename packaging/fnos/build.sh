@@ -103,7 +103,7 @@ else
   (
     cd "$REPO_DIR"
     CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build \
-      -trimpath -ldflags="-s -w" -o "$STAGE_DIR/app/bin/velin" ./cmd/velin
+      -trimpath -ldflags="-s -w -X velin-webssh/internal/version.Current=${VERSION}" -o "$STAGE_DIR/app/bin/velin" ./cmd/velin
   )
 fi
 

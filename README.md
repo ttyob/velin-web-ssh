@@ -80,6 +80,23 @@ docker compose restart velin
 docker compose down
 ```
 
+忘记管理员密码时，可保留现有数据并重置密码。命令会撤销该管理员的旧登录会话，输出临时密码，并要求登录后修改：
+
+```bash
+docker compose run --rm --no-deps velin --reset-admin-password
+```
+
+若要指定新密码和管理员用户名：
+
+```bash
+docker compose run --rm --no-deps \
+  -e VELIN_ADMIN_USER=admin \
+  -e VELIN_ADMIN_PASSWORD='替换为新密码' \
+  velin --reset-admin-password
+```
+
+使用安装脚本部署在 `/opt/velin` 时，先进入该目录再执行上述命令。仅修改 `.env` 中的 `VELIN_ADMIN_PASSWORD` 不会重置已有账户。
+
 ### GitHub Release
 
 [Releases](https://github.com/ttyob/VelinWebSsh/releases) 提供以下运行包：
@@ -87,6 +104,12 @@ docker compose down
 - `velin-linux-web-amd64.tar.gz`
 - `velin-linux-web-arm64.tar.gz`
 - `velin-windows-gui-amd64.zip`
+
+Linux Release 包可在解压目录中直接重置管理员密码：
+
+```bash
+./velin-web --reset-admin-password
+```
 
 ### 飞牛 fnOS 原生应用包
 
@@ -102,6 +125,17 @@ packaging/fnos/build.sh
 VELIN_FNOS_VERSION=0.3.27 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
 VELIN_FNOS_VERSION=0.3.27 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
 ```
+
+忘记 fnOS 原生应用的管理员密码时，通过 SSH 登录 NAS 后执行：
+
+```bash
+sudo -u velin env \
+  TRIM_APPDEST=/var/apps/velin-web-ssh/target \
+  TRIM_PKGVAR=/var/apps/velin-web-ssh/var \
+  /var/apps/velin-web-ssh/target/cmd/main reset-admin-password
+```
+
+命令会短暂停止 Velin、生成并输出临时密码，然后恢复原有运行状态。指定新密码时增加 `VELIN_RESET_PASSWORD='替换为新密码'`；数据、主机和凭据不会被删除。
 
 将生成的 `dist/fnos/velin-fnos-native-*.fpk` 在飞牛应用中心手动安装。首次安装向导会设置管理员账号和密码。构建脚本需要 Docker 和 GitHub 网络来提取对应架构的 guacd 运行库；安装后的 NAS 不需要 Docker。
 
@@ -189,7 +223,7 @@ wails build -platform windows/amd64 -clean -m -s -skipbindings
 
 Windows GUI 默认为便携模式。数据库、主密钥、终端录制和 `velin-gui.log` 均保存在 `Velin-GUI.exe` 所在目录。首次启动会显示管理员凭据对话框，密码可通过按钮复制并同时写入 `velin-gui.log`。
 
-如果初始密码已经丢失，在 PowerShell 中执行以下命令。程序会保留现有数据、重置 `admin` 密码、清除旧登录会话，并通过弹窗和日志显示新密码：
+如果初始密码已经丢失，在 PowerShell 中执行以下命令。程序会保留现有数据、重置管理员密码、清除旧登录会话，并通过弹窗和日志显示新密码：
 
 ```powershell
 .\Velin-GUI.exe --reset-admin-password

@@ -465,6 +465,9 @@ func (s *Store) ResetUserPassword(userID, newHash string, forceChange bool) erro
 	if _, err = tx.Exec(`DELETE FROM auth_sessions WHERE user_id=?`, userID); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`DELETE FROM login_attempts WHERE identity=(SELECT lower(trim(username)) FROM users WHERE id=?)`, userID); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

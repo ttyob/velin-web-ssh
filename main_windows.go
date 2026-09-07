@@ -28,6 +28,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"velin-webssh/internal/adminreset"
 	"velin-webssh/internal/agent"
 	"velin-webssh/internal/api"
 	"velin-webssh/internal/config"
@@ -216,34 +217,13 @@ func runDesktop() (runErr error) {
 		credentialNotice = &desktopCredentialNotice{username: cfg.AdminUser, password: password}
 		slog.Warn("GUI administrator created; credentials are shown in the application", "username", cfg.AdminUser)
 	} else if desktopArgumentPresent("--reset-admin-password") {
-		user, _, lookupErr := s.UserByUsername(cfg.AdminUser)
-		if lookupErr != nil {
+		result, resetErr := adminreset.Reset(s, cfg.AdminUser, cfg.AdminPassword)
+		if resetErr != nil {
 			_ = s.Close()
-			return fmt.Errorf("find desktop administrator %q: %w", cfg.AdminUser, lookupErr)
+			return resetErr
 		}
-		if user.Role != "admin" {
-			_ = s.Close()
-			return fmt.Errorf("desktop user %q is not an administrator", cfg.AdminUser)
-		}
-		password := cfg.AdminPassword
-		if password == "" {
-			password, err = security.RandomToken(12)
-			if err != nil {
-				_ = s.Close()
-				return err
-			}
-		}
-		hash, hashErr := security.HashPassword(password)
-		if hashErr != nil {
-			_ = s.Close()
-			return hashErr
-		}
-		if err = s.ResetUserPassword(user.ID, hash, true); err != nil {
-			_ = s.Close()
-			return fmt.Errorf("reset desktop administrator password: %w", err)
-		}
-		credentialNotice = &desktopCredentialNotice{username: user.Username, password: password, reset: true}
-		slog.Warn("GUI administrator password reset; credentials are shown in the application", "username", user.Username)
+		credentialNotice = &desktopCredentialNotice{username: result.Username, password: result.Password, reset: true}
+		slog.Warn("GUI administrator password reset; credentials are shown in the application", "username", result.Username)
 	}
 	tailscaleSettings, err := tailnet.LoadSettings(s, vault)
 	if err != nil {

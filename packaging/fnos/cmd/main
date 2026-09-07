@@ -74,6 +74,37 @@ start() {
   fi
 }
 
+reset_admin_password() {
+  was_running=false
+  if [ -f "$VELIN_PID" ] && pid_alive "$(cat "$VELIN_PID")"; then
+    was_running=true
+    stop_pid "$VELIN_PID"
+  fi
+  mkdir -p "$DATA_ROOT/data"
+  load_config
+
+  set +e
+  (
+    cd "$DATA_ROOT/data"
+    env \
+      VELIN_DATA_DIR="$DATA_ROOT/data" \
+      VELIN_ADMIN_USER="${VELIN_ADMIN_USER:-admin}" \
+      VELIN_ADMIN_PASSWORD="${VELIN_RESET_PASSWORD:-}" \
+      "$APP_ROOT/bin/velin" --reset-admin-password
+  )
+  reset_status=$?
+  set -e
+
+  restart_status=0
+  if [ "$was_running" = true ]; then
+    start || restart_status=$?
+  fi
+  if [ "$reset_status" -ne 0 ]; then
+    return "$reset_status"
+  fi
+  return "$restart_status"
+}
+
 case "${1:-}" in
   start|restart)
     if [ "${1:-}" = "restart" ]; then
@@ -89,6 +120,9 @@ case "${1:-}" in
   status)
     [ -f "$VELIN_PID" ] && pid_alive "$(cat "$VELIN_PID")" && \
       [ -f "$GUACD_PID" ] && pid_alive "$(cat "$GUACD_PID")"
+    ;;
+  reset-admin-password)
+    reset_admin_password
     ;;
   *)
     printf 'Unknown command: %s\n' "${1:-}" >&2

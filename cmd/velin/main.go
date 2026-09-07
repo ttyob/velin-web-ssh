@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"velin-webssh/internal/adminreset"
 	"velin-webssh/internal/agent"
 	"velin-webssh/internal/api"
 	"velin-webssh/internal/config"
@@ -36,6 +37,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer s.Close()
+	if argumentPresent("--reset-admin-password") {
+		result, err := adminreset.Reset(s, cfg.AdminUser, cfg.AdminPassword)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("管理员密码已重置，旧登录会话已撤销。\nusername=%s\npassword=%s\n", result.Username, result.Password)
+		return
+	}
 	vault, err := security.LoadVault(cfg.MasterKeyPath)
 	if err != nil {
 		log.Fatal(err)
@@ -112,4 +121,13 @@ func main() {
 	if err = server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func argumentPresent(name string) bool {
+	for _, argument := range os.Args[1:] {
+		if argument == name {
+			return true
+		}
+	}
+	return false
 }

@@ -811,6 +811,70 @@ function forwardBatch(text: string, sessionIDs: string[]) {
           @deleted="emit('credentialDeleted', $event)"
         />
         <TaskPanel v-if="tab === 'tasks'" :sessions="sessions" />
+        <div
+          v-if="tab === 'data' && auth.user?.role === 'admin'"
+          class="settings-section backup-section data-backup-section"
+        >
+          <div class="security-heading">
+            <div>
+              <h3>加密备份与恢复</h3>
+              <p>备份包含应用数据库和主密钥，使用输入的密钥整体加密。密钥不会保存到服务器。</p>
+            </div>
+            <span class="security-state">AES-GCM</span>
+          </div>
+          <div class="backup-key-form">
+            <el-input
+              v-model="backupKey"
+              type="password"
+              show-password
+              autocomplete="new-password"
+              placeholder="备份密钥，至少 12 个字符"
+            />
+            <el-button
+              :icon="HardDriveDownload"
+              type="primary"
+              :loading="backupBusy === 'backup'"
+              :disabled="backupBusy === 'restore'"
+              @click="backup"
+            >创建加密备份</el-button>
+            <input
+              ref="backupFileInput"
+              class="visually-hidden"
+              type="file"
+              accept=".enc,application/octet-stream"
+              @change="uploadBackup"
+            />
+            <el-button
+              :icon="Upload"
+              :loading="backupBusy === 'restore'"
+              :disabled="backupBusy === 'backup'"
+              @click="chooseBackupFile"
+            >上传备份文件</el-button>
+          </div>
+          <p class="setting-note">
+            上传时会先使用备份密钥解密并校验完整性，校验通过后才会加入下方列表。忘记密钥无法恢复备份。
+          </p>
+          <div v-for="item in backups" :key="item.file" class="data-row backup-row">
+            <div>
+              <strong>{{ item.file }}</strong>
+              <small>{{ formatBytes(item.size) }} · {{ new Date(item.createdAt).toLocaleString() }} · {{ item.sha256?.slice(0, 12) }}</small>
+            </div>
+            <div class="row-actions">
+              <el-button text :icon="Download" @click="downloadBackup(item.file)">下载</el-button>
+              <el-button
+                text
+                type="warning"
+                :icon="RefreshCw"
+                :loading="backupBusy === 'restore'"
+                :disabled="backupBusy === 'backup'"
+                @click="restoreBackup(item.file)"
+              >恢复</el-button>
+            </div>
+          </div>
+          <div v-if="!backups.length" class="empty-small backup-empty">
+            <Database :size="24" /><span>暂无加密备份</span>
+          </div>
+        </div>
         <div v-if="tab === 'updates'" class="update-panel">
           <div class="settings-section">
             <div class="security-heading">
@@ -1304,67 +1368,6 @@ function forwardBatch(text: string, sessionIDs: string[]) {
               <el-button :icon="ShieldCheck" type="primary" @click="savePolicy"
                 >保存安全策略</el-button
               >
-            </div>
-            <div class="settings-section backup-section">
-              <div class="security-heading">
-                <div>
-                  <h3>加密备份与恢复</h3>
-                  <p>备份包含应用数据库和主密钥，使用输入的密钥整体加密。密钥不会保存到服务器。</p>
-                </div>
-                <span class="security-state">AES-GCM</span>
-              </div>
-              <div class="backup-key-form">
-                <el-input
-                  v-model="backupKey"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  placeholder="备份密钥，至少 12 个字符"
-                />
-                <el-button
-                  :icon="HardDriveDownload"
-                  type="primary"
-                  :loading="backupBusy === 'backup'"
-                  :disabled="backupBusy === 'restore'"
-                  @click="backup"
-                >创建加密备份</el-button>
-                <input
-                  ref="backupFileInput"
-                  class="visually-hidden"
-                  type="file"
-                  accept=".enc,application/octet-stream"
-                  @change="uploadBackup"
-                />
-                <el-button
-                  :icon="Upload"
-                  :loading="backupBusy === 'restore'"
-                  :disabled="backupBusy === 'backup'"
-                  @click="chooseBackupFile"
-                >上传并校验备份</el-button>
-              </div>
-              <p class="setting-note">
-                恢复时请输入创建该备份时使用的密钥。忘记密钥无法恢复备份；建议通过 HTTPS 使用此功能。
-              </p>
-              <div v-for="item in backups" :key="item.file" class="data-row backup-row">
-                <div>
-                  <strong>{{ item.file }}</strong>
-                  <small>{{ formatBytes(item.size) }} · {{ new Date(item.createdAt).toLocaleString() }} · {{ item.sha256?.slice(0, 12) }}</small>
-                </div>
-                <div class="row-actions">
-                  <el-button text :icon="Download" @click="downloadBackup(item.file)">下载</el-button>
-                  <el-button
-                    text
-                    type="warning"
-                    :icon="RefreshCw"
-                    :loading="backupBusy === 'restore'"
-                    :disabled="backupBusy === 'backup'"
-                    @click="restoreBackup(item.file)"
-                  >恢复</el-button>
-                </div>
-              </div>
-              <div v-if="!backups.length" class="empty-small backup-empty">
-                <Database :size="24" /><span>暂无加密备份</span>
-              </div>
             </div>
           </el-tab-pane>
           <el-tab-pane

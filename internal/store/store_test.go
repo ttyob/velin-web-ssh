@@ -153,6 +153,17 @@ func TestAuthSessionLockState(t *testing.T) {
 	}
 }
 
+func TestTOTPDefaultsToDisabledWhenNotConfigured(t *testing.T) {
+	s := testStore(t)
+	if err := s.CreateUser("u1", "user", "hash", "user"); err != nil {
+		t.Fatal(err)
+	}
+	secret, recovery, enabled, err := s.TOTP("u1")
+	if err != nil || secret != "" || recovery != nil || enabled {
+		t.Fatalf("unexpected TOTP defaults: secret=%q recovery=%v enabled=%v err=%v", secret, recovery, enabled, err)
+	}
+}
+
 func TestResetUserPasswordInvalidatesSessions(t *testing.T) {
 	s := testStore(t)
 	if err := s.CreateUser("u1", "admin", "old-hash", "admin"); err != nil {

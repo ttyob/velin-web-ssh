@@ -281,9 +281,6 @@ func TestLoginRequiresCaptchaAfterCredentialFailure(t *testing.T) {
 	if err = database.CreateUser("admin", "admin", hash, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.SaveTOTP("admin", "", nil, false); err != nil {
-		t.Fatal(err)
-	}
 	a := &API{cfg: config.Config{CookieSecure: false}, store: database, captchas: make(map[string]loginCaptcha)}
 
 	bad := httptest.NewRequest(http.MethodPost, "http://velin.example/api/auth/login", strings.NewReader(`{"username":"admin","password":"wrong"}`))

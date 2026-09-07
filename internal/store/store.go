@@ -1133,6 +1133,9 @@ func (s *Store) FinishRecording(userID, id, status string, bytes int64, finished
 func (s *Store) TOTP(userID string) (secret string, recovery []string, enabled bool, err error) {
 	var raw string
 	err = s.DB.QueryRow(`SELECT secret_enc,recovery_hashes,enabled FROM user_totp WHERE user_id=?`, userID).Scan(&secret, &raw, &enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil, false, nil
+	}
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &recovery)
 	}

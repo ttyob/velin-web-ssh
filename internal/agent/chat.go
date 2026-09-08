@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -67,11 +69,75 @@ type ModelInfo struct {
 	MaxOutputTokens int    `json:"maxOutputTokens,omitempty"`
 }
 
+type modelToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
 func (m *Manager) Backends() []BackendInfo {
 	return []BackendInfo{{ID: "native", Label: "Velin", Available: true}}
 }
 
 func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext string, options ...ChatOptions) (ChatResponse, error) {
+	request, model, err := m.chatRequest(ctx, history, hostContext, false, options...)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	client := &http.Client{Timeout: 90 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("AI model request: %w", err)
+	}
+	defer response.Body.Close()
+	responseRaw, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return ChatResponse{}, modelHTTPError(response.StatusCode, responseRaw)
+	}
+	return decodeChatResponse(responseRaw, model)
+}
+
+func (m *Manager) ChatStream(ctx context.Context, history []ChatMessage, hostContext string, onDelta func(string) error, options ...ChatOptions) (ChatResponse, error) {
+	request, model, err := m.chatRequest(ctx, history, hostContext, true, options...)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("AI model request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		responseRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+		if readErr != nil {
+			return ChatResponse{}, readErr
+		}
+		return ChatResponse{}, modelHTTPError(response.StatusCode, responseRaw)
+	}
+	if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		responseRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+		if readErr != nil {
+			return ChatResponse{}, readErr
+		}
+		result, decodeErr := decodeChatResponse(responseRaw, model)
+		if decodeErr == nil && result.Message != "" && onDelta != nil {
+			decodeErr = onDelta(result.Message)
+		}
+		return result, decodeErr
+	}
+	return decodeChatStream(response.Body, model, onDelta)
+}
+
+func (m *Manager) chatRequest(ctx context.Context, history []ChatMessage, hostContext string, stream bool, options ...ChatOptions) (*http.Request, string, error) {
 	selected := ChatOptions{}
 	if len(options) > 0 {
 		selected = options[0]
@@ -79,25 +145,25 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 	switch strings.TrimSpace(selected.Backend) {
 	case "", "native":
 	default:
-		return ChatResponse{}, errors.New("invalid agent backend")
+		return nil, "", errors.New("invalid agent backend")
 	}
 	config := m.AIConfig()
 	if !config.Configured() {
-		return ChatResponse{}, errors.New("AI model service is not configured")
+		return nil, "", errors.New("AI model service is not configured")
 	}
 	if len(history) == 0 || len(history) > 40 {
-		return ChatResponse{}, errors.New("invalid agent conversation")
+		return nil, "", errors.New("invalid agent conversation")
 	}
 	model := strings.TrimSpace(selected.Model)
 	if model == "" {
 		model = config.Model
 	}
 	if len(model) > 256 || strings.ContainsRune(model, '\x00') {
-		return ChatResponse{}, errors.New("invalid agent model")
+		return nil, "", errors.New("invalid agent model")
 	}
 	reasoningEffort := strings.TrimSpace(selected.ReasoningEffort)
 	if reasoningEffort != "" && reasoningEffort != "low" && reasoningEffort != "medium" && reasoningEffort != "high" {
-		return ChatResponse{}, errors.New("invalid reasoning effort")
+		return nil, "", errors.New("invalid reasoning effort")
 	}
 	messages := []map[string]string{{
 		"role":    "system",
@@ -107,7 +173,7 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 		role := strings.TrimSpace(item.Role)
 		content := strings.TrimSpace(item.Content)
 		if (role != "user" && role != "assistant") || content == "" || len(content) > 32000 {
-			return ChatResponse{}, errors.New("invalid agent message")
+			return nil, "", errors.New("invalid agent message")
 		}
 		messages = append(messages, map[string]string{"role": role, "content": content})
 	}
@@ -135,9 +201,12 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 	if reasoningEffort != "" {
 		body["reasoning_effort"] = reasoningEffort
 	}
+	if stream {
+		body["stream"] = true
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
-		return ChatResponse{}, err
+		return nil, "", err
 	}
 	endpoint := strings.TrimRight(config.BaseURL, "/")
 	if !strings.HasSuffix(endpoint, "/chat/completions") {
@@ -145,29 +214,16 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
-		return ChatResponse{}, err
+		return nil, "", err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if config.APIKey != "" {
 		request.Header.Set("Authorization", "Bearer "+config.APIKey)
 	}
-	client := &http.Client{Timeout: 90 * time.Second}
-	response, err := client.Do(request)
-	if err != nil {
-		return ChatResponse{}, fmt.Errorf("AI model request: %w", err)
-	}
-	defer response.Body.Close()
-	responseRaw, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message := strings.TrimSpace(string(responseRaw))
-		if len(message) > 4096 {
-			message = message[:4096]
-		}
-		return ChatResponse{}, fmt.Errorf("AI model returned HTTP %d: %s", response.StatusCode, message)
-	}
+	return request, model, nil
+}
+
+func decodeChatResponse(responseRaw []byte, model string) (ChatResponse, error) {
 	var decoded struct {
 		Choices []struct {
 			Message struct {
@@ -181,33 +237,145 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 				} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
-		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
-		} `json:"usage"`
+		Usage chatUsage `json:"usage"`
 	}
-	if err = json.Unmarshal(responseRaw, &decoded); err != nil || len(decoded.Choices) == 0 {
+	if err := json.Unmarshal(responseRaw, &decoded); err != nil || len(decoded.Choices) == 0 {
 		return ChatResponse{}, errors.New("AI model returned an invalid response")
 	}
-	result := ChatResponse{
-		Message:          strings.TrimSpace(decoded.Choices[0].Message.Content),
-		Commands:         make([]CommandProposal, 0),
-		Model:            model,
-		Backend:          "native",
-		PromptTokens:     decoded.Usage.PromptTokens,
-		CompletionTokens: decoded.Usage.CompletionTokens,
-		TotalTokens:      decoded.Usage.TotalTokens,
-	}
+	calls := make([]modelToolCall, 0, len(decoded.Choices[0].Message.ToolCalls))
 	for _, call := range decoded.Choices[0].Message.ToolCalls {
-		if call.Function.Name != "run_ssh_command" {
+		calls = append(calls, modelToolCall{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
+	}
+	return finishChatResponse(decoded.Choices[0].Message.Content, calls, model, decoded.Usage)
+}
+
+func decodeChatStream(body io.Reader, model string, onDelta func(string) error) (ChatResponse, error) {
+	type streamToolCall struct {
+		Index    int    `json:"index"`
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
+	type streamMessage struct {
+		Content   string           `json:"content"`
+		ToolCalls []streamToolCall `json:"tool_calls"`
+	}
+	var content strings.Builder
+	toolCalls := make(map[int]*modelToolCall)
+	usage := chatUsage{}
+	process := func(data string) (bool, error) {
+		if data == "[DONE]" {
+			return true, nil
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta   streamMessage `json:"delta"`
+				Message streamMessage `json:"message"`
+			} `json:"choices"`
+			Usage chatUsage `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return false, errors.New("AI model returned an invalid stream event")
+		}
+		if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 || chunk.Usage.TotalTokens != 0 {
+			usage = chunk.Usage
+		}
+		for _, choice := range chunk.Choices {
+			delta := choice.Delta
+			if delta.Content == "" && len(delta.ToolCalls) == 0 {
+				delta = choice.Message
+			}
+			if delta.Content != "" {
+				content.WriteString(delta.Content)
+				if onDelta != nil {
+					if err := onDelta(delta.Content); err != nil {
+						return false, err
+					}
+				}
+			}
+			for _, fragment := range delta.ToolCalls {
+				call := toolCalls[fragment.Index]
+				if call == nil {
+					call = &modelToolCall{}
+					toolCalls[fragment.Index] = call
+				}
+				call.ID += fragment.ID
+				call.Name += fragment.Function.Name
+				call.Arguments += fragment.Function.Arguments
+			}
+		}
+		return false, nil
+	}
+
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	dataLines := make([]string, 0, 1)
+	totalBytes := 0
+	done := false
+	flushEvent := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		var err error
+		done, err = process(strings.Join(dataLines, "\n"))
+		dataLines = dataLines[:0]
+		return err
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		totalBytes += len(line)
+		if totalBytes > 8*1024*1024 {
+			return ChatResponse{}, errors.New("AI model stream is too large")
+		}
+		if line == "" {
+			if err := flushEvent(); err != nil {
+				return ChatResponse{}, err
+			}
+			if done {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return ChatResponse{}, err
+	}
+	if !done {
+		if err := flushEvent(); err != nil {
+			return ChatResponse{}, err
+		}
+	}
+	indexes := make([]int, 0, len(toolCalls))
+	for index := range toolCalls {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	calls := make([]modelToolCall, 0, len(indexes))
+	for _, index := range indexes {
+		calls = append(calls, *toolCalls[index])
+	}
+	return finishChatResponse(content.String(), calls, model, usage)
+}
+
+func finishChatResponse(message string, calls []modelToolCall, model string, usage chatUsage) (ChatResponse, error) {
+	result := ChatResponse{
+		Message: strings.TrimSpace(message), Commands: make([]CommandProposal, 0), Model: model, Backend: "native",
+		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, TotalTokens: usage.TotalTokens,
+	}
+	for _, call := range calls {
+		if call.Name != "run_ssh_command" {
 			continue
 		}
 		var arguments struct {
 			Command string `json:"command"`
 			Reason  string `json:"reason"`
 		}
-		if json.Unmarshal([]byte(call.Function.Arguments), &arguments) != nil {
+		if json.Unmarshal([]byte(call.Arguments), &arguments) != nil {
 			continue
 		}
 		arguments.Command = strings.TrimSpace(arguments.Command)
@@ -228,6 +396,14 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 		return ChatResponse{}, errors.New("AI model returned an empty response")
 	}
 	return result, nil
+}
+
+func modelHTTPError(status int, responseRaw []byte) error {
+	message := strings.TrimSpace(string(responseRaw))
+	if len(message) > 4096 {
+		message = message[:4096]
+	}
+	return fmt.Errorf("AI model returned HTTP %d: %s", status, message)
 }
 
 func (m *Manager) Models(ctx context.Context) ([]ModelInfo, error) {

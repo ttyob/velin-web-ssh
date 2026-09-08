@@ -99,6 +99,7 @@ func main() {
 	}
 	defer tailscaleManager.Close()
 	manager := terminal.NewManagerWithFFmpeg(s, vault, cfg.DeploymentID, filepath.Join(cfg.DataDir, "recordings"), cfg.FFmpegBinary, tailscaleManager)
+	defer manager.CloseAll()
 	forwardManager := forward.NewManager(s, manager)
 	agentManager := agent.NewManager(manager, agent.AIConfig{BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey, Model: cfg.AIModel})
 	defer agentManager.Close()

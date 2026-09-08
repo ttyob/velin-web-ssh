@@ -389,8 +389,77 @@ func TestHostMigrationAndConnectionMetadata(t *testing.T) {
 		t.Fatalf("session mode=%q err=%v", host.SessionMode, err)
 	}
 	var version int
-	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
+	if err = s.DB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 16 {
 		t.Fatalf("user_version=%d err=%v", version, err)
+	}
+}
+
+func TestTerminalShareLifecycle(t *testing.T) {
+	s := testStore(t)
+	if err := s.CreateUser("u1", "user", "hash", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveTerminal(TerminalSession{ID: "session-1", UserID: "u1", Name: "shell", RemoteUser: "root", TmuxSocket: "velin", TmuxName: "ws_1", OwnerMarker: "owner", Status: "attached"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	share := TerminalShare{ID: "share-1", UserID: "u1", SessionID: "session-1", TokenHash: "token-hash", TokenEnc: "encrypted", PasswordHash: "password-hash", Permission: "view", Record: true, RecordingID: "recording-1", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+	if err := s.CreateTerminalShare(share); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.TerminalShareByTokenHash("token-hash")
+	if err != nil || loaded.SessionName != "shell" || loaded.SessionStatus != "attached" || loaded.OwnerDisabled || !loaded.PasswordRequired || loaded.Permission != "view" {
+		t.Fatalf("share=%+v err=%v", loaded, err)
+	}
+	if values, closureErr := s.TerminalSharesNeedingClosure(now); closureErr != nil || len(values) != 0 {
+		t.Fatalf("active share selected for closure: values=%+v err=%v", values, closureErr)
+	}
+	access := TerminalShareAccess{TokenHash: "access-hash", ShareID: share.ID, DisplayName: "viewer", IP: "127.0.0.1", ExpiresAt: share.ExpiresAt, CreatedAt: now, LastSeenAt: now}
+	if err = s.CreateTerminalShareAccess(access); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.TerminalShareAccess(access.TokenHash, share.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RevokeTerminalShare("u1", share.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.TerminalShareAccess(access.TokenHash, share.ID, now); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("share access survived revocation: %v", err)
+	}
+	if _, err = s.RevokeTerminalShare("u1", share.ID, now); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("second revocation err=%v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestTerminalSharesNeedingClosure(t *testing.T) {
+	s := testStore(t)
+	if err := s.CreateUser("u1", "user", "hash", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveTerminal(TerminalSession{ID: "session-1", UserID: "u1", Name: "shell", RemoteUser: "root", TmuxSocket: "velin", TmuxName: "ws_1", OwnerMarker: "owner", Status: "attached"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	shares := []TerminalShare{
+		{ID: "expired", UserID: "u1", SessionID: "session-1", TokenHash: "expired-token", TokenEnc: "encrypted", Permission: "view", ExpiresAt: now.Add(-time.Minute), CreatedAt: now},
+		{ID: "active", UserID: "u1", SessionID: "session-1", TokenHash: "active-token", TokenEnc: "encrypted", Permission: "view", ExpiresAt: now.Add(time.Hour), CreatedAt: now},
+	}
+	for _, share := range shares {
+		if err := s.CreateTerminalShare(share); err != nil {
+			t.Fatal(err)
+		}
+	}
+	values, err := s.TerminalSharesNeedingClosure(now)
+	if err != nil || len(values) != 1 || values[0].ID != "expired" {
+		t.Fatalf("expiry closure values=%+v err=%v", values, err)
+	}
+	if err = s.UpdateTerminalStatus("u1", "session-1", "ended", "done"); err != nil {
+		t.Fatal(err)
+	}
+	values, err = s.TerminalSharesNeedingClosure(now)
+	if err != nil || len(values) != 2 {
+		t.Fatalf("ended session closure values=%+v err=%v", values, err)
 	}
 }
 
@@ -430,7 +499,7 @@ func TestWebServiceOwnershipAndHostCascade(t *testing.T) {
 	if err := s.SaveHost(host); err != nil {
 		t.Fatal(err)
 	}
-	service := WebService{ID: "w1", UserID: "u1", HostID: host.ID, Name: "Router", ProxyMode: "host_port", ListenPort: 18080, TargetURL: "http://192.168.1.1"}
+	service := WebService{ID: "w1", UserID: "u1", HostID: host.ID, Name: "Router", ProxyMode: "host_port", PageMode: "vite", ListenPort: 18080, TargetURL: "http://192.168.1.1"}
 	if err := s.SaveWebService(service); err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +507,7 @@ func TestWebServiceOwnershipAndHostCascade(t *testing.T) {
 		t.Fatalf("foreign web service error=%v", err)
 	}
 	saved, err := s.WebService("u1", service.ID)
-	if err != nil || saved.ProxyMode != "host_port" || saved.ListenPort != 18080 {
+	if err != nil || saved.ProxyMode != "host_port" || saved.PageMode != "vite" || saved.ListenPort != 18080 {
 		t.Fatalf("host port mode was not saved: %+v err=%v", saved, err)
 	}
 	if err := s.DeleteHost("u1", host.ID); err != nil {
@@ -473,7 +542,7 @@ func TestLegacyWebServiceMigratesToPathMode(t *testing.T) {
 	}
 	defer s.Close()
 	service, err := s.WebService("u1", "w1")
-	if err != nil || service.ProxyMode != "path" || service.ListenPort != 0 {
-		t.Fatalf("legacy web service mode=%q port=%d err=%v", service.ProxyMode, service.ListenPort, err)
+	if err != nil || service.ProxyMode != "path" || service.PageMode != "html" || service.ListenPort != 0 {
+		t.Fatalf("legacy web service proxy=%q page=%q port=%d err=%v", service.ProxyMode, service.PageMode, service.ListenPort, err)
 	}
 }

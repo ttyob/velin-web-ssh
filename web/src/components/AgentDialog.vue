@@ -19,7 +19,7 @@ import {
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { api, json } from "../api";
+import { api } from "../api";
 import type {
   AgentModel,
   AgentStatus,
@@ -60,6 +60,19 @@ const chatting = ref(false);
 const executingIDs = ref<Set<string>>(new Set());
 let aiRequestQueue: Promise<void> = Promise.resolve();
 let commandFollowupTimer: number | undefined;
+let agentSocket: WebSocket | undefined;
+let agentSocketReady: Promise<WebSocket> | undefined;
+let agentSocketHostID = "";
+let rejectAgentSocketReady: ((reason?: unknown) => void) | undefined;
+let activeChatRequestID = "";
+const activeCommandRequestIDs = new Set<string>();
+type AgentPendingRequest = {
+  kind: "chat" | "command";
+  onDelta: (delta: string) => void;
+  resolve: (value: any) => void;
+  reject: (reason: unknown) => void;
+};
+const agentPendingRequests = new Map<string, AgentPendingRequest>();
 type AgentChatMessage = {
   id: string;
   role: "user" | "assistant" | "result";
@@ -147,10 +160,11 @@ const contextSummary = computed(() => {
 const approvalProposal = computed(() => commandProposals.value[0]);
 
 watch(
-  () => props.modelValue,
-  async (open) => {
+  [() => props.modelValue, () => props.host?.id],
+  async ([open]) => {
     stopPointerInteraction();
     clearCommandFollowupTimer();
+    closeAgentSocket();
     if (!open || !props.host) {
       window.removeEventListener("keydown", handleWindowKeydown);
       return;
@@ -177,6 +191,8 @@ watch(
     void loadAgentModels();
     if (!connected.value && (props.host.credentialID || props.host.hasPassword)) {
       await connect();
+    } else if (connected.value) {
+      maintainAgentSocket();
     }
   },
 );
@@ -216,6 +232,7 @@ watch([selectedModel, reasoningEffort], persistModelPreferences);
 onBeforeUnmount(() => {
   stopPointerInteraction();
   clearCommandFollowupTimer();
+  closeAgentSocket();
   window.removeEventListener("keydown", handleWindowKeydown);
   if (chatScrollFrame !== undefined) cancelAnimationFrame(chatScrollFrame);
 });
@@ -420,6 +437,7 @@ async function connect() {
       `/api/hosts/${props.host.id}/agent/connect`,
       { method: "POST" },
     );
+    maintainAgentSocket();
     ElMessage.success("Agent 已连接");
   } catch (error) {
     await loadStatus();
@@ -437,6 +455,7 @@ async function disconnect() {
       `/api/hosts/${props.host.id}/agent`,
       { method: "DELETE" },
     );
+    closeAgentSocket();
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "断开失败");
   } finally {
@@ -466,8 +485,9 @@ function requestAI() {
 async function requestAIOnce(conversationID: string) {
   if (!props.host || conversationID !== activeConversationID.value) return;
   chatting.value = true;
+  let streamedMessage: AgentChatMessage | undefined;
   try {
-    const response = await api<{
+    const response = await streamAgentChat<{
       message: string;
       commands: Array<{
         id: string;
@@ -479,15 +499,26 @@ async function requestAIOnce(conversationID: string) {
       promptTokens?: number;
       completionTokens?: number;
       totalTokens?: number;
-    }>(`/api/hosts/${props.host.id}/agent/chat`, {
-      method: "POST",
-      body: json({
-        messages: chatHistory.value.slice(-40),
-        model: selectedModel.value || undefined,
-        reasoningEffort: reasoningEffort.value || undefined,
-        backend: "native",
-        conversationID,
-      }),
+    }>({
+      messages: chatHistory.value.slice(-40),
+      model: selectedModel.value || undefined,
+      reasoningEffort: reasoningEffort.value || undefined,
+      backend: "native",
+      conversationID,
+    }, (delta) => {
+      if (conversationID !== activeConversationID.value) return;
+      let currentMessage = streamedMessage;
+      if (!currentMessage) {
+        currentMessage = reactive<AgentChatMessage>({
+          id: messageID(),
+          role: "assistant",
+          content: "",
+        });
+        streamedMessage = currentMessage;
+        chatMessages.value.push(currentMessage);
+      }
+      currentMessage.content += delta;
+      scheduleChatScroll();
     });
     if (conversationID !== activeConversationID.value) return;
     lastUsage.value = {
@@ -500,7 +531,12 @@ async function requestAIOnce(conversationID: string) {
       (response.commands.length
         ? `建议执行：${response.commands.map((item) => item.command).join("；")}`
         : "");
-    if (response.message)
+    if (response.commands.length && !response.message && streamedMessage) {
+      chatMessages.value = chatMessages.value.filter(
+        (item) => item.id !== streamedMessage?.id,
+      );
+      streamedMessage = undefined;
+    } else if (response.message && !streamedMessage)
       chatMessages.value.push({
         id: messageID(),
         role: "assistant",
@@ -522,29 +558,52 @@ async function requestAIOnce(conversationID: string) {
         .map((item) => executeProposal(item)),
     );
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "Agent 请求失败");
+    if (!(error instanceof DOMException && error.name === "AbortError"))
+      ElMessage.error(error instanceof Error ? error.message : "Agent 请求失败");
   } finally {
     chatting.value = false;
   }
 }
 
+function streamAgentChat<T>(input: object, onDelta: (delta: string) => void): Promise<T> {
+  cancelAgentChat();
+  const requestID = messageID();
+  activeChatRequestID = requestID;
+  return sendAgentRequest<T>("chat", requestID, input, onDelta).finally(() => {
+    if (activeChatRequestID === requestID) activeChatRequestID = "";
+  });
+}
+
+function cancelAgentChat() {
+  if (!activeChatRequestID) return;
+  cancelAgentRequest(activeChatRequestID);
+  activeChatRequestID = "";
+}
+
 async function executeProposal(proposal: AgentCommandProposal) {
   if (!props.host || executingIDs.value.has(proposal.id)) return;
   executingIDs.value = new Set(executingIDs.value).add(proposal.id);
+  const resultMessage = reactive<AgentChatMessage>({
+    id: messageID(),
+    role: "result",
+    content: `$ ${proposal.command}\n`,
+    reason: proposal.reason,
+  });
+  chatMessages.value.push(resultMessage);
+  expandedResultIDs.value = new Set(expandedResultIDs.value).add(resultMessage.id);
+  scheduleChatScroll(true);
   let completed = false;
   try {
-    const result = await api<{ output: string; success: boolean; error?: string }>(
-      `/api/hosts/${props.host.id}/agent/command`,
-      { method: "POST", body: json({ command: proposal.command }) },
+    const result = await streamAgentCommand(
+      proposal.command,
+      (delta) => {
+        resultMessage.content += delta;
+        scheduleChatScroll();
+      },
     );
     const display = result.output.trim() || result.error || "命令已完成，无输出";
-    chatMessages.value.push({
-      id: messageID(),
-      role: "result",
-      content: `$ ${proposal.command}\n${display}`,
-      success: result.success,
-      reason: proposal.reason,
-    });
+    resultMessage.content = `$ ${proposal.command}\n${display}`;
+    resultMessage.success = result.success;
     commandProposals.value = commandProposals.value.filter(
       (item) => item.id !== proposal.id,
     );
@@ -556,7 +615,15 @@ async function executeProposal(proposal: AgentCommandProposal) {
     completed = true;
     persistCurrentConversation();
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "命令执行失败");
+    if (error instanceof DOMException && error.name === "AbortError") {
+      chatMessages.value = chatMessages.value.filter(
+        (item) => item.id !== resultMessage.id,
+      );
+    } else {
+      resultMessage.success = false;
+      resultMessage.content += `\n${error instanceof Error ? error.message : "命令执行失败"}`;
+      ElMessage.error(error instanceof Error ? error.message : "命令执行失败");
+    }
   } finally {
     const next = new Set(executingIDs.value);
     next.delete(proposal.id);
@@ -564,6 +631,160 @@ async function executeProposal(proposal: AgentCommandProposal) {
     if (completed && executingIDs.value.size === 0 && commandProposals.value.length === 0)
       scheduleCommandFollowup();
   }
+}
+
+function streamAgentCommand(command: string, onDelta: (delta: string) => void) {
+  const requestID = messageID();
+  activeCommandRequestIDs.add(requestID);
+  return sendAgentRequest<{ output: string; success: boolean; error?: string }>(
+    "command",
+    requestID,
+    { command },
+    onDelta,
+  ).finally(() => activeCommandRequestIDs.delete(requestID));
+}
+
+function cancelAgentCommands() {
+  for (const requestID of activeCommandRequestIDs) cancelAgentRequest(requestID);
+  activeCommandRequestIDs.clear();
+}
+
+function sendAgentRequest<T>(
+  kind: "chat" | "command",
+  requestID: string,
+  payload: object,
+  onDelta: (delta: string) => void,
+): Promise<T> {
+  return ensureAgentSocket().then((socket) => new Promise<T>((resolve, reject) => {
+    agentPendingRequests.set(requestID, {
+      kind,
+      onDelta,
+      resolve: (value) => resolve(value as T),
+      reject,
+    });
+    try {
+      socket.send(JSON.stringify({ type: kind, requestID, ...payload }));
+    } catch (error) {
+      agentPendingRequests.delete(requestID);
+      reject(error);
+    }
+  }));
+}
+
+function ensureAgentSocket(): Promise<WebSocket> {
+  if (!props.host) return Promise.reject(new Error("未选择主机"));
+  const hostID = props.host.id;
+  if (agentSocket && agentSocketHostID !== hostID) closeAgentSocket();
+  if (agentSocket?.readyState === WebSocket.OPEN && agentSocketReady)
+    return agentSocketReady;
+  if (agentSocket?.readyState === WebSocket.CONNECTING && agentSocketReady)
+    return agentSocketReady;
+
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(
+    `${protocol}//${location.host}/ws/hosts/${encodeURIComponent(hostID)}/agent`,
+  );
+  agentSocket = socket;
+  agentSocketHostID = hostID;
+  agentSocketReady = new Promise<WebSocket>((resolve, reject) => {
+    rejectAgentSocketReady = reject;
+    let ready = false;
+    socket.onmessage = (event) => {
+      let message: {
+        type?: string;
+        requestID?: string;
+        delta?: string;
+        message?: string;
+        response?: unknown;
+        output?: string;
+        success?: boolean;
+        error?: string;
+      };
+      try {
+        message = JSON.parse(String(event.data));
+      } catch {
+        closeAgentSocket(new Error("Agent 返回了无效的流式数据"));
+        return;
+      }
+      if (message.type === "ready") {
+        ready = true;
+        if (agentSocket === socket) rejectAgentSocketReady = undefined;
+        resolve(socket);
+        return;
+      }
+      if (message.type === "heartbeat" || message.type === "pong") return;
+      const requestID = message.requestID || "";
+      const pending = agentPendingRequests.get(requestID);
+      if (!pending) return;
+      if (message.type === "delta" && message.delta) {
+        pending.onDelta(message.delta);
+      } else if (message.type === "done") {
+        agentPendingRequests.delete(requestID);
+        pending.resolve(
+          pending.kind === "chat"
+            ? message.response
+            : {
+                output: message.output || "",
+                success: message.success === true,
+                error: message.error,
+              },
+        );
+      } else if (message.type === "error") {
+        agentPendingRequests.delete(requestID);
+        pending.reject(new Error(message.message || "Agent 请求失败"));
+      }
+    };
+    socket.onerror = () => {
+      if (!ready) reject(new Error("Agent WebSocket 连接失败"));
+    };
+    socket.onclose = () => {
+      if (!ready) reject(new Error("Agent WebSocket 连接已断开"));
+      if (agentSocket !== socket) return;
+      agentSocket = undefined;
+      agentSocketReady = undefined;
+      agentSocketHostID = "";
+      rejectAgentSocketReady = undefined;
+      const error = new Error("Agent WebSocket 连接已断开");
+      rejectAgentRequests(error);
+    };
+  });
+  return agentSocketReady;
+}
+
+function maintainAgentSocket() {
+  const hostID = props.host?.id;
+  void ensureAgentSocket().catch((error) => {
+    if (props.modelValue && connected.value && props.host?.id === hostID)
+      ElMessage.error(error instanceof Error ? error.message : "Agent WebSocket 连接失败");
+  });
+}
+
+function cancelAgentRequest(requestID: string) {
+  const pending = agentPendingRequests.get(requestID);
+  if (!pending) return;
+  agentPendingRequests.delete(requestID);
+  if (agentSocket?.readyState === WebSocket.OPEN)
+    agentSocket.send(JSON.stringify({ type: "cancel", requestID }));
+  pending.reject(new DOMException("Agent 请求已取消", "AbortError"));
+}
+
+function rejectAgentRequests(error: unknown) {
+  for (const pending of agentPendingRequests.values()) pending.reject(error);
+  agentPendingRequests.clear();
+}
+
+function closeAgentSocket(reason: unknown = new DOMException("Agent 请求已取消", "AbortError")) {
+  rejectAgentRequests(reason);
+  activeChatRequestID = "";
+  activeCommandRequestIDs.clear();
+  const socket = agentSocket;
+  const rejectReady = rejectAgentSocketReady;
+  agentSocket = undefined;
+  agentSocketReady = undefined;
+  agentSocketHostID = "";
+  rejectAgentSocketReady = undefined;
+  rejectReady?.(reason);
+  socket?.close();
 }
 
 function scheduleCommandFollowup() {
@@ -649,7 +870,10 @@ function loadConversations() {
 }
 
 function startConversation(closeHistory = true) {
+  if (chatting.value || executingIDs.value.size > 0) return;
   clearCommandFollowupTimer();
+  cancelAgentChat();
+  cancelAgentCommands();
   persistCurrentConversation();
   const conversation: AgentConversation = {
     id: messageID(),
@@ -672,9 +896,12 @@ function startConversation(closeHistory = true) {
 }
 
 function selectConversation(id: string, closeHistory = true) {
+  if (chatting.value || executingIDs.value.size > 0) return;
   const conversation = conversations.value.find((item) => item.id === id);
   if (!conversation) return;
   clearCommandFollowupTimer();
+  cancelAgentChat();
+  cancelAgentCommands();
   if (activeConversationID.value !== id) persistCurrentConversation();
   activeConversationID.value = id;
   chatMessages.value = conversation.messages.map((item) => ({ ...item }));
@@ -917,7 +1144,7 @@ function resultCommand(content: string) {
                       <span class="agent-result-purpose">{{ message.reason || "命令说明未提供" }}</span>
                       <span class="agent-result-command">$ {{ resultCommand(message.content) }}</span>
                     </span>
-                    <small>{{ message.success === false ? "失败" : "已完成" }}</small>
+                    <small>{{ message.success === undefined ? "执行中" : message.success ? "已完成" : "失败" }}</small>
                   </button>
                   <pre
                     v-if="isResultExpanded(message.id)"

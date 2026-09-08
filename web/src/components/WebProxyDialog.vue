@@ -21,6 +21,7 @@ const form = reactive<WebService>({
   hostID: "",
   name: "",
   proxyMode: "path",
+  pageMode: "html",
   listenPort: 18080,
   targetURL: "http://127.0.0.1:80",
   upstreamHost: "",
@@ -44,6 +45,7 @@ watch(
         "",
       name: props.service?.name || "",
       proxyMode: props.service?.proxyMode || "path",
+      pageMode: props.service?.pageMode || "html",
       listenPort: props.service?.listenPort || 18080,
       targetURL: props.service?.targetURL || "http://127.0.0.1:80",
       upstreamHost: props.service?.upstreamHost || "",
@@ -128,6 +130,15 @@ async function save() {
         :closable="false"
         title="主机端口默认仅监听本机并验证 Velin 登录；如配置为局域网监听，仍应使用防火墙限制来源。"
       />
+      <el-form-item label="网页类型">
+        <el-segmented
+          v-model="form.pageMode"
+          :options="[
+            { label: '普通 HTML', value: 'html' },
+            { label: 'Vite 开发服务', value: 'vite' },
+          ]"
+        />
+      </el-form-item>
       <el-form-item label="名称">
         <el-input v-model="form.name" placeholder="例如：家庭路由器" />
       </el-form-item>

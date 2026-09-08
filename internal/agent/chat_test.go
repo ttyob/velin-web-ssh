@@ -46,6 +46,57 @@ func TestChatReturnsCommandProposal(t *testing.T) {
 	}
 }
 
+func TestChatStreamReturnsDeltasAndReassemblesToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if !request.Stream {
+			t.Fatalf("stream options=%+v", request)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"正在\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"检查\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"run_ssh_command\",\"arguments\":\"{\\\"command\\\":\\\"df \"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"-h\\\",\\\"reason\\\":\\\"查看磁盘\\\"}\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	manager := NewManager(nil, AIConfig{BaseURL: server.URL, Model: "stream-model"})
+	var deltas strings.Builder
+	result, err := manager.ChatStream(context.Background(), []ChatMessage{{Role: "user", Content: "检查磁盘"}}, "server", func(delta string) error {
+		deltas.WriteString(delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deltas.String() != "正在检查" || result.Message != "" || result.TotalTokens != 15 || len(result.Commands) != 1 || result.Commands[0].Command != "df -h" || result.Commands[0].RequiresApproval {
+		t.Fatalf("deltas=%q result=%+v", deltas.String(), result)
+	}
+}
+
+func TestChatStreamFallsBackToJSONResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"完成"}}],"usage":{"total_tokens":7}}`)
+	}))
+	defer server.Close()
+	manager := NewManager(nil, AIConfig{BaseURL: server.URL, Model: "json-model"})
+	var delta string
+	result, err := manager.ChatStream(context.Background(), []ChatMessage{{Role: "user", Content: "hello"}}, "server", func(value string) error {
+		delta += value
+		return nil
+	})
+	if err != nil || delta != "完成" || result.Message != "完成" || result.TotalTokens != 7 {
+		t.Fatalf("delta=%q result=%+v err=%v", delta, result, err)
+	}
+}
+
 func TestModelsReturnsContextMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer test-key" {

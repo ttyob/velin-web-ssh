@@ -86,6 +86,7 @@ export interface WebService {
   hostID: string;
   name: string;
   proxyMode: "path" | "host_port";
+  pageMode: "html" | "vite";
   listenPort: number;
   targetURL: string;
   upstreamHost: string;
@@ -217,6 +218,33 @@ export interface TerminalSession {
   lastError: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TerminalShareViewer {
+  id: string;
+  name: string;
+  ip: string;
+  permission: "view" | "operate";
+  connectedAt: string;
+}
+
+export interface TerminalShare {
+  id: string;
+  sessionID: string;
+  sessionName: string;
+  permission: "view" | "operate";
+  passwordRequired: boolean;
+  record: boolean;
+  recordingID?: string;
+  expiresAt: string;
+  revokedAt?: string;
+  createdAt: string;
+  active: boolean;
+  authorized?: boolean;
+  canManage?: boolean;
+  url?: string;
+  viewerCount: number;
+  viewers?: TerminalShareViewer[];
 }
 export interface Preferences {
   theme: "dark" | "vscode-dark" | "graphite" | "light";

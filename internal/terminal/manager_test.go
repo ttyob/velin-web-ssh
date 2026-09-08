@@ -3,6 +3,8 @@ package terminal
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -232,6 +234,45 @@ func TestControlReleaseGrantsWaitingClient(t *testing.T) {
 	s.RequestControl("second")
 	if !s.ReleaseControl("first") || !s.IsController("second") {
 		t.Fatal("releasing control did not grant waiting client")
+	}
+}
+
+func TestReadOnlySubscriberCannotTakeControl(t *testing.T) {
+	s := &Session{subs: make(map[string]*terminalSubscriber), buffer: newRingBuffer(8)}
+	s.SubscribeReadOnly("viewer", "", 0)
+	if s.RequestControl("viewer") || s.IsController("viewer") {
+		t.Fatal("read-only subscriber obtained terminal control")
+	}
+	s.Subscribe("operator", "", 0)
+	if !s.IsController("operator") {
+		t.Fatal("controllable subscriber did not obtain available control")
+	}
+}
+
+func TestShareRecordingCapturesServerOutput(t *testing.T) {
+	database, err := store.Open(filepath.Join(t.TempDir(), "recording.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err = database.CreateUser("user-1", "user", "hash", "user"); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(database, nil, "test", t.TempDir())
+	session := &Session{
+		meta:    store.TerminalSession{ID: "session-1", UserID: "user-1", Name: "shell", Status: "attached"},
+		manager: manager, subs: make(map[string]*terminalSubscriber), buffer: newRingBuffer(1024),
+	}
+	manager.sessions[session.meta.ID] = session
+	recording, err := manager.StartShareRecording("user-1", session.meta.ID)
+	if err != nil || !strings.HasSuffix(recording.Path, ".cast") {
+		t.Fatalf("recording=%+v err=%v", recording, err)
+	}
+	session.broadcastOutput([]byte("hello\r\n"))
+	stopped := manager.StopRecordingIfID("user-1", session.meta.ID, recording.ID)
+	data, readErr := os.ReadFile(recording.Path)
+	if readErr != nil || stopped.Bytes == 0 || !bytes.Contains(data, []byte("hello")) || !bytes.Contains(data, []byte(`"version":2`)) {
+		t.Fatalf("stopped=%+v data=%q err=%v", stopped, data, readErr)
 	}
 }
 

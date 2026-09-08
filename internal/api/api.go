@@ -75,6 +75,9 @@ type API struct {
 	updateCheckedAt time.Time
 	updateClient    *http.Client
 	updateURL       string
+	shareMu         sync.Mutex
+	shareViewers    map[string]map[string]*shareViewerConnection
+	shareFailures   map[string]shareFailure
 }
 
 type contextKey string
@@ -111,10 +114,11 @@ func newAPI(cfg config.Config, s *store.Store, v *security.Vault, t *terminal.Ma
 	desktops := remotedesktop.NewManager(s, v, t, cfg.GuacdAddr, cfg.DesktopProxyAddr, cfg.RDPDriveDir)
 	desktops.SetDialer(dialer)
 	forwards.SetDialer(dialer)
-	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha), updateClient: &http.Client{Timeout: 10 * time.Second}, updateURL: defaultReleaseURL}
+	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha), updateClient: &http.Client{Timeout: 10 * time.Second}, updateURL: defaultReleaseURL, shareViewers: make(map[string]map[string]*shareViewerConnection), shareFailures: make(map[string]shareFailure)}
 	a.restoreAIModelConfig()
 	a.restoreHostPortWebServices()
 	go a.commandTaskWorker()
+	go a.expireTerminalShares()
 	return a
 }
 
@@ -128,6 +132,9 @@ func (a *API) Router() http.Handler {
 	r.Get("/api/csrf", a.csrfToken)
 	r.Post("/api/auth/login", a.login)
 	r.Get("/api/auth/captcha", a.loginCaptcha)
+	r.Get("/api/public/shares/{token}", a.publicTerminalShare)
+	r.Post("/api/public/shares/{token}/access", a.accessTerminalShare)
+	r.Get("/ws/shares/{token}", a.terminalShareWS)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
 		r.Use(a.requirePasswordChange)
@@ -168,6 +175,7 @@ func (a *API) Router() http.Handler {
 		r.Get("/api/agent/backends", a.agentBackends)
 		r.Post("/api/hosts/{id}/agent/chat", a.agentChat)
 		r.Post("/api/hosts/{id}/agent/command", a.agentCommand)
+		r.Get("/ws/hosts/{id}/agent", a.agentWS)
 		r.Post("/api/hosts/{id}/docker/login", a.dockerLogin)
 		r.Delete("/api/hosts/{id}/agent", a.disconnectAgent)
 		r.Delete("/api/hosts/{id}", a.deleteHost)
@@ -182,6 +190,9 @@ func (a *API) Router() http.Handler {
 		r.Get("/api/sessions/{id}/docker/status", a.sessionDockerStatus)
 		r.Patch("/api/sessions/{id}", a.updateSession)
 		r.Delete("/api/sessions/{id}", a.terminateSession)
+		r.Get("/api/sessions/{id}/shares", a.terminalShares)
+		r.Post("/api/sessions/{id}/shares", a.createTerminalShare)
+		r.Delete("/api/session-shares/{id}", a.revokeTerminalShare)
 		r.Get("/api/tasks", a.tasks)
 		r.Post("/api/tasks", a.createTask)
 		r.Get("/api/tasks/{id}", a.task)
@@ -381,7 +392,7 @@ func (w *statusWriter) Flush() {
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func logRequestPath(path string) string {
-	for _, prefix := range []string{"/web-proxy/", "/web-service-proxy/", "/ws/desktop/vnc/", "/ws/desktop/rdp/"} {
+	for _, prefix := range []string{"/web-proxy/", "/web-service-proxy/", "/ws/desktop/vnc/", "/ws/desktop/rdp/", "/share/", "/api/public/shares/", "/ws/shares/"} {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}

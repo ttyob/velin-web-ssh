@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,8 +71,10 @@ type Manager struct {
 }
 
 type activeRecording struct {
-	meta  store.TerminalRecording
-	bytes int64
+	meta      store.TerminalRecording
+	bytes     int64
+	startedAt time.Time
+	file      *os.File
 }
 
 func (m *Manager) DialSaved(ctx context.Context, userID, hostID string) (*ssh.Client, store.Host, error) {
@@ -130,10 +133,11 @@ type terminalSubscriber struct {
 	done         chan struct{}
 	doneOnce     sync.Once
 	reconnectKey string
+	canControl   bool
 }
 
-func newTerminalSubscriber(reconnectKey string) *terminalSubscriber {
-	return &terminalSubscriber{events: make(chan Event, 256), done: make(chan struct{}), reconnectKey: reconnectKey}
+func newTerminalSubscriber(reconnectKey string, canControl bool) *terminalSubscriber {
+	return &terminalSubscriber{events: make(chan Event, 256), done: make(chan struct{}), reconnectKey: reconnectKey, canControl: canControl}
 }
 
 func (s *terminalSubscriber) close() {
@@ -378,6 +382,9 @@ func (m *Manager) StartRecording(userID, id string) (store.TerminalRecording, er
 	s.recordingMu.Lock()
 	defer s.recordingMu.Unlock()
 	if s.recording != nil {
+		if s.recording.file != nil {
+			return store.TerminalRecording{}, errors.New("分享录屏正在进行")
+		}
 		return s.recording.meta, nil
 	}
 	if err = os.MkdirAll(m.recordingDir, 0o700); err != nil {
@@ -401,6 +408,60 @@ func (m *Manager) StopRecording(userID, id string) (store.TerminalRecording, err
 	return s.stopRecording("stopped"), nil
 }
 
+func (m *Manager) StartShareRecording(userID, id string) (store.TerminalRecording, error) {
+	s, err := m.Get(userID, id)
+	if err != nil {
+		return store.TerminalRecording{}, err
+	}
+	s.recordingMu.Lock()
+	defer s.recordingMu.Unlock()
+	if s.recording != nil {
+		return store.TerminalRecording{}, errors.New("当前会话已有进行中的录制")
+	}
+	if err = os.MkdirAll(m.recordingDir, 0o700); err != nil {
+		return store.TerminalRecording{}, err
+	}
+	recordingID := uuid.NewString()
+	path := filepath.Join(m.recordingDir, recordingID+".cast")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		return store.TerminalRecording{}, err
+	}
+	startedAt := time.Now().UTC()
+	header, _ := json.Marshal(map[string]any{
+		"version": 2, "width": 120, "height": 30, "timestamp": startedAt.Unix(),
+		"env": map[string]string{"TERM": "xterm-256color", "SHELL": "shell"},
+	})
+	header = append(header, '\n')
+	if _, err = file.Write(header); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return store.TerminalRecording{}, err
+	}
+	meta := store.TerminalRecording{ID: recordingID, UserID: userID, SessionID: id, SessionName: s.Meta().Name, Path: path, Status: "recording", Bytes: int64(len(header)), StartedAt: startedAt}
+	if err = m.store.CreateRecording(meta); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return store.TerminalRecording{}, err
+	}
+	s.recording = &activeRecording{meta: meta, bytes: int64(len(header)), startedAt: startedAt, file: file}
+	return meta, nil
+}
+
+func (m *Manager) StopRecordingIfID(userID, id, recordingID string) store.TerminalRecording {
+	s, err := m.Get(userID, id)
+	if err != nil {
+		return store.TerminalRecording{}
+	}
+	s.recordingMu.Lock()
+	matches := s.recording != nil && s.recording.meta.ID == recordingID
+	s.recordingMu.Unlock()
+	if !matches {
+		return store.TerminalRecording{}
+	}
+	return s.stopRecording("stopped")
+}
+
 func (s *Session) stopRecording(status string) store.TerminalRecording {
 	s.recordingMu.Lock()
 	defer s.recordingMu.Unlock()
@@ -409,6 +470,10 @@ func (s *Session) stopRecording(status string) store.TerminalRecording {
 	}
 	active := s.recording
 	s.recording = nil
+	if active.file != nil {
+		_ = active.file.Sync()
+		_ = active.file.Close()
+	}
 	finished := time.Now().UTC()
 	active.meta.Status = status
 	active.meta.Bytes = active.bytes
@@ -418,9 +483,27 @@ func (s *Session) stopRecording(status string) store.TerminalRecording {
 }
 
 func (s *Session) recordOutput(raw []byte) {
-	// Video recordings are captured by the browser and uploaded after stopping.
-	// Keep this hook so terminal output broadcasting remains independent of the
-	// recording transport.
+	if len(raw) == 0 {
+		return
+	}
+	s.recordingMu.Lock()
+	defer s.recordingMu.Unlock()
+	active := s.recording
+	if active == nil || active.file == nil {
+		return
+	}
+	event, err := json.Marshal([]any{time.Since(active.startedAt).Seconds(), "o", string(raw)})
+	if err != nil {
+		return
+	}
+	event = append(event, '\n')
+	n, writeErr := active.file.Write(event)
+	active.bytes += int64(n)
+	active.meta.Bytes = active.bytes
+	if writeErr != nil {
+		_ = active.file.Close()
+		active.file = nil
+	}
 }
 
 const maxRecordingUploadBytes int64 = 1 << 30
@@ -1202,6 +1285,14 @@ func (s *Session) broadcastEvent(ev Event, raw []byte) {
 	}
 }
 func (s *Session) Subscribe(clientID, resumeStreamID string, resumeOffset uint64, reconnectKeys ...string) (<-chan Event, <-chan struct{}, Replay) {
+	return s.subscribe(clientID, resumeStreamID, resumeOffset, true, reconnectKeys...)
+}
+
+func (s *Session) SubscribeReadOnly(clientID, resumeStreamID string, resumeOffset uint64) (<-chan Event, <-chan struct{}, Replay) {
+	return s.subscribe(clientID, resumeStreamID, resumeOffset, false)
+}
+
+func (s *Session) subscribe(clientID, resumeStreamID string, resumeOffset uint64, canControl bool, reconnectKeys ...string) (<-chan Event, <-chan struct{}, Replay) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.streamID == "" {
@@ -1211,15 +1302,15 @@ func (s *Session) Subscribe(clientID, resumeStreamID string, resumeOffset uint64
 	if len(reconnectKeys) > 0 {
 		reconnectKey = reconnectKeys[0]
 	}
-	subscriber := newTerminalSubscriber(reconnectKey)
+	subscriber := newTerminalSubscriber(reconnectKey, canControl)
 	s.subs[clientID] = subscriber
 	controllerSubscriber := s.subs[s.controller]
-	if reconnectKey != "" && controllerSubscriber != nil && controllerSubscriber.reconnectKey == reconnectKey {
+	if canControl && reconnectKey != "" && controllerSubscriber != nil && controllerSubscriber.reconnectKey == reconnectKey {
 		controllerSubscriber.close()
 		s.controller = clientID
 		s.controllerSeen = time.Now()
 		s.pendingControl = ""
-	} else if s.controller == "" || time.Since(s.controllerSeen) > 20*time.Second {
+	} else if canControl && (s.controller == "" || time.Since(s.controllerSeen) > 20*time.Second) {
 		s.controller = clientID
 		s.controllerSeen = time.Now()
 	}
@@ -1257,6 +1348,11 @@ func (s *Session) Unsubscribe(clientID string) {
 }
 func (s *Session) RequestControl(clientID string) bool {
 	s.mu.Lock()
+	subscriber := s.subs[clientID]
+	if subscriber == nil || !subscriber.canControl {
+		s.mu.Unlock()
+		return false
+	}
 	if s.controller == clientID {
 		s.controllerSeen = time.Now()
 		s.mu.Unlock()
@@ -1290,6 +1386,9 @@ func (s *Session) RespondControl(clientID, requester string, approved bool) bool
 	}
 	s.pendingControl = ""
 	requesterSubscriber := s.subs[requester]
+	if requesterSubscriber != nil && !requesterSubscriber.canControl {
+		requesterSubscriber = nil
+	}
 	if approved && requesterSubscriber != nil {
 		s.controller = requester
 		s.controllerSeen = time.Now()

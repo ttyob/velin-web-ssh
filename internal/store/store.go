@@ -124,6 +124,7 @@ type WebService struct {
 	HostID        string    `json:"hostID"`
 	Name          string    `json:"name"`
 	ProxyMode     string    `json:"proxyMode"`
+	PageMode      string    `json:"pageMode"`
 	ListenPort    int       `json:"listenPort"`
 	TargetURL     string    `json:"targetURL"`
 	UpstreamHost  string    `json:"upstreamHost"`
@@ -155,6 +156,36 @@ type TerminalRecording struct {
 	Bytes       int64      `json:"bytes"`
 	StartedAt   time.Time  `json:"startedAt"`
 	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+}
+
+type TerminalShare struct {
+	ID               string     `json:"id"`
+	UserID           string     `json:"-"`
+	SessionID        string     `json:"sessionID"`
+	SessionName      string     `json:"sessionName"`
+	TokenHash        string     `json:"-"`
+	TokenEnc         string     `json:"-"`
+	PasswordHash     string     `json:"-"`
+	PasswordRequired bool       `json:"passwordRequired"`
+	Permission       string     `json:"permission"`
+	Record           bool       `json:"record"`
+	RecordingID      string     `json:"recordingID,omitempty"`
+	ExpiresAt        time.Time  `json:"expiresAt"`
+	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	SessionStatus    string     `json:"-"`
+	OwnerDisabled    bool       `json:"-"`
+}
+
+type TerminalShareAccess struct {
+	TokenHash   string
+	ShareID     string
+	DisplayName string
+	IP          string
+	UserAgent   string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
+	LastSeenAt  time.Time
 }
 
 func Open(path string) (*Store, error) {
@@ -193,7 +224,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT PRIMARY KEY REFERENCES
 	CREATE TABLE IF NOT EXISTS port_forwards (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, host_id TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, listen_address TEXT NOT NULL DEFAULT '127.0.0.1', listen_port INTEGER NOT NULL, target_host TEXT NOT NULL DEFAULT '', target_port INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'stopped', last_error TEXT NOT NULL DEFAULT '', bytes_in INTEGER NOT NULL DEFAULT 0, bytes_out INTEGER NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
 	CREATE INDEX IF NOT EXISTS idx_forwards_user ON port_forwards(user_id,updated_at DESC);
 	CREATE TABLE IF NOT EXISTS user_totp (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, secret_enc TEXT NOT NULL, recovery_hashes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
-	CREATE TABLE IF NOT EXISTS web_services (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, name TEXT NOT NULL, proxy_mode TEXT NOT NULL DEFAULT 'path', listen_port INTEGER NOT NULL DEFAULT 0, target_url TEXT NOT NULL, upstream_host TEXT NOT NULL DEFAULT '', skip_tls_verify INTEGER NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+	CREATE TABLE IF NOT EXISTS web_services (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, name TEXT NOT NULL, proxy_mode TEXT NOT NULL DEFAULT 'path', page_mode TEXT NOT NULL DEFAULT 'html', listen_port INTEGER NOT NULL DEFAULT 0, target_url TEXT NOT NULL, upstream_host TEXT NOT NULL DEFAULT '', skip_tls_verify INTEGER NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
 	CREATE INDEX IF NOT EXISTS idx_web_services_user ON web_services(user_id,name);
 	CREATE TABLE IF NOT EXISTS host_monitor_policies (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE, enabled INTEGER NOT NULL DEFAULT 0, interval_seconds INTEGER NOT NULL DEFAULT 30, cpu_threshold REAL NOT NULL DEFAULT 90, memory_threshold REAL NOT NULL DEFAULT 90, disk_threshold REAL NOT NULL DEFAULT 90, cooldown_seconds INTEGER NOT NULL DEFAULT 900, last_alert_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id,host_id));
 	CREATE INDEX IF NOT EXISTS idx_monitor_policy_user ON host_monitor_policies(user_id,host_id);
@@ -201,6 +232,11 @@ CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT PRIMARY KEY REFERENCES
 	CREATE INDEX IF NOT EXISTS idx_command_tasks_user ON command_tasks(user_id,created_at DESC);
 	CREATE TABLE IF NOT EXISTS terminal_recordings (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL, session_name TEXT NOT NULL DEFAULT '', path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'recording', bytes INTEGER NOT NULL DEFAULT 0, started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME);
 	CREATE INDEX IF NOT EXISTS idx_recordings_user ON terminal_recordings(user_id,started_at DESC);
+	CREATE TABLE IF NOT EXISTS terminal_shares (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, token_enc TEXT NOT NULL, password_hash TEXT NOT NULL DEFAULT '', permission TEXT NOT NULL DEFAULT 'view', record INTEGER NOT NULL DEFAULT 0, recording_id TEXT NOT NULL DEFAULT '', expires_at DATETIME NOT NULL, revoked_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+	CREATE INDEX IF NOT EXISTS idx_terminal_shares_owner ON terminal_shares(user_id,session_id,created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_terminal_shares_expiry ON terminal_shares(expires_at,revoked_at);
+	CREATE TABLE IF NOT EXISTS terminal_share_access (token_hash TEXT PRIMARY KEY, share_id TEXT NOT NULL REFERENCES terminal_shares(id) ON DELETE CASCADE, display_name TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+	CREATE INDEX IF NOT EXISTS idx_terminal_share_access_share ON terminal_share_access(share_id,last_seen_at DESC);
 	CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
 `)
 	if err != nil {
@@ -254,10 +290,13 @@ CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT PRIMARY KEY REFERENCES
 	if err = s.ensureColumn("web_services", "listen_port", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err = s.ensureColumn("web_services", "page_mode", "TEXT NOT NULL DEFAULT 'html'"); err != nil {
+		return err
+	}
 	if err = s.ensureColumn("terminal_sessions", "session_mode", "TEXT NOT NULL DEFAULT 'tmux'"); err != nil {
 		return err
 	}
-	_, err = s.DB.Exec(`INSERT OR IGNORE INTO schema_migrations(version) VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13); PRAGMA user_version=13;`)
+	_, err = s.DB.Exec(`INSERT OR IGNORE INTO schema_migrations(version) VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),(16); PRAGMA user_version=16;`)
 	return err
 }
 
@@ -972,11 +1011,11 @@ func (s *Store) DeletePortForward(userID, id string) error {
 	return err
 }
 
-const webServiceCols = `id,user_id,host_id,name,proxy_mode,listen_port,target_url,upstream_host,skip_tls_verify,created_at,updated_at`
+const webServiceCols = `id,user_id,host_id,name,proxy_mode,page_mode,listen_port,target_url,upstream_host,skip_tls_verify,created_at,updated_at`
 
 func scanWebService(row interface{ Scan(...any) error }) (WebService, error) {
 	var value WebService
-	err := row.Scan(&value.ID, &value.UserID, &value.HostID, &value.Name, &value.ProxyMode, &value.ListenPort, &value.TargetURL, &value.UpstreamHost, &value.SkipTLSVerify, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.UserID, &value.HostID, &value.Name, &value.ProxyMode, &value.PageMode, &value.ListenPort, &value.TargetURL, &value.UpstreamHost, &value.SkipTLSVerify, &value.CreatedAt, &value.UpdatedAt)
 	return value, err
 }
 func (s *Store) WebServices(userID string) ([]WebService, error) {
@@ -1002,7 +1041,10 @@ func (s *Store) SaveWebService(value WebService) error {
 	if value.ProxyMode == "" {
 		value.ProxyMode = "path"
 	}
-	_, err := s.DB.Exec(`INSERT INTO web_services(id,user_id,host_id,name,proxy_mode,listen_port,target_url,upstream_host,skip_tls_verify) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET host_id=excluded.host_id,name=excluded.name,proxy_mode=excluded.proxy_mode,listen_port=excluded.listen_port,target_url=excluded.target_url,upstream_host=excluded.upstream_host,skip_tls_verify=excluded.skip_tls_verify,updated_at=CURRENT_TIMESTAMP WHERE user_id=excluded.user_id`, value.ID, value.UserID, value.HostID, value.Name, value.ProxyMode, value.ListenPort, value.TargetURL, value.UpstreamHost, value.SkipTLSVerify)
+	if value.PageMode == "" {
+		value.PageMode = "html"
+	}
+	_, err := s.DB.Exec(`INSERT INTO web_services(id,user_id,host_id,name,proxy_mode,page_mode,listen_port,target_url,upstream_host,skip_tls_verify) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET host_id=excluded.host_id,name=excluded.name,proxy_mode=excluded.proxy_mode,page_mode=excluded.page_mode,listen_port=excluded.listen_port,target_url=excluded.target_url,upstream_host=excluded.upstream_host,skip_tls_verify=excluded.skip_tls_verify,updated_at=CURRENT_TIMESTAMP WHERE user_id=excluded.user_id`, value.ID, value.UserID, value.HostID, value.Name, value.ProxyMode, value.PageMode, value.ListenPort, value.TargetURL, value.UpstreamHost, value.SkipTLSVerify)
 	return err
 }
 func (s *Store) HostPortWebServices() ([]WebService, error) {
@@ -1130,6 +1172,139 @@ func (s *Store) FinishRecording(userID, id, status string, bytes int64, finished
 	_, err := s.DB.Exec(`UPDATE terminal_recordings SET status=?,bytes=?,finished_at=? WHERE user_id=? AND id=?`, status, bytes, finished, userID, id)
 	return err
 }
+
+const terminalShareColumns = `s.id,s.user_id,s.session_id,t.name,s.token_hash,s.token_enc,s.password_hash,s.permission,s.record,s.recording_id,s.expires_at,s.revoked_at,s.created_at,t.status,u.disabled`
+
+func scanTerminalShare(row interface{ Scan(...any) error }) (TerminalShare, error) {
+	var value TerminalShare
+	var revoked sql.NullTime
+	err := row.Scan(
+		&value.ID, &value.UserID, &value.SessionID, &value.SessionName, &value.TokenHash, &value.TokenEnc,
+		&value.PasswordHash, &value.Permission, &value.Record, &value.RecordingID,
+		&value.ExpiresAt, &revoked, &value.CreatedAt, &value.SessionStatus, &value.OwnerDisabled,
+	)
+	value.PasswordRequired = value.PasswordHash != ""
+	if revoked.Valid {
+		value.RevokedAt = &revoked.Time
+	}
+	return value, err
+}
+
+func (s *Store) CreateTerminalShare(value TerminalShare) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO terminal_shares(id,user_id,session_id,token_hash,token_enc,password_hash,permission,record,recording_id,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		value.ID, value.UserID, value.SessionID, value.TokenHash, value.TokenEnc, value.PasswordHash,
+		value.Permission, value.Record, value.RecordingID, value.ExpiresAt, value.CreatedAt,
+	)
+	return err
+}
+
+func (s *Store) TerminalShareByTokenHash(tokenHash string) (TerminalShare, error) {
+	return scanTerminalShare(s.DB.QueryRow(
+		`SELECT `+terminalShareColumns+` FROM terminal_shares s JOIN terminal_sessions t ON t.id=s.session_id JOIN users u ON u.id=s.user_id WHERE s.token_hash=?`,
+		tokenHash,
+	))
+}
+
+func (s *Store) TerminalShare(userID, id string) (TerminalShare, error) {
+	return scanTerminalShare(s.DB.QueryRow(
+		`SELECT `+terminalShareColumns+` FROM terminal_shares s JOIN terminal_sessions t ON t.id=s.session_id JOIN users u ON u.id=s.user_id WHERE s.user_id=? AND s.id=?`,
+		userID, id,
+	))
+}
+
+func (s *Store) TerminalShares(userID, sessionID string) ([]TerminalShare, error) {
+	rows, err := s.DB.Query(
+		`SELECT `+terminalShareColumns+` FROM terminal_shares s JOIN terminal_sessions t ON t.id=s.session_id JOIN users u ON u.id=s.user_id WHERE s.user_id=? AND s.session_id=? ORDER BY s.created_at DESC LIMIT 100`,
+		userID, sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]TerminalShare, 0)
+	for rows.Next() {
+		value, scanErr := scanTerminalShare(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (s *Store) RevokeTerminalShare(userID, id string, revokedAt time.Time) (TerminalShare, error) {
+	value, err := s.TerminalShare(userID, id)
+	if err != nil {
+		return TerminalShare{}, err
+	}
+	result, err := s.DB.Exec(`UPDATE terminal_shares SET revoked_at=? WHERE user_id=? AND id=? AND revoked_at IS NULL`, revokedAt, userID, id)
+	if err != nil {
+		return TerminalShare{}, err
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return TerminalShare{}, sql.ErrNoRows
+	}
+	_, _ = s.DB.Exec(`DELETE FROM terminal_share_access WHERE share_id=?`, id)
+	value.RevokedAt = &revokedAt
+	return value, nil
+}
+
+func (s *Store) TerminalSharesNeedingClosure(now time.Time) ([]TerminalShare, error) {
+	rows, err := s.DB.Query(
+		`SELECT `+terminalShareColumns+` FROM terminal_shares s JOIN terminal_sessions t ON t.id=s.session_id JOIN users u ON u.id=s.user_id WHERE s.revoked_at IS NULL AND (s.expires_at<=? OR t.status='ended' OR u.disabled=1)`,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]TerminalShare, 0)
+	for rows.Next() {
+		value, scanErr := scanTerminalShare(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	if err = rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	return values, rows.Close()
+}
+
+func (s *Store) CreateTerminalShareAccess(value TerminalShareAccess) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO terminal_share_access(token_hash,share_id,display_name,ip,user_agent,expires_at,created_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)`,
+		value.TokenHash, value.ShareID, value.DisplayName, value.IP, value.UserAgent,
+		value.ExpiresAt, value.CreatedAt, value.LastSeenAt,
+	)
+	return err
+}
+
+func (s *Store) TerminalShareAccess(tokenHash, shareID string, now time.Time) (TerminalShareAccess, error) {
+	var value TerminalShareAccess
+	err := s.DB.QueryRow(
+		`SELECT token_hash,share_id,display_name,ip,user_agent,expires_at,created_at,last_seen_at FROM terminal_share_access WHERE token_hash=? AND share_id=? AND expires_at>?`,
+		tokenHash, shareID, now,
+	).Scan(&value.TokenHash, &value.ShareID, &value.DisplayName, &value.IP, &value.UserAgent, &value.ExpiresAt, &value.CreatedAt, &value.LastSeenAt)
+	return value, err
+}
+
+func (s *Store) TouchTerminalShareAccess(tokenHash string, now time.Time) error {
+	_, err := s.DB.Exec(`UPDATE terminal_share_access SET last_seen_at=? WHERE token_hash=?`, now, tokenHash)
+	return err
+}
+
+func (s *Store) Audit(userID, eventType, resourceType, resourceID, ip string, details any) error {
+	raw, err := json.Marshal(details)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`INSERT INTO audit_events(user_id,event_type,resource_type,resource_id,ip,details) VALUES(?,?,?,?,?,?)`, userID, eventType, resourceType, resourceID, ip, string(raw))
+	return err
+}
 func (s *Store) TOTP(userID string) (secret string, recovery []string, enabled bool, err error) {
 	var raw string
 	err = s.DB.QueryRow(`SELECT secret_enc,recovery_hashes,enabled FROM user_totp WHERE user_id=?`, userID).Scan(&secret, &raw, &enabled)
@@ -1253,6 +1428,9 @@ func (s *Store) Restore(ctx context.Context, path string) error {
 	if _, err = tx.Exec(`DELETE FROM main.auth_sessions`); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`DELETE FROM main.terminal_share_access`); err != nil {
+		return err
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -1295,12 +1473,15 @@ func VerifyBackup(path string) error {
 	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 1 || version > 13 {
+	if version < 1 || version > 16 {
 		return fmt.Errorf("unsupported database version %d", version)
 	}
 	requiredTables := []string{"users", "hosts", "workspaces", "terminal_sessions"}
 	if version >= 7 {
 		requiredTables = append(requiredTables, "web_services")
+	}
+	if version >= 16 {
+		requiredTables = append(requiredTables, "terminal_shares", "terminal_share_access")
 	}
 	for _, table := range requiredTables {
 		var found string

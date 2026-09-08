@@ -38,6 +38,7 @@ const emit = defineEmits<{
           <small
             >{{ hosts.find((host) => host.id === service.hostID)?.name || "主机已删除" }}
             · {{ service.proxyMode === "host_port" ? `端口 ${service.listenPort}` : "路径代理" }}
+            · {{ service.pageMode === "vite" ? "Vite" : "HTML" }}
             · {{ service.targetURL }}</small
           >
         </div>

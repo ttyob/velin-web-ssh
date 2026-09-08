@@ -245,8 +245,8 @@ func (m *Manager) Disconnect(userID, hostID string) Status {
 }
 
 func (m *Manager) Command(ctx context.Context, userID, hostID, command string) (string, error) {
-	command = strings.TrimSpace(command)
-	if command == "" || len(command) > 6000 || strings.ContainsRune(command, '\x00') {
+	command, err := validateCommand(command)
+	if err != nil {
 		return "", errors.New("invalid SSH command")
 	}
 	conn, err := m.connection(userID, hostID)
@@ -261,6 +261,30 @@ func (m *Manager) Command(ctx context.Context, userID, hostID, command string) (
 		m.markSeen(userID, hostID)
 	}
 	return output, err
+}
+
+func (m *Manager) CommandStream(ctx context.Context, userID, hostID, command string, onDelta func(string) error) (string, error) {
+	command, err := validateCommand(command)
+	if err != nil {
+		return "", err
+	}
+	conn, err := m.connection(userID, hostID)
+	if err != nil {
+		return "", err
+	}
+	output, err := runSSHCommandStream(ctx, conn.client, command, onDelta)
+	if err == nil {
+		m.markSeen(userID, hostID)
+	}
+	return output, err
+}
+
+func validateCommand(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" || len(command) > 6000 || strings.ContainsRune(command, '\x00') {
+		return "", errors.New("invalid SSH command")
+	}
+	return command, nil
 }
 
 // DockerLogin authenticates Docker on the selected SSH host without putting
@@ -412,6 +436,75 @@ func runSSHCommand(ctx context.Context, client *ssh.Client, command string) (str
 	case <-ctx.Done():
 		_ = session.Close()
 		return "", ctx.Err()
+	}
+}
+
+type commandStreamWriter struct {
+	mu        sync.Mutex
+	output    bytes.Buffer
+	onDelta   func(string) error
+	err       error
+	truncated bool
+}
+
+func (w *commandStreamWriter) Write(value []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.err != nil {
+		return 0, w.err
+	}
+	remaining := 128*1024 - w.output.Len()
+	chunk := value
+	if len(chunk) > remaining {
+		chunk = chunk[:max(0, remaining)]
+		w.truncated = true
+	}
+	if len(chunk) > 0 {
+		_, _ = w.output.Write(chunk)
+		if w.onDelta != nil {
+			if w.err = w.onDelta(string(chunk)); w.err != nil {
+				return 0, w.err
+			}
+		}
+	}
+	return len(value), nil
+}
+
+func (w *commandStreamWriter) result() (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	output := w.output.String()
+	if w.truncated {
+		output += "\n[output truncated]"
+	}
+	return output, w.err
+}
+
+func runSSHCommandStream(ctx context.Context, client *ssh.Client, command string, onDelta func(string) error) (string, error) {
+	session, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	writer := &commandStreamWriter{onDelta: onDelta}
+	session.Stdout = writer
+	session.Stderr = writer
+	if err = session.Start(command); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- session.Wait() }()
+	select {
+	case waitErr := <-done:
+		output, writeErr := writer.result()
+		if writeErr != nil {
+			return output, writeErr
+		}
+		return output, waitErr
+	case <-ctx.Done():
+		_ = session.Close()
+		output, _ := writer.result()
+		return output, ctx.Err()
 	}
 }
 

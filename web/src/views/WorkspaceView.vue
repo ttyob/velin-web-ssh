@@ -38,6 +38,7 @@ import {
   Search,
   Server,
   Settings,
+  Share2,
   TerminalSquare,
   TextSelect,
   Trash2,
@@ -89,6 +90,9 @@ const WebProxyDialog = defineAsyncComponent(
 );
 const AgentDialog = defineAsyncComponent(
   () => import("../components/AgentDialog.vue"),
+);
+const SessionShareDialog = defineAsyncComponent(
+  () => import("../components/SessionShareDialog.vue"),
 );
 const HostMonitorDialog = defineAsyncComponent(
   () => import("../components/HostMonitorDialog.vue"),
@@ -146,6 +150,8 @@ const hostDialog = ref(false),
   agentOpen = ref(false),
   agentHost = ref<Host>(),
   agentTabID = ref(""),
+  sessionShareOpen = ref(false),
+  sessionShareSession = ref<TerminalSession>(),
   hostMonitorOpen = ref(false),
   hostMonitorHost = ref<Host>(),
   dockerOpen = ref(false),
@@ -1198,6 +1204,18 @@ function openPaneAgent() {
   agentTabID.value = layout.active;
   agentOpen.value = true;
 }
+function openPaneShare() {
+  if (!layout.active) return;
+  const tree = layout.trees?.[layout.active];
+  const session = tree && sessionForLeaf(tree, contextMenu.leafID);
+  contextMenu.open = false;
+  if (!session)
+    return ElMessage.warning("当前终端会话不可用");
+  if (session.status !== "attached")
+    return ElMessage.warning("只能分享当前已连接的终端会话");
+  sessionShareSession.value = session;
+  sessionShareOpen.value = true;
+}
 function openPaneMonitor() {
   if (!layout.active) return;
   const tree = layout.trees?.[layout.active];
@@ -1944,6 +1962,8 @@ function closeWorkspaceOverlays() {
   agentOpen.value = false;
   agentHost.value = undefined;
   agentTabID.value = "";
+  sessionShareOpen.value = false;
+  sessionShareSession.value = undefined;
   dockerOpen.value = false;
   dockerHost.value = undefined;
   dockerSessionID.value = "";
@@ -2346,6 +2366,8 @@ onBeforeUnmount(() => {
           <FolderOpen :size="16" /><span>打开当前目录</span></button
         ><button @click="openPaneAgent">
           <Bot :size="16" /><span>打开 Agent</span></button
+        ><button @click="openPaneShare">
+          <Share2 :size="16" /><span>分享会话</span></button
         ><button @click="openPaneMonitor">
           <Activity :size="16" /><span>主机监控</span></button
         ><button
@@ -2654,6 +2676,10 @@ onBeforeUnmount(() => {
       v-model="agentOpen"
       :host="agentHost"
       :suspended="Boolean(agentTabID && agentTabID !== layout.active)"
+    />
+    <SessionShareDialog
+      v-model="sessionShareOpen"
+      :session="sessionShareSession"
     />
     <HostMonitorDialog
       v-model="hostMonitorOpen"

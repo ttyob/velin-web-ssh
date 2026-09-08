@@ -11,11 +11,11 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"path"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +39,9 @@ const (
 	webServiceQuery      = "__velin_web_service"
 	hostPortAccessQuery  = "__velin_access"
 	hostPortAccessCookie = "velin_host_port_"
+	pathAccessCookie     = "velin_web_service_"
+	webPageModeHTML      = "html"
+	webPageModeVite      = "vite"
 )
 
 var (
@@ -74,13 +77,6 @@ type webProxyCreation struct {
 	err   error
 }
 
-type webProxyResponsePolicy struct {
-	header http.Header
-	host   string
-}
-
-type webProxyResponsePolicyKey struct{}
-
 type webProxySession struct {
 	token        string
 	userID       string
@@ -96,9 +92,10 @@ type webProxySession struct {
 	routePrefix  string
 	stable       bool
 	rootProxy    bool
+	pageMode     string
 	viteDevMode  atomic.Bool
 	cookieMu     sync.Mutex
-	cookies      map[string]*http.Cookie
+	cookieJar    *cookiejar.Jar
 	onProxyError func()
 }
 
@@ -130,6 +127,31 @@ func (m *webProxyManager) issueHostPortAccess(userID, serviceID, authTokenHash s
 	m.hostPortAccess[token] = &hostPortAccess{userID: userID, serviceID: serviceID, authTokenHash: authTokenHash, expiresAt: time.Now().Add(12 * time.Hour)}
 	m.mu.Unlock()
 	return token, nil
+}
+
+func (m *webProxyManager) issuePathAccess(userID, serviceID, authTokenHash string) (string, error) {
+	token, err := security.RandomToken(24)
+	if err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	m.hostPortAccess[token] = &hostPortAccess{
+		userID: userID, serviceID: serviceID, authTokenHash: authTokenHash,
+		expiresAt: time.Now().Add(12 * time.Hour), activated: true,
+	}
+	m.mu.Unlock()
+	return token, nil
+}
+
+func (m *webProxyManager) pathAuthorization(token, serviceID string) (string, string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	access := m.hostPortAccess[token]
+	if access == nil || access.serviceID != serviceID || !access.activated || time.Now().After(access.expiresAt) {
+		delete(m.hostPortAccess, token)
+		return "", "", false
+	}
+	return access.userID, access.authTokenHash, true
 }
 
 func (m *webProxyManager) hostPortAuthorization(token, userID, serviceID string, activate bool) (string, bool) {
@@ -233,11 +255,16 @@ func (m *webProxyManager) create(ctx context.Context, userID string, in webProxy
 		},
 	}
 	now := time.Now()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
 	session := &webProxySession{
 		token: token, userID: userID, hostID: in.HostID, target: target,
 		upstream: upstream, client: client, transport: transport,
 		createdAt: now, lastUsedAt: now,
-		cookies: make(map[string]*http.Cookie),
+		cookieJar: jar,
 	}
 	session.proxy = session.reverseProxy()
 	m.mu.Lock()
@@ -321,13 +348,16 @@ func stableWebProxyPrefix(serviceID string) string {
 	return "/web-service-proxy/" + serviceID
 }
 
-func (m *webProxyManager) getOrCreateStable(ctx context.Context, userID, serviceID string, in webProxyInput, rootProxy bool) (*webProxySession, error) {
+func (m *webProxyManager) getOrCreateStable(ctx context.Context, userID, serviceID string, in webProxyInput, rootProxy bool, pageMode string) (*webProxySession, error) {
+	if pageMode != webPageModeVite {
+		pageMode = webPageModeHTML
+	}
 	key := stableWebProxyKey(userID, serviceID)
 	for {
 		var expired *webProxySession
 		m.mu.Lock()
 		if session := m.stableSessions[key]; session != nil {
-			if !session.expired(time.Now()) && session.rootProxy == rootProxy {
+			if !session.expired(time.Now()) && session.rootProxy == rootProxy && session.pageMode == pageMode {
 				session.lastUsedAt = time.Now()
 				session.active++
 				m.mu.Unlock()
@@ -367,6 +397,7 @@ func (m *webProxyManager) getOrCreateStable(ctx context.Context, userID, service
 			}
 			session.stable = true
 			session.rootProxy = rootProxy
+			session.pageMode = pageMode
 			session.onProxyError = func() { m.invalidateStable(userID, serviceID, session) }
 			m.stableSessions[key] = session
 		}
@@ -565,9 +596,9 @@ func (s *webProxySession) reverseProxy() *httputil.ReverseProxy {
 				request.Header.Del("If-Modified-Since")
 				request.Header.Del("If-None-Match")
 			}
-			request.Header.Set("Cookie", s.upstreamCookieHeader(request))
 			request.Header.Set("X-Forwarded-Host", forwardedHost)
 			request.Header.Set("X-Forwarded-Proto", forwardedProto)
+			request.Header.Set("Cookie", s.upstreamCookieHeader(request))
 			if prefix == "" {
 				request.Header.Del("X-Forwarded-Prefix")
 			} else {
@@ -591,7 +622,9 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	response.Header.Del("Content-Security-Policy")
 	response.Header.Del("Content-Security-Policy-Report-Only")
 	response.Header.Del("Clear-Site-Data")
-	allowSandboxModuleResponse(response)
+	if s.viteModeEnabled() {
+		allowSandboxModuleResponse(response)
+	}
 	response.Header.Set("Referrer-Policy", "same-origin")
 	response.Header.Set("Service-Worker-Allowed", prefix+"/")
 	if location := response.Header.Get("Location"); location != "" {
@@ -601,11 +634,11 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 		response.Header.Set("Refresh", rewriteRefresh(refresh, prefix, s.target))
 	}
 	setCookies := response.Header.Values("Set-Cookie")
-	s.captureUpstreamCookies(setCookies)
+	s.captureUpstreamCookies(response.Request, setCookies)
 	response.Header.Del("Set-Cookie")
 	for _, raw := range setCookies {
 		if cookie, err := http.ParseSetCookie(raw); err == nil {
-			if cookie.Name == cookieName || cookie.Name == csrfCookieName || strings.HasPrefix(cookie.Name, hostPortAccessCookie) {
+			if isWebProxyControlCookie(cookie.Name) {
 				continue
 			}
 			cookie.Domain = ""
@@ -621,7 +654,7 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	response.Header.Del("ETag")
 	response.Header.Del("Last-Modified")
 	mediaType, inferredMediaType := proxyRewriteMediaType(response)
-	rewriteJavaScript := s.viteDevMode.Load() && isJavaScriptMediaType(response.Header.Get("Content-Type"))
+	rewriteJavaScript := s.viteModeEnabled() && isJavaScriptMediaType(response.Header.Get("Content-Type"))
 	if mediaType == "" && !rewriteJavaScript || response.Body == nil || response.ContentLength > maxRewriteBody {
 		return nil
 	}
@@ -635,15 +668,14 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	}
 	_ = response.Body.Close()
 	if mediaType == "text/html" {
-		if isViteDevelopmentHTML(body) {
+		if !s.stable && isViteDevelopmentHTML(body) {
 			s.viteDevMode.Store(true)
-			s.allowViteSameOrigin(response)
 		}
 		documentPath := "/"
 		if response.Request != nil && response.Request.URL != nil {
 			documentPath = proxyDocumentPath(response.Request.URL.Path, s.target)
 		}
-		body = rewriteHTMLAtPath(body, prefix, s.target, documentPath)
+		body = rewriteHTMLAtPathMode(body, prefix, s.target, documentPath, s.viteModeEnabled())
 	} else if mediaType == "text/css" {
 		body = rewriteCSS(body, prefix, s.target)
 	} else if rewriteJavaScript {
@@ -659,15 +691,8 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	return nil
 }
 
-func (s *webProxySession) allowViteSameOrigin(response *http.Response) {
-	if !s.stable || response.Request == nil {
-		return
-	}
-	policy, ok := response.Request.Context().Value(webProxyResponsePolicyKey{}).(webProxyResponsePolicy)
-	if !ok || policy.header == nil {
-		return
-	}
-	policy.header.Set("Content-Security-Policy", webProxyCSP(policy.host, s.prefix(), true))
+func (s *webProxySession) viteModeEnabled() bool {
+	return s.pageMode == webPageModeVite || (!s.stable && s.viteDevMode.Load())
 }
 
 func proxyRewriteMediaType(response *http.Response) (string, bool) {
@@ -695,7 +720,7 @@ func proxyRewriteMediaType(response *http.Response) (string, bool) {
 func upstreamCookies(request *http.Request) string {
 	values := make([]string, 0)
 	for _, cookie := range request.Cookies() {
-		if cookie.Name != cookieName && cookie.Name != csrfCookieName && !strings.HasPrefix(cookie.Name, hostPortAccessCookie) {
+		if !isWebProxyControlCookie(cookie.Name) {
 			values = append(values, cookie.String())
 		}
 	}
@@ -703,49 +728,67 @@ func upstreamCookies(request *http.Request) string {
 }
 
 func (s *webProxySession) upstreamCookieHeader(request *http.Request) string {
-	values := make(map[string]string)
-	for _, cookie := range request.Cookies() {
-		if cookie.Name != cookieName && cookie.Name != csrfCookieName && !strings.HasPrefix(cookie.Name, hostPortAccessCookie) {
-			values[cookie.Name] = cookie.Value
-		}
-	}
 	s.cookieMu.Lock()
-	for name, cookie := range s.cookies {
-		if _, present := values[name]; !present {
-			values[name] = cookie.Value
+	jar := s.ensureCookieJarLocked()
+	jarCookies := jar.Cookies(s.cookieJarURL(request))
+	s.cookieMu.Unlock()
+
+	jarNames := make(map[string]struct{}, len(jarCookies))
+	parts := make([]string, 0, len(jarCookies)+len(request.Cookies()))
+	for _, cookie := range jarCookies {
+		jarNames[cookie.Name] = struct{}{}
+		parts = append(parts, cookie.String())
+	}
+	for _, cookie := range request.Cookies() {
+		if _, managed := jarNames[cookie.Name]; !managed && !isWebProxyControlCookie(cookie.Name) {
+			parts = append(parts, cookie.String())
 		}
 	}
-	s.cookieMu.Unlock()
-	parts := make([]string, 0, len(values))
-	for name, value := range values {
-		parts = append(parts, name+"="+value)
-	}
-	slices.Sort(parts)
 	return strings.Join(parts, "; ")
 }
 
-func (s *webProxySession) captureUpstreamCookies(rawCookies []string) {
-	if len(rawCookies) == 0 {
+func (s *webProxySession) captureUpstreamCookies(request *http.Request, rawCookies []string) {
+	if request == nil || len(rawCookies) == 0 {
 		return
 	}
-	now := time.Now()
-	s.cookieMu.Lock()
-	defer s.cookieMu.Unlock()
-	if s.cookies == nil {
-		s.cookies = make(map[string]*http.Cookie)
-	}
+	cookies := make([]*http.Cookie, 0, len(rawCookies))
 	for _, raw := range rawCookies {
 		cookie, err := http.ParseSetCookie(raw)
-		if err != nil || cookie.Name == "" || cookie.Name == cookieName || cookie.Name == csrfCookieName || strings.HasPrefix(cookie.Name, hostPortAccessCookie) {
-			continue
+		if err == nil && cookie.Name != "" && !isWebProxyControlCookie(cookie.Name) {
+			cookies = append(cookies, cookie)
 		}
-		if cookie.MaxAge < 0 || (!cookie.Expires.IsZero() && cookie.Expires.Before(now)) {
-			delete(s.cookies, cookie.Name)
-			continue
-		}
-		copy := *cookie
-		s.cookies[cookie.Name] = &copy
 	}
+	if len(cookies) == 0 {
+		return
+	}
+	s.cookieMu.Lock()
+	defer s.cookieMu.Unlock()
+	jar := s.ensureCookieJarLocked()
+	jar.SetCookies(s.cookieJarURL(request), cookies)
+}
+
+func (s *webProxySession) ensureCookieJarLocked() *cookiejar.Jar {
+	if s.cookieJar == nil {
+		s.cookieJar, _ = cookiejar.New(nil)
+	}
+	return s.cookieJar
+}
+
+func (s *webProxySession) cookieJarURL(request *http.Request) *url.URL {
+	logical := *request.URL
+	logical.Scheme = requestProto(request)
+	if logical.Scheme != "http" && logical.Scheme != "https" {
+		logical.Scheme = s.target.Scheme
+	}
+	logical.Host = s.upstream
+	if logical.Host == "" && s.target != nil {
+		logical.Host = s.target.Host
+	}
+	return &logical
+}
+
+func isWebProxyControlCookie(name string) bool {
+	return name == cookieName || name == csrfCookieName || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie)
 }
 
 func rewriteRequestOrigin(request *http.Request, prefix string, target *url.URL, upstreamHost string) {
@@ -777,19 +820,26 @@ func requestProto(request *http.Request) string {
 }
 
 func rewriteHTML(body []byte, prefix string, target *url.URL) []byte {
-	return rewriteHTMLAtPath(body, prefix, target, "/")
+	return rewriteHTMLAtPathMode(body, prefix, target, "/", false)
 }
 
 func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath string) []byte {
+	return rewriteHTMLAtPathMode(body, prefix, target, documentPath, false)
+}
+
+func rewriteHTMLAtPathMode(body []byte, prefix string, target *url.URL, documentPath string, viteMode bool) []byte {
 	document, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return body
 	}
 	removeUpstreamCSPMeta(document)
-	injectWebProxyBootstrap(document, prefix, target, documentPath)
+	injectWebProxyBootstrap(document, prefix, target, documentPath, viteMode)
 	var rewrite func(*html.Node)
 	rewrite = func(node *html.Node) {
 		if node.Type == html.ElementNode {
+			if strings.EqualFold(node.Data, "meta") {
+				rewriteMetaRefresh(node, prefix, target, documentPath)
+			}
 			for i := range node.Attr {
 				switch strings.ToLower(node.Attr[i].Key) {
 				case "href":
@@ -802,9 +852,18 @@ func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath
 					node.Attr[i].Val = rewriteProxyURL(node.Attr[i].Val, prefix, target)
 				case "srcset":
 					node.Attr[i].Val = rewriteSrcset(node.Attr[i].Val, prefix, target)
+				case "style":
+					node.Attr[i].Val = string(rewriteCSS([]byte(node.Attr[i].Val), prefix, target))
 				}
 			}
-			if strings.EqualFold(node.Data, "script") && configureModuleScriptCredentials(node) {
+			if strings.EqualFold(node.Data, "style") {
+				for child := node.FirstChild; child != nil; child = child.NextSibling {
+					if child.Type == html.TextNode {
+						child.Data = string(rewriteCSS([]byte(child.Data), prefix, target))
+					}
+				}
+			}
+			if viteMode && strings.EqualFold(node.Data, "script") && configureModuleScriptCredentials(node) {
 				for child := node.FirstChild; child != nil; child = child.NextSibling {
 					if child.Type == html.TextNode {
 						child.Data = string(rewriteViteJavaScript([]byte(child.Data), prefix, target))
@@ -822,6 +881,32 @@ func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath
 		return body
 	}
 	return output.Bytes()
+}
+
+func rewriteMetaRefresh(node *html.Node, prefix string, target *url.URL, documentPath string) {
+	isRefresh, contentIndex := false, -1
+	for index, attr := range node.Attr {
+		switch strings.ToLower(attr.Key) {
+		case "http-equiv":
+			isRefresh = strings.EqualFold(strings.TrimSpace(attr.Val), "refresh")
+		case "content":
+			contentIndex = index
+		}
+	}
+	if !isRefresh || contentIndex < 0 {
+		return
+	}
+	node.Attr[contentIndex].Val = rewriteRefreshValue(node.Attr[contentIndex].Val, func(value string) string {
+		parsed, err := url.Parse(value)
+		if err != nil {
+			return value
+		}
+		if !parsed.IsAbs() && parsed.Host == "" && !strings.HasPrefix(parsed.Path, "/") {
+			base := &url.URL{Path: ensureLeadingSlash(documentPath)}
+			parsed = base.ResolveReference(parsed)
+		}
+		return rewriteBrowserRouteURL(parsed.String(), prefix, target)
+	})
 }
 
 func configureModuleScriptCredentials(node *html.Node) bool {
@@ -922,7 +1007,7 @@ func rewriteViteJavaScript(body []byte, prefix string, target *url.URL) []byte {
 	return []byte(rewritten)
 }
 
-func injectWebProxyBootstrap(document *html.Node, prefix string, target *url.URL, documentPath string) {
+func injectWebProxyBootstrap(document *html.Node, prefix string, target *url.URL, documentPath string, injectBase bool) {
 	var head *html.Node
 	var findHead func(*html.Node)
 	findHead = func(node *html.Node) {
@@ -946,8 +1031,12 @@ func injectWebProxyBootstrap(document *html.Node, prefix string, target *url.URL
 		Data: "script",
 		Attr: []html.Attribute{{Key: "data-velin-web-proxy", Val: "runtime"}},
 	}
-	script.AppendChild(&html.Node{Type: html.TextNode, Data: webProxyBootstrap(prefix, target)})
+	hideStablePrefix := serviceIDFromPrefix(prefix) != ""
+	script.AppendChild(&html.Node{Type: html.TextNode, Data: webProxyBootstrap(prefix, target, hideStablePrefix)})
 	head.InsertBefore(script, head.FirstChild)
+	if !injectBase {
+		return
+	}
 	base := &html.Node{
 		Type: html.ElementNode,
 		Data: "base",
@@ -975,7 +1064,7 @@ func proxyDocumentBase(prefix, documentPath string) string {
 	return prefix + ensureLeadingSlash(directory) + "/"
 }
 
-func webProxyBootstrap(prefix string, target *url.URL) string {
+func webProxyBootstrap(prefix string, target *url.URL, hideStablePrefix bool) string {
 	targetPath := target.Path
 	if targetPath == "" {
 		targetPath = "/"
@@ -988,6 +1077,7 @@ func webProxyBootstrap(prefix string, target *url.URL) string {
 	const targetPort=` + strconv.Quote(effectiveURLPort(target)) + `;
 	const targetPath=` + strconv.Quote(targetPath) + `;
   const serviceID=` + strconv.Quote(serviceID) + `;
+	const hideStablePrefix=` + strconv.FormatBool(hideStablePrefix) + `;
 	const serviceQuery=` + strconv.Quote(webServiceQuery) + `;
   const pageHost=location.host;
   const nativePushState=history.pushState.bind(history);
@@ -1000,7 +1090,9 @@ func webProxyBootstrap(prefix string, target *url.URL) string {
 	 return loopback&&port===targetPort;
 	}
   function browserRoute(value){
-    if(!serviceID || value==null) return value;
+	if(value==null) return value;
+	if(!hideStablePrefix) return proxyURL(value,false);
+	if(!serviceID) return value;
     let parsed;
     try{parsed=new URL(String(value),location.href);}catch(_){return value;}
     if(parsed.origin!==location.origin) return value;
@@ -1010,7 +1102,7 @@ func webProxyBootstrap(prefix string, target *url.URL) string {
     return parsed.href;
   }
   if(serviceID){
-    nativeReplaceState(history.state,"",browserRoute(location.href));
+	    nativeReplaceState(history.state,"",browserRoute(location.href));
     history.pushState=function(state,title,url){return nativePushState(state,title,browserRoute(url));};
     history.replaceState=function(state,title,url){return nativeReplaceState(state,title,browserRoute(url));};
   }
@@ -1105,11 +1197,15 @@ func serviceIDFromReferer(r *http.Request) string {
 	if serviceID := strings.TrimSpace(referer.Query().Get(webServiceQuery)); serviceID != "" {
 		return serviceID
 	}
+	return serviceIDFromStableProxyPath(referer.Path)
+}
+
+func serviceIDFromStableProxyPath(value string) string {
 	const prefix = "/web-service-proxy/"
-	if !strings.HasPrefix(referer.Path, prefix) {
+	if !strings.HasPrefix(value, prefix) {
 		return ""
 	}
-	rest := strings.TrimPrefix(referer.Path, prefix)
+	rest := strings.TrimPrefix(value, prefix)
 	if slash := strings.IndexByte(rest, '/'); slash >= 0 {
 		rest = rest[:slash]
 	}
@@ -1267,6 +1363,12 @@ func queryAndFragment(value *url.URL) string {
 }
 
 func rewriteRefresh(value, prefix string, target *url.URL) string {
+	return rewriteRefreshValue(value, func(value string) string {
+		return rewriteProxyURL(value, prefix, target)
+	})
+}
+
+func rewriteRefreshValue(value string, rewrite func(string) string) string {
 	parts := strings.SplitN(value, ";", 2)
 	if len(parts) != 2 {
 		return value
@@ -1275,7 +1377,7 @@ func rewriteRefresh(value, prefix string, target *url.URL) string {
 	if len(assignment) != 2 || !strings.EqualFold(strings.TrimSpace(assignment[0]), "url") {
 		return value
 	}
-	return parts[0] + "; url=" + rewriteProxyURL(strings.Trim(strings.TrimSpace(assignment[1]), "\"'"), prefix, target)
+	return parts[0] + "; url=" + rewrite(strings.Trim(strings.TrimSpace(assignment[1]), "\"'"))
 }
 
 func joinURLPath(base, path string) string {
@@ -1367,6 +1469,13 @@ func (a *API) saveWebService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_web_service", "不支持的 Web 代理模式")
 		return
 	}
+	if value.PageMode == "" {
+		value.PageMode = webPageModeHTML
+	}
+	if value.PageMode != webPageModeHTML && value.PageMode != webPageModeVite {
+		writeError(w, http.StatusBadRequest, "invalid_web_service", "不支持的网页类型")
+		return
+	}
 	if value.ProxyMode == "path" {
 		value.ListenPort = 0
 	} else {
@@ -1437,6 +1546,21 @@ func (a *API) openWebService(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		openURL = hostPortWebProxyURL(r, value.ListenPort) + "?" + url.Values{hostPortAccessQuery: []string{access}}.Encode()
+	} else {
+		access, accessErr := a.webProxies.issuePathAccess(user.ID, value.ID, currentAuthTokenHash(r))
+		if accessErr != nil {
+			writeError(w, http.StatusInternalServerError, "web_service_access_failed", "无法创建内网 Web 访问票据")
+			return
+		}
+		secure := a.cfg.CookieSecure || requestProto(r) == "https"
+		sameSite := http.SameSiteLaxMode
+		if secure {
+			sameSite = http.SameSiteNoneMode
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name: webServiceAccessCookieName(value.ID), Value: access, Path: "/",
+			HttpOnly: true, Secure: secure, SameSite: sameSite, MaxAge: 12 * 60 * 60,
+		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"url": openURL,
@@ -1473,7 +1597,7 @@ func (a *API) serveStableWebService(w http.ResponseWriter, r *http.Request, user
 	session, err := a.webProxies.getOrCreateStable(r.Context(), user.ID, serviceID, webProxyInput{
 		HostID: value.HostID, TargetURL: value.TargetURL,
 		UpstreamHost: value.UpstreamHost, SkipTLSVerify: value.SkipTLSVerify,
-	}, false)
+	}, false, value.PageMode)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "web_proxy_create_failed", err.Error())
 		return
@@ -1484,15 +1608,31 @@ func (a *API) serveStableWebService(w http.ResponseWriter, r *http.Request, user
 
 func (a *API) markedWebServiceProxy(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serviceID := strings.TrimSpace(r.URL.Query().Get(webServiceQuery))
+		pathServiceID := serviceIDFromStableProxyPath(r.URL.Path)
+		serviceID := pathServiceID
+		if serviceID == "" {
+			serviceID = strings.TrimSpace(r.URL.Query().Get(webServiceQuery))
+		}
 		if serviceID == "" {
 			serviceID = serviceIDFromReferer(r)
 		}
-		if serviceID == "" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		if serviceID == "" || (pathServiceID == "" && r.Method != http.MethodGet && r.Method != http.MethodHead) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		user, tokenHash, err := a.currentAuthSession(r)
+		if err != nil {
+			accessCookie, cookieErr := r.Cookie(webServiceAccessCookieName(serviceID))
+			if cookieErr == nil {
+				var expectedUserID string
+				expectedUserID, tokenHash, _ = a.webProxies.pathAuthorization(accessCookie.Value, serviceID)
+				var locked bool
+				user, locked, err = a.store.UserByTokenState(tokenHash)
+				if err == nil && (user.ID != expectedUserID || locked) {
+					err = errors.New("web proxy access is no longer valid")
+				}
+			}
+		}
 		if err != nil || user.Disabled {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "请重新登录")
 			return
@@ -1513,6 +1653,10 @@ func (a *API) markedWebServiceProxy(next http.Handler) http.Handler {
 		}
 		a.serveStableWebService(w, request, user, serviceID)
 	})
+}
+
+func webServiceAccessCookieName(serviceID string) string {
+	return pathAccessCookie + security.TokenHash(serviceID)[:12]
 }
 
 func (a *API) hostPortWebServiceHandler(userID, serviceID string) http.Handler {
@@ -1557,7 +1701,7 @@ func (a *API) hostPortWebServiceHandler(userID, serviceID string) http.Handler {
 		session, err := a.webProxies.getOrCreateStable(r.Context(), userID, serviceID, webProxyInput{
 			HostID: value.HostID, TargetURL: value.TargetURL,
 			UpstreamHost: value.UpstreamHost, SkipTLSVerify: value.SkipTLSVerify,
-		}, true)
+		}, true, value.PageMode)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "web_proxy_create_failed", err.Error())
 			return
@@ -1627,13 +1771,12 @@ func serveWebProxySession(w http.ResponseWriter, r *http.Request, session *webPr
 	// The application shell's CSP would block assets legitimately loaded by the proxied application.
 	w.Header().Del("Content-Security-Policy")
 	w.Header().Del("X-Frame-Options")
-	w.Header().Set("Content-Security-Policy", webProxyCSP(r.Host, session.prefix(), session.stable && session.viteDevMode.Load()))
+	w.Header().Set("Content-Security-Policy", webProxyCSP(r.Host, session.prefix(), session.stable, session.viteModeEnabled()))
 	w.Header().Set("Referrer-Policy", "same-origin")
-	policy := webProxyResponsePolicy{header: w.Header(), host: r.Host}
-	session.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), webProxyResponsePolicyKey{}, policy)))
+	session.proxy.ServeHTTP(w, r)
 }
 
-func webProxyCSP(host, prefix string, allowSameOrigin bool) string {
+func webProxyCSP(host, prefix string, allowSameOrigin, allowBaseURI bool) string {
 	if strings.ContainsAny(host, " \t\r\n;'\"") {
 		return "default-src 'none'"
 	}
@@ -1645,16 +1788,24 @@ func webProxyCSP(host, prefix string, allowSameOrigin bool) string {
 	web := strings.Join([]string{httpPath, httpsPath}, " ")
 	connect := strings.Join([]string{httpPath, httpsPath, wsPath, wssPath}, " ")
 	sandbox := "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+	baseURI := "'none'"
 	if allowSameOrigin {
-		// Vite modules require a non-opaque origin so an outer NAS authorization
-		// gateway can receive its own SameSite session cookie.
+		// Saved services need a non-opaque origin so an outer NAS authorization
+		// gateway can receive its own session cookie.
 		sandbox += " allow-same-origin"
+	}
+	if allowBaseURI {
+		baseURI = web
+	}
+	scriptExtra := " data: 'unsafe-inline'"
+	if allowSameOrigin {
+		scriptExtra += " 'unsafe-eval'"
 	}
 	return "default-src 'none'; " +
 		sandbox + "; " +
-		"script-src " + web + " data: 'unsafe-inline'; " +
-		"style-src " + web + " 'unsafe-inline'; img-src " + web + " data: blob:; " +
+		"script-src " + web + scriptExtra + "; " +
+		"style-src " + web + " 'unsafe-inline'; img-src " + web + " data: blob:; manifest-src " + web + "; " +
 		"font-src " + web + " data:; media-src " + web + " blob:; " +
 		"connect-src " + connect + "; form-action " + web + "; frame-src " + web + "; " +
-		"worker-src " + web + " blob:; object-src 'none'; base-uri " + web
+		"worker-src " + web + " blob:; object-src 'none'; base-uri " + baseURI
 }

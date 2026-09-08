@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net"
 	"net/http"
@@ -94,17 +93,19 @@ func TestModifyResponseRewritesTargetRedirect(t *testing.T) {
 
 func TestRewriteHTML(t *testing.T) {
 	target, _ := url.Parse("http://router.internal")
-	body := rewriteHTML([]byte(`<html><head><script src="/dashboard.js"></script></head><body><a href="/login">Login</a><img src="/logo.png" srcset="/small.png 1x, /large.png 2x"><form action="/save"></form><script>if (1 < 2) console.log("ok")</script></body></html>`), "/web-proxy/token", target)
+	body := rewriteHTML([]byte(`<html><head><link rel="manifest" href="/manifest.json"><style>.hero{background:url('/hero.jpg')}</style><script src="/dashboard.js"></script></head><body><a href="/login">Login</a><img src="/logo.png" srcset="/small.png 1x, /large.png 2x"><div style="background-image:url(/wall.jpg)"></div><form action="/save"></form><script>if (1 < 2) console.log("ok")</script></body></html>`), "/web-proxy/token", target)
 	text := string(body)
 	for _, expected := range []string{
 		`data-velin-web-proxy="runtime"`,
-		`<base href="/web-proxy/token/" data-velin-web-proxy="base"/>`,
 		`const prefix="/web-proxy/token"`,
 		`window.fetch=function(input,init)`,
 		`XMLHttpRequest.prototype.open=function(method,url)`,
 		`href="/web-proxy/token/login"`,
 		`src="/web-proxy/token/logo.png"`,
 		`srcset="/web-proxy/token/small.png 1x, /web-proxy/token/large.png 2x"`,
+		`href="/web-proxy/token/manifest.json"`,
+		`background:url('/web-proxy/token/hero.jpg')`,
+		`background-image:url(/web-proxy/token/wall.jpg)`,
 		`action="/web-proxy/token/save"`,
 		`if (1 < 2) console.log("ok")`,
 	} {
@@ -120,11 +121,21 @@ func TestRewriteHTML(t *testing.T) {
 func TestRewriteHTMLUsesDocumentDirectoryForRelativeURLs(t *testing.T) {
 	target, _ := url.Parse("http://router.internal")
 	body := string(rewriteHTMLAtPath([]byte(`<html><head><script src="../libs/jquery.min.js"></script></head><body><img src="../jacket_medium.png"></body></html>`), "/web-service-proxy/service-id", target, "/UI/Login"))
-	if !strings.Contains(body, `<base href="/web-service-proxy/service-id/UI/" data-velin-web-proxy="base"/>`) {
-		t.Fatalf("relative URL base path missing: %s", body)
+	if strings.Contains(body, `data-velin-web-proxy="base"`) {
+		t.Fatalf("ordinary HTML received a proxy base: %s", body)
 	}
 	if !strings.Contains(body, `src="../libs/jquery.min.js"`) || !strings.Contains(body, `src="../jacket_medium.png"`) {
 		t.Fatalf("relative URLs should remain relative to the document directory: %s", body)
+	}
+}
+
+func TestRewriteHTMLKeepsMetaRefreshInsideStableService(t *testing.T) {
+	target, _ := url.Parse("http://router.internal")
+	prefix := "/web-service-proxy/openwrt"
+	body := string(rewriteHTMLAtPath([]byte(`<html><head><meta http-equiv="refresh" content="0; URL=cgi-bin/luci/"></head></html>`), prefix, target, "/"))
+
+	if !strings.Contains(body, `content="0; url=/cgi-bin/luci/?__velin_web_service=openwrt"`) {
+		t.Fatalf("meta refresh escaped stable service: %s", body)
 	}
 }
 
@@ -140,7 +151,6 @@ func TestRewriteHTMLRemovesOnlyUpstreamCSPMeta(t *testing.T) {
 	for _, expected := range []string{
 		`<meta name="viewport" content="width=device-width"/>`,
 		`data-velin-web-proxy="runtime"`,
-		`<base href="/web-service-proxy/service-id/" data-velin-web-proxy="base"/>`,
 		`import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")'`,
 		`src="/web-service-proxy/service-id/static/js/login.js"`,
 	} {
@@ -154,7 +164,7 @@ func TestRewriteHTMLRewritesInlineModuleImportsOnly(t *testing.T) {
 	target, _ := url.Parse("http://router.internal")
 	prefix := "/web-service-proxy/service-id"
 	original := `<html><head><script type="module">import RefreshRuntime from "/@react-refresh"; import "/src/main.tsx";</script><script type="module" crossorigin="anonymous" src="/@vite/client"></script><script>const root = "/must-stay";</script></head></html>`
-	body := string(rewriteHTML([]byte(original), prefix, target))
+	body := string(rewriteHTMLAtPathMode([]byte(original), prefix, target, "/", true))
 
 	if !strings.Contains(body, `from "/web-service-proxy/service-id/@react-refresh"`) ||
 		!strings.Contains(body, `import "/web-service-proxy/service-id/src/main.tsx"`) {
@@ -164,8 +174,14 @@ func TestRewriteHTMLRewritesInlineModuleImportsOnly(t *testing.T) {
 		t.Fatalf("ordinary inline script was modified: %s", body)
 	}
 	if strings.Count(body, `crossorigin="use-credentials"`) != 2 ||
-		!strings.Contains(body, `src="/web-service-proxy/service-id/@vite/client"`) {
+		!strings.Contains(body, `src="/web-service-proxy/service-id/@vite/client"`) ||
+		!strings.Contains(body, `<base href="/web-service-proxy/service-id/" data-velin-web-proxy="base"/>`) {
 		t.Fatalf("module scripts do not carry proxy authentication: %s", body)
+	}
+	ordinary := string(rewriteHTML([]byte(original), prefix, target))
+	if strings.Contains(ordinary, `crossorigin="use-credentials"`) ||
+		strings.Contains(ordinary, `from "/web-service-proxy/service-id/@react-refresh"`) {
+		t.Fatalf("ordinary HTML received Vite-only rewrites: %s", ordinary)
 	}
 }
 
@@ -174,7 +190,7 @@ func TestRewriteStableWebServiceNavigation(t *testing.T) {
 	prefix := "/web-service-proxy/service-id"
 	body := string(rewriteHTML([]byte(`<html><head><link rel="stylesheet" href="/web-service-proxy/assets/app.css"><script src="/web-service-proxy/assets/app.js"></script></head><body><a href="/admin">Admin</a><img src="/logo.png"></body></html>`), prefix, target))
 	if !strings.Contains(body, `href="/admin?__velin_web_service=service-id"`) {
-		t.Fatalf("navigation link did not use browser route: %s", body)
+		t.Fatalf("ordinary navigation link did not use parameter mode: %s", body)
 	}
 	if !strings.Contains(body, `src="/web-service-proxy/service-id/logo.png"`) {
 		t.Fatalf("resource URL did not use proxy path: %s", body)
@@ -189,6 +205,10 @@ func TestRewriteStableWebServiceNavigation(t *testing.T) {
 	}
 	if actual := rewriteBrowserRouteURL("/admin?tab=users", prefix, target); actual != "/admin?__velin_web_service=service-id&tab=users" {
 		t.Fatalf("browser route=%q", actual)
+	}
+	viteBody := string(rewriteHTMLAtPathMode([]byte(`<html><head></head><body><a href="/admin">Admin</a></body></html>`), prefix, target, "/", true))
+	if !strings.Contains(viteBody, `href="/admin?__velin_web_service=service-id"`) {
+		t.Fatalf("Vite navigation did not use its browser route: %s", viteBody)
 	}
 }
 
@@ -225,12 +245,13 @@ func TestModifyResponseRewritesGenericHTMLByExtension(t *testing.T) {
 
 func TestWebProxyBootstrapIncludesTargetMapping(t *testing.T) {
 	target, _ := url.Parse("http://192.168.1.1/admin")
-	script := webProxyBootstrap("/web-proxy/token", target)
+	script := webProxyBootstrap("/web-proxy/token", target, false)
 	for _, expected := range []string{
 		`const targetHost="192.168.1.1"`,
 		`const targetPort="80"`,
 		`const targetPath="/admin"`,
 		`const serviceID=""`,
+		`const hideStablePrefix=false`,
 		`function browserRoute(value)`,
 		`history.pushState=function`,
 		`navigationAttributes`,
@@ -294,7 +315,7 @@ func TestModifyResponseDoesNotRewriteJavaScript(t *testing.T) {
 
 func TestModifyResponseAllowsOnlySandboxOrigin(t *testing.T) {
 	target, _ := url.Parse("http://router.internal")
-	session := &webProxySession{routePrefix: "/web-service-proxy/id", target: target}
+	session := &webProxySession{routePrefix: "/web-service-proxy/id", target: target, pageMode: webPageModeVite}
 	request, _ := http.NewRequest(http.MethodGet, "https://velin.example/web-service-proxy/id/src/main.tsx", nil)
 	request.Header.Set("Origin", "null")
 	response := &http.Response{Header: make(http.Header), Request: request}
@@ -338,11 +359,8 @@ func TestRewriteViteDevelopmentJavaScript(t *testing.T) {
 
 func TestViteModeOnlyRewritesJavaScriptAfterDevelopmentHTML(t *testing.T) {
 	target, _ := url.Parse("http://cleaner.internal")
-	session := &webProxySession{routePrefix: "/web-service-proxy/cleaner", target: target, stable: true}
+	session := &webProxySession{routePrefix: "/web-service-proxy/cleaner", target: target, stable: true, pageMode: webPageModeVite}
 	htmlRequest, _ := http.NewRequest(http.MethodGet, "http://velin.example/web-service-proxy/cleaner/", nil)
-	responseHeader := make(http.Header)
-	policy := webProxyResponsePolicy{header: responseHeader, host: "velin.example"}
-	htmlRequest = htmlRequest.WithContext(context.WithValue(htmlRequest.Context(), webProxyResponsePolicyKey{}, policy))
 	htmlResponse := &http.Response{
 		Header:  http.Header{"Content-Type": {"text/html; charset=utf-8"}},
 		Body:    io.NopCloser(strings.NewReader(`<html><head><script type="module" src="/@vite/client"></script></head></html>`)),
@@ -350,9 +368,6 @@ func TestViteModeOnlyRewritesJavaScriptAfterDevelopmentHTML(t *testing.T) {
 	}
 	if err := session.modifyResponse(htmlResponse); err != nil {
 		t.Fatal(err)
-	}
-	if csp := responseHeader.Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-same-origin") {
-		t.Fatalf("Vite response does not retain the NAS authorization origin: %q", csp)
 	}
 	jsRequest, _ := http.NewRequest(http.MethodGet, "http://velin.example/web-service-proxy/cleaner/src/main.tsx", nil)
 	jsResponse := &http.Response{
@@ -384,7 +399,7 @@ func TestStableViteFirstResponseAllowsNASAuthorizationCookie(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	session := &webProxySession{
 		target: target, upstream: target.Host, transport: transport,
-		routePrefix: "/web-service-proxy/cleaner", stable: true,
+		routePrefix: "/web-service-proxy/cleaner", stable: true, pageMode: webPageModeVite,
 	}
 	session.proxy = session.reverseProxy()
 	request := httptest.NewRequest(http.MethodGet, "https://velin.example/web-service-proxy/cleaner/", nil)
@@ -396,8 +411,40 @@ func TestStableViteFirstResponseAllowsNASAuthorizationCookie(t *testing.T) {
 	if len(policies) != 1 || !strings.Contains(policies[0], "allow-same-origin") {
 		t.Fatalf("first Vite response CSP=%q", policies)
 	}
+	if !strings.Contains(policies[0], "base-uri http://velin.example/web-service-proxy/cleaner/ https://velin.example/web-service-proxy/cleaner/") {
+		t.Fatalf("first Vite response does not allow the rewritten base URI: %q", policies)
+	}
 	if !strings.Contains(recorder.Body.String(), `src="/web-service-proxy/cleaner/@vite/client"`) {
 		t.Fatalf("first Vite response body=%s", recorder.Body.String())
+	}
+}
+
+func TestStableOrdinaryResponseKeepsPathsAndNASAuthorization(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, `<html><head><title>OpenWrt</title></head><body><a href="admin/status">Status</a></body></html>`)
+	}))
+	defer upstream.Close()
+
+	target, _ := url.Parse(upstream.URL)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	defer transport.CloseIdleConnections()
+	session := &webProxySession{
+		target: target, upstream: target.Host, transport: transport,
+		routePrefix: "/web-service-proxy/openwrt", stable: true, pageMode: webPageModeHTML,
+	}
+	session.proxy = session.reverseProxy()
+	request := httptest.NewRequest(http.MethodGet, "https://velin.example/web-service-proxy/openwrt/cgi-bin/luci/", nil)
+	recorder := httptest.NewRecorder()
+
+	serveWebProxySession(recorder, request, session)
+
+	policies := recorder.Result().Header.Values("Content-Security-Policy")
+	if len(policies) != 1 || !strings.Contains(policies[0], "base-uri 'none'") || !strings.Contains(policies[0], "allow-same-origin") || !strings.Contains(policies[0], "'unsafe-eval'") {
+		t.Fatalf("ordinary stable response CSP=%q", policies)
+	}
+	if strings.Contains(recorder.Body.String(), `data-velin-web-proxy="base"`) {
+		t.Fatalf("ordinary stable response received a proxy base: %s", recorder.Body.String())
 	}
 }
 
@@ -418,7 +465,7 @@ func TestProxyCookieIsolation(t *testing.T) {
 	if actual := upstreamCookies(request); actual != "csrf=upstream" {
 		t.Fatalf("upstream cookies=%q", actual)
 	}
-	policy := webProxyCSP("velin.example", "/web-proxy/token", false)
+	policy := webProxyCSP("velin.example", "/web-proxy/token", false, false)
 	if strings.Contains(policy, "allow-same-origin") {
 		t.Fatal("ordinary proxy pages share the Velin origin")
 	}
@@ -428,19 +475,60 @@ func TestProxyCookieIsolation(t *testing.T) {
 	if !strings.Contains(policy, "script-src http://velin.example/web-proxy/token/ https://velin.example/web-proxy/token/ data: 'unsafe-inline'") {
 		t.Fatalf("proxy CSP does not allow Vite legacy detection modules: %q", policy)
 	}
+	if !strings.Contains(policy, "manifest-src http://velin.example/web-proxy/token/ https://velin.example/web-proxy/token/") {
+		t.Fatalf("proxy CSP does not allow rewritten manifests: %q", policy)
+	}
 }
 
 func TestProxyCookieJarRestoresCookiesForRootNavigation(t *testing.T) {
 	target, _ := url.Parse("http://music.internal")
-	session := &webProxySession{routePrefix: "/web-service-proxy/service-id", target: target, cookies: make(map[string]*http.Cookie)}
-	session.captureUpstreamCookies([]string{"VELIN_SID=session-value; Path=/; HttpOnly"})
-	request, _ := http.NewRequest(http.MethodGet, "https://velin.example/?__velin_web_service=service-id", nil)
+	session := &webProxySession{routePrefix: "/web-service-proxy/service-id", target: target, upstream: target.Host}
+	upstreamRequest, _ := http.NewRequest(http.MethodGet, "http://music.internal/login", nil)
+	upstreamRequest.Header.Set("X-Forwarded-Proto", "https")
+	session.captureUpstreamCookies(upstreamRequest, []string{"VELIN_SID=session-value; Path=/; Secure; HttpOnly"})
+	request, _ := http.NewRequest(http.MethodGet, "http://music.internal/", nil)
+	request.Header.Set("X-Forwarded-Proto", "https")
 	if actual := session.upstreamCookieHeader(request); actual != "VELIN_SID=session-value" {
 		t.Fatalf("restored upstream cookie=%q", actual)
 	}
 	request.Header.Set("Cookie", "VELIN_SID=new-value")
-	if actual := session.upstreamCookieHeader(request); actual != "VELIN_SID=new-value" {
-		t.Fatalf("browser cookie should override jar=%q", actual)
+	if actual := session.upstreamCookieHeader(request); actual != "VELIN_SID=session-value" {
+		t.Fatalf("proxy cookie jar should override browser path cookies=%q", actual)
+	}
+}
+
+func TestProxyCookieJarFallsBackToBrowserCookieOutsideManagedPath(t *testing.T) {
+	target, _ := url.Parse("http://router.internal")
+	session := &webProxySession{target: target, upstream: target.Host}
+	loginRequest, _ := http.NewRequest(http.MethodGet, "https://router.internal/cgi-bin/luci/", nil)
+	session.captureUpstreamCookies(loginRequest, []string{"SID=managed; Path=/cgi-bin/luci/; Secure"})
+
+	request, _ := http.NewRequest(http.MethodGet, "https://router.internal/other", nil)
+	request.Header.Set("Cookie", "SID=browser-value")
+	if actual := session.upstreamCookieHeader(request); actual != "SID=browser-value" {
+		t.Fatalf("browser cookie fallback=%q", actual)
+	}
+}
+
+func TestProxyCookieJarPreservesSameNameCookiesByPath(t *testing.T) {
+	target, _ := url.Parse("http://router.internal")
+	session := &webProxySession{target: target, upstream: target.Host}
+	loginRequest, _ := http.NewRequest(http.MethodGet, "http://router.internal/cgi-bin/luci/", nil)
+	loginRequest.Header.Set("X-Forwarded-Proto", "https")
+	session.captureUpstreamCookies(loginRequest, []string{
+		"sysauth=root-value; Path=/; Secure; HttpOnly",
+		"sysauth=luci-value; Path=/cgi-bin/luci/; Secure; HttpOnly",
+	})
+
+	pageRequest, _ := http.NewRequest(http.MethodGet, "http://router.internal/cgi-bin/luci/admin/status/overview", nil)
+	pageRequest.Header.Set("X-Forwarded-Proto", "https")
+	if actual := session.upstreamCookieHeader(pageRequest); actual != "sysauth=luci-value; sysauth=root-value" {
+		t.Fatalf("path-scoped cookies=%q", actual)
+	}
+
+	session.captureUpstreamCookies(pageRequest, []string{"sysauth=; Path=/cgi-bin/luci/; Max-Age=0"})
+	if actual := session.upstreamCookieHeader(pageRequest); actual != "sysauth=root-value" {
+		t.Fatalf("deleting path-scoped cookie removed another path=%q", actual)
 	}
 }
 
@@ -501,6 +589,18 @@ func TestStableWebProxyPrefix(t *testing.T) {
 	}
 }
 
+func TestServiceIDFromStableProxyPath(t *testing.T) {
+	for path, expected := range map[string]string{
+		"/web-service-proxy/service-id":              "service-id",
+		"/web-service-proxy/service-id/cgi-bin/luci": "service-id",
+		"/api/web-services/service-id":               "",
+	} {
+		if actual := serviceIDFromStableProxyPath(path); actual != expected {
+			t.Fatalf("service ID for %q=%q, want %q", path, actual, expected)
+		}
+	}
+}
+
 func TestServiceIDFromReferer(t *testing.T) {
 	request, _ := http.NewRequest(http.MethodGet, "https://velin.example/UI/Login", nil)
 	request.Host = "velin.example"
@@ -554,7 +654,7 @@ func TestPathProxyCannotOverwriteVelinSecurityCookies(t *testing.T) {
 	session := &webProxySession{routePrefix: "/web-service-proxy/id", target: target}
 	request, _ := http.NewRequest(http.MethodGet, "https://velin.example/web-service-proxy/id/", nil)
 	response := &http.Response{
-		Header: http.Header{"Set-Cookie": {cookieName + "=attacker; Path=/", csrfCookieName + "=attacker; Path=/", "upstream=value; Path=/"}},
+		Header: http.Header{"Set-Cookie": {cookieName + "=attacker; Path=/", csrfCookieName + "=attacker; Path=/", pathAccessCookie + "abcd=attacker; Path=/", "upstream=value; Path=/"}},
 		Body:   io.NopCloser(bytes.NewReader(nil)), Request: request,
 	}
 	if err := session.modifyResponse(response); err != nil {
@@ -636,8 +736,26 @@ func TestHostPortAccessIsSingleUseAndServiceScoped(t *testing.T) {
 	}
 }
 
+func TestPathAccessIsReusableAndServiceScoped(t *testing.T) {
+	manager := &webProxyManager{hostPortAccess: make(map[string]*hostPortAccess)}
+	token, err := manager.issuePathAccess("user", "service", "auth-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := manager.pathAuthorization(token, "other"); ok {
+		t.Fatal("path access token was accepted for another service")
+	}
+	token, _ = manager.issuePathAccess("user", "service", "auth-hash")
+	for range 2 {
+		userID, hash, ok := manager.pathAuthorization(token, "service")
+		if !ok || userID != "user" || hash != "auth-hash" {
+			t.Fatalf("path access user=%q hash=%q ok=%v", userID, hash, ok)
+		}
+	}
+}
+
 func TestUpstreamCookiesRemoveVelinSecurityCookies(t *testing.T) {
-	request := &http.Request{Header: http.Header{"Cookie": {"velin_session=secret; velin_csrf=token; velin_host_port_abcd=ticket; upstream=value"}}}
+	request := &http.Request{Header: http.Header{"Cookie": {"velin_session=secret; velin_csrf=token; velin_host_port_abcd=ticket; velin_web_service_abcd=ticket; upstream=value"}}}
 	if actual := upstreamCookies(request); actual != "upstream=value" {
 		t.Fatalf("upstream cookies=%q", actual)
 	}
@@ -658,9 +776,9 @@ func TestHostPortURL(t *testing.T) {
 }
 
 func TestRootProxyCSPUsesRootPath(t *testing.T) {
-	policy := webProxyCSP("velin.example:18080", "", false)
+	policy := webProxyCSP("velin.example:18080", "", false, false)
 	if strings.Contains(policy, "velin.example:18080//") || !strings.Contains(policy, "ws://velin.example:18080/") ||
-		!strings.Contains(policy, "base-uri http://velin.example:18080/ https://velin.example:18080/") {
+		!strings.Contains(policy, "base-uri 'none'") {
 		t.Fatalf("root proxy CSP=%q", policy)
 	}
 }

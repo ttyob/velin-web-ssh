@@ -5,6 +5,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', component: () => import('./views/LoginView.vue'), meta: { public: true } },
+    { path: '/share/:token', component: () => import('./views/ShareView.vue'), meta: { public: true } },
     { path: '/change-password', component: () => import('./views/ChangePasswordView.vue') },
     { path: '/workspace', component: () => import('./views/WorkspaceView.vue') },
     { path: '/settings/security', component: () => import('./views/SecuritySettingsView.vue') },

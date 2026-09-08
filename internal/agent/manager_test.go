@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -41,5 +42,32 @@ func TestDockerLoginCommand(t *testing.T) {
 	}
 	if want := "docker login --username 'user' --password-stdin"; dockerLoginCommand("", "user") != want {
 		t.Fatalf("unexpected Docker Hub login command: %q", dockerLoginCommand("", "user"))
+	}
+}
+
+func TestCommandStreamWriterStreamsAndCapsOutput(t *testing.T) {
+	var streamed strings.Builder
+	writer := &commandStreamWriter{onDelta: func(value string) error {
+		streamed.WriteString(value)
+		return nil
+	}}
+	input := strings.Repeat("x", 128*1024+64)
+	if count, err := writer.Write([]byte(input)); err != nil || count != len(input) {
+		t.Fatalf("write count=%d err=%v", count, err)
+	}
+	output, err := writer.result()
+	if err != nil || streamed.Len() != 128*1024 || !strings.HasSuffix(output, "\n[output truncated]") {
+		t.Fatalf("streamed=%d output=%d err=%v", streamed.Len(), len(output), err)
+	}
+}
+
+func TestCommandStreamWriterStopsWhenClientWriteFails(t *testing.T) {
+	expected := errors.New("websocket closed")
+	writer := &commandStreamWriter{onDelta: func(string) error { return expected }}
+	if _, err := writer.Write([]byte("output")); !errors.Is(err, expected) {
+		t.Fatalf("write error=%v", err)
+	}
+	if _, err := writer.result(); !errors.Is(err, expected) {
+		t.Fatalf("result error=%v", err)
 	}
 }

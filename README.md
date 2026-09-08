@@ -26,6 +26,7 @@
 - 独立保存的主机密码和可复用 SSH 凭据
 - TOTP、PIN 锁屏、主机指纹校验和加密备份
 - 主机资源监控、Docker/Git 工具和可选 AI Agent
+- 终端会话限时分享，支持密码、只读/可操作权限、在线预览和分享期录制
 - Linux Web 版和 Windows Wails GUI
 
 ## 快速安装

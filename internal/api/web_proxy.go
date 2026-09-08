@@ -74,6 +74,13 @@ type webProxyCreation struct {
 	err   error
 }
 
+type webProxyResponsePolicy struct {
+	header http.Header
+	host   string
+}
+
+type webProxyResponsePolicyKey struct{}
+
 type webProxySession struct {
 	token        string
 	userID       string
@@ -584,6 +591,7 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	response.Header.Del("Content-Security-Policy")
 	response.Header.Del("Content-Security-Policy-Report-Only")
 	response.Header.Del("Clear-Site-Data")
+	allowSandboxModuleResponse(response)
 	response.Header.Set("Referrer-Policy", "same-origin")
 	response.Header.Set("Service-Worker-Allowed", prefix+"/")
 	if location := response.Header.Get("Location"); location != "" {
@@ -629,6 +637,7 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	if mediaType == "text/html" {
 		if isViteDevelopmentHTML(body) {
 			s.viteDevMode.Store(true)
+			s.allowViteSameOrigin(response)
 		}
 		documentPath := "/"
 		if response.Request != nil && response.Request.URL != nil {
@@ -648,6 +657,17 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	response.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	response.Header.Del("Content-Encoding")
 	return nil
+}
+
+func (s *webProxySession) allowViteSameOrigin(response *http.Response) {
+	if !s.stable || response.Request == nil {
+		return
+	}
+	policy, ok := response.Request.Context().Value(webProxyResponsePolicyKey{}).(webProxyResponsePolicy)
+	if !ok || policy.header == nil {
+		return
+	}
+	policy.header.Set("Content-Security-Policy", webProxyCSP(policy.host, s.prefix(), true))
 }
 
 func proxyRewriteMediaType(response *http.Response) (string, bool) {
@@ -784,6 +804,13 @@ func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath
 					node.Attr[i].Val = rewriteSrcset(node.Attr[i].Val, prefix, target)
 				}
 			}
+			if strings.EqualFold(node.Data, "script") && configureModuleScriptCredentials(node) {
+				for child := node.FirstChild; child != nil; child = child.NextSibling {
+					if child.Type == html.TextNode {
+						child.Data = string(rewriteViteJavaScript([]byte(child.Data), prefix, target))
+					}
+				}
+			}
 		}
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
 			rewrite(child)
@@ -795,6 +822,45 @@ func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath
 		return body
 	}
 	return output.Bytes()
+}
+
+func configureModuleScriptCredentials(node *html.Node) bool {
+	isModule, hasSource, crossOriginIndex := false, false, -1
+	for index, attr := range node.Attr {
+		switch strings.ToLower(attr.Key) {
+		case "type":
+			isModule = strings.EqualFold(strings.TrimSpace(attr.Val), "module")
+		case "src":
+			hasSource = true
+		case "crossorigin":
+			crossOriginIndex = index
+		}
+	}
+	if !isModule {
+		return false
+	}
+	if crossOriginIndex >= 0 {
+		node.Attr[crossOriginIndex].Val = "use-credentials"
+	} else {
+		node.Attr = append(node.Attr, html.Attribute{Key: "crossorigin", Val: "use-credentials"})
+	}
+	return isModule && !hasSource
+}
+
+func allowSandboxModuleResponse(response *http.Response) {
+	if response.Request == nil || response.Request.Header.Get("Origin") != "null" {
+		return
+	}
+	response.Header.Set("Access-Control-Allow-Origin", "null")
+	response.Header.Set("Access-Control-Allow-Credentials", "true")
+	for _, value := range response.Header.Values("Vary") {
+		for item := range strings.SplitSeq(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), "Origin") {
+				return
+			}
+		}
+	}
+	response.Header.Add("Vary", "Origin")
 }
 
 func removeUpstreamCSPMeta(node *html.Node) {
@@ -1561,12 +1627,13 @@ func serveWebProxySession(w http.ResponseWriter, r *http.Request, session *webPr
 	// The application shell's CSP would block assets legitimately loaded by the proxied application.
 	w.Header().Del("Content-Security-Policy")
 	w.Header().Del("X-Frame-Options")
-	w.Header().Set("Content-Security-Policy", webProxyCSP(r.Host, session.prefix()))
+	w.Header().Set("Content-Security-Policy", webProxyCSP(r.Host, session.prefix(), session.stable && session.viteDevMode.Load()))
 	w.Header().Set("Referrer-Policy", "same-origin")
-	session.proxy.ServeHTTP(w, r)
+	policy := webProxyResponsePolicy{header: w.Header(), host: r.Host}
+	session.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), webProxyResponsePolicyKey{}, policy)))
 }
 
-func webProxyCSP(host, prefix string) string {
+func webProxyCSP(host, prefix string, allowSameOrigin bool) string {
 	if strings.ContainsAny(host, " \t\r\n;'\"") {
 		return "default-src 'none'"
 	}
@@ -1577,13 +1644,17 @@ func webProxyCSP(host, prefix string) string {
 	wssPath := "wss://" + host + proxyPath
 	web := strings.Join([]string{httpPath, httpsPath}, " ")
 	connect := strings.Join([]string{httpPath, httpsPath, wsPath, wssPath}, " ")
+	sandbox := "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+	if allowSameOrigin {
+		// Vite modules require a non-opaque origin so an outer NAS authorization
+		// gateway can receive its own SameSite session cookie.
+		sandbox += " allow-same-origin"
+	}
 	return "default-src 'none'; " +
-		// The proxy page is intentionally sandboxed without allow-same-origin. This
-		// keeps an untrusted upstream application from sharing the Velin origin.
-		"sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; " +
+		sandbox + "; " +
 		"script-src " + web + " data: 'unsafe-inline'; " +
 		"style-src " + web + " 'unsafe-inline'; img-src " + web + " data: blob:; " +
 		"font-src " + web + " data:; media-src " + web + " blob:; " +
 		"connect-src " + connect + "; form-action " + web + "; frame-src " + web + "; " +
-		"worker-src " + web + " blob:; object-src 'none'; base-uri 'none'"
+		"worker-src " + web + " blob:; object-src 'none'; base-uri " + web
 }

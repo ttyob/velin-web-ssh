@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -17,12 +18,19 @@ func TestChatReturnsCommandProposal(t *testing.T) {
 		var request struct {
 			Model           string `json:"model"`
 			ReasoningEffort string `json:"reasoning_effort"`
+			Messages        []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
 		if request.Model != "test-model" || request.ReasoningEffort != "high" {
 			t.Fatalf("unexpected chat options: %#v", request)
+		}
+		if len(request.Messages) == 0 || !strings.Contains(request.Messages[0].Content, "Call run_ssh_command directly without first asking the user to approve") {
+			t.Fatalf("system prompt does not suppress duplicate approval narration: %#v", request.Messages)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"我需要先查看磁盘。","tool_calls":[{"id":"call-1","type":"function","function":{"name":"run_ssh_command","arguments":"{\"command\":\"df -h\",\"reason\":\"查看磁盘空间\"}"}}]}}],"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168}}`)
@@ -33,7 +41,7 @@ func TestChatReturnsCommandProposal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Model != "test-model" || result.TotalTokens != 168 || len(result.Commands) != 1 || result.Commands[0].Command != "df -h" {
+	if result.Model != "test-model" || result.TotalTokens != 168 || result.Message != "" || len(result.Commands) != 1 || result.Commands[0].Command != "df -h" || result.Commands[0].RequiresApproval {
 		t.Fatalf("unexpected chat result: %#v", result)
 	}
 }

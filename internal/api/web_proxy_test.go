@@ -126,6 +126,28 @@ func TestRewriteHTMLUsesDocumentDirectoryForRelativeURLs(t *testing.T) {
 	}
 }
 
+func TestRewriteHTMLRemovesOnlyUpstreamCSPMeta(t *testing.T) {
+	target, _ := url.Parse("http://router.internal")
+	prefix := "/web-service-proxy/service-id"
+	original := `<html><head><meta http-equiv="Content-Security-Policy" content="script-src 'self' http: https: 'unsafe-inline' 'unsafe-eval'"><meta HTTP-EQUIV="content-security-policy-report-only" content="default-src 'none'"><meta name="viewport" content="width=device-width"><script type="module">import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")'</script><script type="module" src="/static/js/login.js"></script></head><body></body></html>`
+	body := string(rewriteHTMLAtPath([]byte(original), prefix, target, "/login"))
+
+	if strings.Contains(strings.ToLower(body), "content-security-policy") {
+		t.Fatalf("upstream CSP meta was not removed: %s", body)
+	}
+	for _, expected := range []string{
+		`<meta name="viewport" content="width=device-width"/>`,
+		`data-velin-web-proxy="runtime"`,
+		`<base href="/web-service-proxy/service-id/" data-velin-web-proxy="base"/>`,
+		`import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")'`,
+		`src="/web-service-proxy/service-id/static/js/login.js"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("rewritten HTML missing %q: %s", expected, body)
+		}
+	}
+}
+
 func TestRewriteStableWebServiceNavigation(t *testing.T) {
 	target, _ := url.Parse("http://router.internal")
 	prefix := "/web-service-proxy/service-id"
@@ -252,9 +274,10 @@ func TestModifyResponseDoesNotRewriteJavaScript(t *testing.T) {
 func TestRewriteViteDevelopmentJavaScript(t *testing.T) {
 	target, _ := url.Parse("http://cleaner.internal")
 	prefix := "/web-service-proxy/cleaner"
-	source := `import RefreshRuntime from "/@react-refresh"; import App from "/src/App.tsx"; import("/src/lazy.tsx"); const api = "/api/status";`
+	source := `import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")'; import RefreshRuntime from "/@react-refresh"; import App from "/src/App.tsx"; import("/src/lazy.tsx"); const api = "/api/status";`
 	actual := string(rewriteViteJavaScript([]byte(source), prefix, target))
 	for _, expected := range []string{
+		`import'data:text/javascript,if(!import.meta.resolve)throw Error("import.meta.resolve not supported")'`,
 		`from "/web-service-proxy/cleaner/@react-refresh"`,
 		`from "/web-service-proxy/cleaner/src/App.tsx"`,
 		`import("/web-service-proxy/cleaner/src/lazy.tsx")`,
@@ -313,8 +336,12 @@ func TestProxyCookieIsolation(t *testing.T) {
 	if actual := upstreamCookies(request); actual != "csrf=upstream" {
 		t.Fatalf("upstream cookies=%q", actual)
 	}
-	if strings.Contains(webProxyCSP("velin.example", "/web-proxy/token"), "connect-src 'self'") {
+	policy := webProxyCSP("velin.example", "/web-proxy/token")
+	if strings.Contains(policy, "connect-src 'self'") {
 		t.Fatal("proxy CSP allows root-origin API connections")
+	}
+	if !strings.Contains(policy, "script-src http://velin.example/web-proxy/token/ https://velin.example/web-proxy/token/ data: 'unsafe-inline'") {
+		t.Fatalf("proxy CSP does not allow Vite legacy detection modules: %q", policy)
 	}
 }
 

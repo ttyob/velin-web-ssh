@@ -765,6 +765,7 @@ func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath
 	if err != nil {
 		return body
 	}
+	removeUpstreamCSPMeta(document)
 	injectWebProxyBootstrap(document, prefix, target, documentPath)
 	var rewrite func(*html.Node)
 	rewrite = func(node *html.Node) {
@@ -794,6 +795,33 @@ func rewriteHTMLAtPath(body []byte, prefix string, target *url.URL, documentPath
 		return body
 	}
 	return output.Bytes()
+}
+
+func removeUpstreamCSPMeta(node *html.Node) {
+	for child := node.FirstChild; child != nil; {
+		next := child.NextSibling
+		if isUpstreamCSPMeta(child) {
+			node.RemoveChild(child)
+		} else {
+			removeUpstreamCSPMeta(child)
+		}
+		child = next
+	}
+}
+
+func isUpstreamCSPMeta(node *html.Node) bool {
+	if node.Type != html.ElementNode || !strings.EqualFold(node.Data, "meta") {
+		return false
+	}
+	for _, attr := range node.Attr {
+		if !strings.EqualFold(attr.Key, "http-equiv") {
+			continue
+		}
+		value := strings.TrimSpace(attr.Val)
+		return strings.EqualFold(value, "Content-Security-Policy") ||
+			strings.EqualFold(value, "Content-Security-Policy-Report-Only")
+	}
+	return false
 }
 
 func isViteDevelopmentHTML(body []byte) bool {
@@ -1553,7 +1581,7 @@ func webProxyCSP(host, prefix string) string {
 		// The proxy page is intentionally sandboxed without allow-same-origin. This
 		// keeps an untrusted upstream application from sharing the Velin origin.
 		"sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; " +
-		"script-src " + web + " 'unsafe-inline'; " +
+		"script-src " + web + " data: 'unsafe-inline'; " +
 		"style-src " + web + " 'unsafe-inline'; img-src " + web + " data: blob:; " +
 		"font-src " + web + " data:; media-src " + web + " blob:; " +
 		"connect-src " + connect + "; form-action " + web + "; frame-src " + web + "; " +

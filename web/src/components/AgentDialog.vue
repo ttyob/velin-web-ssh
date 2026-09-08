@@ -508,10 +508,19 @@ async function requestAIOnce(conversationID: string) {
       });
     if (assistantContent)
       chatHistory.value.push({ role: "assistant", content: assistantContent });
+    const proposals = response.commands.map((item) => ({
+      ...item,
+      requiresApproval: item.requiresApproval !== false,
+    }));
     commandProposals.value.push(
-      ...response.commands.map((item) => ({ ...item, requiresApproval: true })),
+      ...proposals.filter((item) => item.requiresApproval),
     );
     persistCurrentConversation();
+    await Promise.all(
+      proposals
+        .filter((item) => !item.requiresApproval)
+        .map((item) => executeProposal(item)),
+    );
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "Agent 请求失败");
   } finally {

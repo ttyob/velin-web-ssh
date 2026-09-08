@@ -101,7 +101,7 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 	}
 	messages := []map[string]string{{
 		"role":    "system",
-		"content": "You are Velin SSH Agent. Help the user operate a remote host. Reply in the user's language. Use run_ssh_command when host inspection or an operation is needed. Every proposed command requires explicit user approval before execution. Never claim an unexecuted command has run. Prefer small, auditable commands and avoid destructive operations unless the user explicitly requested them. Connected host: " + hostContext,
+		"content": "You are Velin SSH Agent. Help the user operate a remote host. Reply in the user's language. Use run_ssh_command when host inspection or an operation is needed. The application automatically executes ordinary non-sensitive read-only commands and displays an approval dialog for writes, sensitive reads, dangerous commands, and commands it cannot classify. Call run_ssh_command directly without first asking the user to approve or narrating that approval is needed. Never claim an unexecuted command has run. Prefer small, auditable commands and avoid destructive operations unless the user explicitly requested them. Connected host: " + hostContext,
 	}}
 	for _, item := range history {
 		role := strings.TrimSpace(item.Role)
@@ -118,7 +118,7 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 			"type": "function",
 			"function": map[string]any{
 				"name":        "run_ssh_command",
-				"description": "Propose a shell command to run on the connected SSH host. The user must approve it before execution.",
+				"description": "Submit a shell command for the connected SSH host. The application automatically executes safe inspection commands and requests approval for sensitive or state-changing commands.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -218,6 +218,11 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 			ID: call.ID, Command: arguments.Command, Reason: strings.TrimSpace(arguments.Reason),
 			RequiresApproval: commandRequiresApproval(arguments.Command),
 		})
+	}
+	if len(result.Commands) > 0 {
+		// The command card provides its reason and approval controls. Suppress the
+		// model's duplicate preamble so users see only one approval request.
+		result.Message = ""
 	}
 	if result.Message == "" && len(result.Commands) == 0 {
 		return ChatResponse{}, errors.New("AI model returned an empty response")

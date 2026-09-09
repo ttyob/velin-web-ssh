@@ -1,5 +1,5 @@
 appname=velin-web-ssh
-version=0.3.44
+version=0.3.45
 display_name=Velin Web SSH
 desc=浏览器端 SSH 工作台，支持远程桌面、文件管理和内网穿透。
 platform=x86

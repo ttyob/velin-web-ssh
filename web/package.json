@@ -12,6 +12,7 @@
     "typecheck": "vue-tsc -b",
     "test": "node scripts/unit.mjs",
     "test:e2e": "node scripts/smoke.mjs",
+    "generate:fnos-icons": "node scripts/fnos-icons.mjs",
     "screenshot:readme": "node scripts/readme-screenshot.mjs"
   },
   "dependencies": {

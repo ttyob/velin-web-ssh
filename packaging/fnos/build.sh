@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-VERSION="${VELIN_FNOS_VERSION:-0.3.44}"
+VERSION="${VELIN_FNOS_VERSION:-0.3.45}"
 VERSION="${VERSION#v}"
 ARCH="${VELIN_FNOS_ARCH:-$(uname -m)}"
 GUACD_IMAGE="${VELIN_FNOS_GUACD_IMAGE:-guacamole/guacd:1.6.0}"
@@ -53,6 +53,27 @@ require_command() {
 
 require_command docker
 require_command tar
+
+for ICON_FILE in \
+  "$SCRIPT_DIR/ICON.PNG" \
+  "$SCRIPT_DIR/ICON_256.PNG" \
+  "$SCRIPT_DIR/app/ui/images/icon_64.png" \
+  "$SCRIPT_DIR/app/ui/images/icon_256.png"
+do
+  if [ ! -s "$ICON_FILE" ]; then
+    echo "Required fnOS icon is missing or empty: $ICON_FILE" >&2
+    exit 1
+  fi
+  if [ "$(wc -c < "$ICON_FILE")" -gt 1048576 ]; then
+    echo "fnOS icon exceeds the 1024 KB limit: $ICON_FILE" >&2
+    exit 1
+  fi
+done
+if ! cmp -s "$SCRIPT_DIR/ICON.PNG" "$SCRIPT_DIR/app/ui/images/icon_64.png" || \
+   ! cmp -s "$SCRIPT_DIR/ICON_256.PNG" "$SCRIPT_DIR/app/ui/images/icon_256.png"; then
+  echo "fnOS package and desktop icons are out of sync" >&2
+  exit 1
+fi
 
 if [ -z "$FNPACK_BIN" ] && command -v fnpack >/dev/null 2>&1; then
   FNPACK_BIN="$(command -v fnpack)"
@@ -177,6 +198,12 @@ if ! tar -xOf "$PACKAGE_FILE" app.tgz | tar -tzf - >/dev/null; then
   echo "fnpack produced an invalid app.tgz tar archive" >&2
   exit 1
 fi
+for ICON_PATH in ui/images/icon_64.png ui/images/icon_256.png; do
+  if ! tar -xOf "$PACKAGE_FILE" app.tgz | tar -tzf - | grep -Fxq "$ICON_PATH"; then
+    echo "fnpack omitted required desktop icon: $ICON_PATH" >&2
+    exit 1
+  fi
+done
 
 OUTPUT_FILE="$OUTPUT_DIR/velin-fnos-native-${ARCH}-${VERSION}.fpk"
 cp "$PACKAGE_FILE" "$OUTPUT_FILE"

@@ -6,6 +6,7 @@ RUN_ROOT="$DATA_ROOT/run"
 LOG_ROOT="$DATA_ROOT/log"
 ENV_FILE="$DATA_ROOT/velin.env"
 RDP_DRIVE_ROOT="$DATA_ROOT/rdp-drives"
+GUACD_HOME="$DATA_ROOT/guacd-home"
 
 load_config() {
   if [ -f "$ENV_FILE" ]; then

@@ -36,6 +36,8 @@ type Config struct {
 	GuacdAddr         string
 	DesktopProxyAddr  string
 	RDPDriveDir       string
+	RDPResizeMethod   string
+	RDPDisableGFX     bool
 }
 
 func Load() (Config, error) {
@@ -57,6 +59,10 @@ func Load() (Config, error) {
 	desktopProxyAddr := env("VELIN_DESKTOP_PROXY_ADDR", "127.0.0.1")
 	if parsed := net.ParseIP(desktopProxyAddr); parsed == nil || parsed.To4() == nil || parsed.IsUnspecified() {
 		return Config{}, fmt.Errorf("VELIN_DESKTOP_PROXY_ADDR must be a specific IPv4 address")
+	}
+	rdpResizeMethod := strings.ToLower(env("VELIN_RDP_RESIZE_METHOD", "display-update"))
+	if rdpResizeMethod != "display-update" && rdpResizeMethod != "reconnect" && rdpResizeMethod != "none" {
+		return Config{}, fmt.Errorf("VELIN_RDP_RESIZE_METHOD must be display-update, reconnect, or none")
 	}
 	embedOrigins, err := parseOrigins(os.Getenv("VELIN_EMBED_ORIGINS"))
 	if err != nil {
@@ -87,6 +93,8 @@ func Load() (Config, error) {
 		GuacdAddr:         env("VELIN_GUACD_ADDR", "127.0.0.1:4822"),
 		DesktopProxyAddr:  desktopProxyAddr,
 		RDPDriveDir:       env("VELIN_RDP_DRIVE_DIR", "/tmp/velin-rdp-drives"),
+		RDPResizeMethod:   rdpResizeMethod,
+		RDPDisableGFX:     strings.EqualFold(env("VELIN_RDP_DISABLE_GFX", "false"), "true"),
 	}, nil
 }
 

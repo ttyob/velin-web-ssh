@@ -27,14 +27,19 @@ stop_pid() {
 }
 
 start() {
-  mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$RDP_DRIVE_ROOT" "$DATA_ROOT/data"
+  mkdir -p "$RUN_ROOT" "$LOG_ROOT" "$RDP_DRIVE_ROOT" "$DATA_ROOT/data" \
+    "$GUACD_HOME/.config" "$GUACD_HOME/.cache"
   load_config
 
   if [ -f "$GUACD_PID" ] && pid_alive "$(cat "$GUACD_PID")"; then
     :
   else
     rm -f "$GUACD_PID"
-    "$APP_ROOT/bin/guacd" > "$LOG_ROOT/guacd.log" 2>&1 &
+    HOME="$GUACD_HOME" \
+      XDG_CONFIG_HOME="$GUACD_HOME/.config" \
+      XDG_CACHE_HOME="$GUACD_HOME/.cache" \
+      LC_ALL=C.UTF-8 \
+      "$APP_ROOT/bin/guacd" > "$LOG_ROOT/guacd.log" 2>&1 &
     echo "$!" > "$GUACD_PID"
     sleep 1
     if ! pid_alive "$(cat "$GUACD_PID")"; then
@@ -62,6 +67,8 @@ start() {
       VELIN_GUACD_ADDR="${VELIN_GUACD_ADDR:-127.0.0.1:4822}" \
       VELIN_DESKTOP_PROXY_ADDR="${VELIN_DESKTOP_PROXY_ADDR:-127.0.0.1}" \
       VELIN_RDP_DRIVE_DIR="$RDP_DRIVE_ROOT" \
+      VELIN_RDP_RESIZE_METHOD="${VELIN_RDP_RESIZE_METHOD:-none}" \
+      VELIN_RDP_DISABLE_GFX="${VELIN_RDP_DISABLE_GFX:-true}" \
       VELIN_FFMPEG_BINARY="${VELIN_FFMPEG_BINARY:-ffmpeg}" \
       "$APP_ROOT/bin/velin"
   ) > "$LOG_ROOT/velin.log" 2>&1 &

@@ -26,7 +26,21 @@ func testManager(t *testing.T) (*Manager, *store.Store, *security.Vault) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewManager(database, vault, nil, "127.0.0.1:4822", "127.0.0.1"), database, vault
+	return NewManager(database, vault, nil, "127.0.0.1:4822", "127.0.0.1", "", "display-update", false), database, vault
+}
+
+func TestRDPResizeMethodDefaultsAndOverrides(t *testing.T) {
+	manager, _, _ := testManager(t)
+	if manager.rdpResizeMethod != "display-update" {
+		t.Fatalf("default resize method=%q", manager.rdpResizeMethod)
+	}
+	manager = NewManager(manager.store, manager.vault, nil, "127.0.0.1:4822", "127.0.0.1", "", "reconnect", true)
+	if manager.rdpResizeMethod != "reconnect" {
+		t.Fatalf("configured resize method=%q", manager.rdpResizeMethod)
+	}
+	if !manager.rdpDisableGFX {
+		t.Fatal("configured GFX disable flag was ignored")
+	}
 }
 
 func TestDrivePathIsolatedAndCleaned(t *testing.T) {

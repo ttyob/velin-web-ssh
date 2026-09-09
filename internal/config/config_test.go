@@ -47,6 +47,30 @@ func TestLoadRejectsInvalidDotEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRDPResizeMethod(t *testing.T) {
+	workDir := t.TempDir()
+	changeWorkingDirectory(t, workDir)
+	t.Setenv("VELIN_DATA_DIR", filepath.Join(workDir, "data"))
+	t.Setenv("VELIN_RDP_RESIZE_METHOD", "reconnect")
+	t.Setenv("VELIN_RDP_DISABLE_GFX", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RDPResizeMethod != "reconnect" {
+		t.Fatalf("RDP resize method=%q", cfg.RDPResizeMethod)
+	}
+	if !cfg.RDPDisableGFX {
+		t.Fatal("RDP GFX disable flag was ignored")
+	}
+
+	t.Setenv("VELIN_RDP_RESIZE_METHOD", "invalid")
+	if _, err = Load(); err == nil || !strings.Contains(err.Error(), "VELIN_RDP_RESIZE_METHOD") {
+		t.Fatalf("invalid resize method error=%v", err)
+	}
+}
+
 func TestParseOriginsRejectsWildcardsAndPaths(t *testing.T) {
 	origins, err := parseOrigins("https://nas.example.com, http://127.0.0.1:8080")
 	if err != nil || len(origins) != 2 {

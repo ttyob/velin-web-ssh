@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-VERSION="${VELIN_FNOS_VERSION:-0.3.35}"
+VERSION="${VELIN_FNOS_VERSION:-0.3.44}"
 VERSION="${VERSION#v}"
 ARCH="${VELIN_FNOS_ARCH:-$(uname -m)}"
 GUACD_IMAGE="${VELIN_FNOS_GUACD_IMAGE:-guacamole/guacd:1.6.0}"

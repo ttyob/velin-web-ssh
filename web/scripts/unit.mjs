@@ -15,6 +15,27 @@ assert.equal(reconnectDelay(5, 0.5), 30000)
 assert.equal(reconnectDelay(20, 1), 36000)
 assert.equal(reconnectDelay(0, 0), 800)
 
+const { normalizeTerminalWheelDelta } = await loadModule(new URL('../src/terminalWheel.ts', import.meta.url))
+assert.deepEqual(normalizeTerminalWheelDelta(-64, 0), { lines: -1, remainder: 0 })
+assert.deepEqual(normalizeTerminalWheelDelta(1, 1), { lines: 1, remainder: 0 })
+assert.deepEqual(normalizeTerminalWheelDelta(-1, 2), { lines: -3, remainder: 0 })
+assert.deepEqual(normalizeTerminalWheelDelta(6400, 0), { lines: 3, remainder: 0 })
+let wheel = normalizeTerminalWheelDelta(16, 0)
+assert.equal(wheel.lines, 0)
+wheel = normalizeTerminalWheelDelta(16, 0, wheel.remainder)
+wheel = normalizeTerminalWheelDelta(16, 0, wheel.remainder)
+wheel = normalizeTerminalWheelDelta(16, 0, wheel.remainder)
+assert.deepEqual(wheel, { lines: 1, remainder: 0 })
+assert.deepEqual(normalizeTerminalWheelDelta(-16, 0, 0.75), { lines: 0, remainder: -0.25 })
+let inertialLines = 0
+let inertialRemainder = 0
+for (const delta of [-120, -96, -64, -40, -24, -12, -6, -3]) {
+  const normalized = normalizeTerminalWheelDelta(delta, 0, inertialRemainder)
+  inertialLines += normalized.lines
+  inertialRemainder = normalized.remainder
+}
+assert.equal(inertialLines, -5)
+
 const { tmuxInstallGuide } = await loadModule(new URL('../src/tmuxInstall.ts', import.meta.url))
 assert.equal(tmuxInstallGuide('linux', 'debian').command, 'sudo apt-get update && sudo apt-get install -y tmux')
 assert.equal(tmuxInstallGuide('linux', 'rocky').command, 'sudo dnf install -y tmux')

@@ -111,7 +111,7 @@ func NewWithTailnet(cfg config.Config, s *store.Store, v *security.Vault, t *ter
 }
 
 func newAPI(cfg config.Config, s *store.Store, v *security.Vault, t *terminal.Manager, forwards *forward.Manager, agents *agent.Manager, dialer netdial.Dialer, tailscale *tailnet.Manager) *API {
-	desktops := remotedesktop.NewManager(s, v, t, cfg.GuacdAddr, cfg.DesktopProxyAddr, cfg.RDPDriveDir)
+	desktops := remotedesktop.NewManager(s, v, t, cfg.GuacdAddr, cfg.DesktopProxyAddr, cfg.RDPDriveDir, cfg.RDPResizeMethod, cfg.RDPDisableGFX)
 	desktops.SetDialer(dialer)
 	forwards.SetDialer(dialer)
 	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha), updateClient: &http.Client{Timeout: 10 * time.Second}, updateURL: defaultReleaseURL, shareViewers: make(map[string]map[string]*shareViewerConnection), shareFailures: make(map[string]shareFailure)}

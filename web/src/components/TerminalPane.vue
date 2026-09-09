@@ -38,6 +38,7 @@ import {
   terminalOutputSettleDelay,
   type TerminalAttentionEvent,
 } from "../terminalAttention";
+import { normalizeTerminalWheelDelta } from "../terminalWheel";
 
 const props = withDefaults(
   defineProps<{
@@ -164,6 +165,8 @@ let lastHistoryRequestAt = 0;
 let lastHistoryErrorAt = 0;
 let lastSentCols = 0;
 let lastSentRows = 0;
+let wheelRemainder = 0;
+let lastWheelAt = 0;
 
 const statusLabel = computed(
   () =>
@@ -259,37 +262,53 @@ function isAtBottom() {
 function handleTerminalWheel(event: WheelEvent) {
 	if (!terminal || event.deltaY === 0) return true;
 	const buffer = terminal.buffer.active;
-	// Full-screen applications such as Codex own the alternate-screen
-	// viewport. Let xterm forward wheel input to them instead of entering the
-	// remote tmux history mode at the top of the shell buffer.
-	if (buffer.type === "alternate" && !remoteHistoryMode.value) return true;
+	// Normal SSH sessions have no remote transcript for alternate-screen apps.
+	// In tmux mode, keep upward wheel input out of the TUI so xterm does not
+	// turn one gesture into a burst of cursor keys.
+	if (
+		buffer.type === "alternate" &&
+		props.session.sessionMode !== "tmux" &&
+		!remoteHistoryMode.value
+	)
+		return true;
 	const scrollingUp = event.deltaY < 0;
 	const viewingHistory = buffer.viewportY < buffer.baseY;
   // Full-screen TUIs can enable mouse tracking and consume wheel events as
   // input. Keep local scrollback reachable while the user reviews history.
-	if (scrollingUp || viewingHistory || remoteHistoryMode.value) {
-		const unit = event.deltaMode === 1 ? 1 : 28;
-		const lines = Math.max(
-			1,
-			Math.min(12, Math.round(Math.abs(event.deltaY) / unit)),
+	if (
+		scrollingUp ||
+		viewingHistory ||
+		remoteHistoryMode.value
+	) {
+		const now = performance.now();
+		if (now - lastWheelAt > 180) wheelRemainder = 0;
+		lastWheelAt = now;
+		const normalized = normalizeTerminalWheelDelta(
+			event.deltaY,
+			event.deltaMode,
+			wheelRemainder,
 		);
+		wheelRemainder = normalized.remainder;
 		const atLocalTop = buffer.viewportY === 0;
-		if (
-			remoteHistoryMode.value ||
-			(scrollingUp &&
-				atLocalTop &&
-				controller.value &&
-				socket?.readyState === WebSocket.OPEN)
-		) {
-			if (!remoteHistoryMode.value) {
-				captureHistoryTransitionSnapshot();
-				remoteHistoryMode.value = true;
-				historyLocked.value = false;
-				terminal.scrollToBottom();
+		if (normalized.lines !== 0) {
+			if (
+				remoteHistoryMode.value ||
+				(scrollingUp &&
+					atLocalTop &&
+					remoteHistorySize.value > 0 &&
+					controller.value &&
+					socket?.readyState === WebSocket.OPEN)
+			) {
+				if (!remoteHistoryMode.value) {
+					captureHistoryTransitionSnapshot();
+					remoteHistoryMode.value = true;
+					historyLocked.value = false;
+					terminal.scrollToBottom();
+				}
+				sendRemoteHistoryScroll(normalized.lines);
+			} else {
+				terminal.scrollLines(normalized.lines);
 			}
-			sendRemoteHistoryScroll(scrollingUp ? -lines : lines);
-		} else {
-			terminal.scrollLines(scrollingUp ? -lines : lines);
 		}
 		event.preventDefault();
     event.stopPropagation();
@@ -1755,6 +1774,9 @@ onMounted(() => {
     // redrawing the active screen.
     scrollback: 100000,
     scrollOnUserInput: true,
+    // Normal SSH alternate-screen apps still rely on xterm's native wheel
+    // forwarding. Limit the generated cursor/mouse event rate there as well.
+    scrollSensitivity: 0.25,
     // A short duration keeps normal output smooth without making fast TUI
     // updates visibly lag behind the remote session.
     // Streamed output should follow immediately; animated scrolling is

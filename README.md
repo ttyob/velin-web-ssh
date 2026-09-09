@@ -175,6 +175,8 @@ Velin 默认读取运行目录中的 `.env`，同名系统环境变量优先。
 | `VELIN_GUACD_ADDR` | `127.0.0.1:4822` | RDP 使用的 guacd 地址 |
 | `VELIN_DESKTOP_PROXY_ADDR` | `127.0.0.1` | RDP 跳板代理监听地址 |
 | `VELIN_RDP_DRIVE_DIR` | `/tmp/velin-rdp-drives` | RDP 磁盘映射目录；使用外部 guacd 时需与 guacd 共享此路径 |
+| `VELIN_RDP_RESIZE_METHOD` | `display-update` | RDP 分辨率调整方式；FPK 默认使用无需动态插件和二次连接的 `none` |
+| `VELIN_RDP_DISABLE_GFX` | `false` | 禁用 RDP GFX 图形管线；FPK 默认禁用以兼容原生运行目录 |
 | `VELIN_AI_BASE_URL` | 空 | OpenAI 兼容 API 地址 |
 | `VELIN_AI_MODEL` | 空 | AI Agent 模型名称 |
 | `VELIN_AI_API_KEY` | 空 | AI API Key |

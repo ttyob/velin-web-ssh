@@ -27,16 +27,18 @@ var ErrCredentialRequired = errors.New("desktop credential required")
 const pendingLifetime = time.Minute
 
 type Manager struct {
-	store       *store.Store
-	vault       *security.Vault
-	terminals   *terminal.Manager
-	guacdAddr   string
-	proxyAddr   string
-	rdpDriveDir string
-	dialer      netdial.Dialer
-	mu          sync.Mutex
-	pending     map[string]pendingSession
-	now         func() time.Time
+	store           *store.Store
+	vault           *security.Vault
+	terminals       *terminal.Manager
+	guacdAddr       string
+	proxyAddr       string
+	rdpDriveDir     string
+	rdpResizeMethod string
+	rdpDisableGFX   bool
+	dialer          netdial.Dialer
+	mu              sync.Mutex
+	pending         map[string]pendingSession
+	now             func() time.Time
 }
 
 type CreateRequest struct {
@@ -67,14 +69,16 @@ type pendingSession struct {
 	expiresAt time.Time
 }
 
-func NewManager(s *store.Store, vault *security.Vault, terminals *terminal.Manager, guacdAddr, proxyAddr string, driveDir ...string) *Manager {
-	rdpDriveDir := ""
-	if len(driveDir) > 0 {
-		rdpDriveDir = strings.TrimSpace(driveDir[0])
+func NewManager(s *store.Store, vault *security.Vault, terminals *terminal.Manager, guacdAddr, proxyAddr, driveDir, resizeMethod string, disableGFX bool) *Manager {
+	resizeMethod = strings.TrimSpace(resizeMethod)
+	if resizeMethod == "" {
+		resizeMethod = "display-update"
 	}
 	return &Manager{
 		store: s, vault: vault, terminals: terminals,
-		guacdAddr: guacdAddr, proxyAddr: proxyAddr, rdpDriveDir: rdpDriveDir, dialer: netdial.Direct{},
+		guacdAddr: guacdAddr, proxyAddr: proxyAddr,
+		rdpDriveDir: strings.TrimSpace(driveDir), rdpResizeMethod: resizeMethod,
+		rdpDisableGFX: disableGFX, dialer: netdial.Direct{},
 		pending: make(map[string]pendingSession), now: time.Now,
 	}
 }
@@ -279,7 +283,7 @@ func (m *Manager) openGuacamoleTunnel(ctx context.Context, session pendingSessio
 		"security":              session.host.DesktopSecurity,
 		"ignore-cert":           strconv.FormatBool(session.host.IgnoreCertificate),
 		"read-only":             strconv.FormatBool(session.host.DesktopReadOnly),
-		"resize-method":         "display-update",
+		"disable-gfx":           strconv.FormatBool(m.rdpDisableGFX),
 		"color-depth":           "32",
 		"enable-font-smoothing": "true",
 		"force-lossless":        strconv.FormatBool(session.host.RDPQuality != "smooth"),
@@ -289,6 +293,9 @@ func (m *Manager) openGuacamoleTunnel(ctx context.Context, session pendingSessio
 		"enable-drive":          strconv.FormatBool(session.host.RDPDrive),
 		"enable-printing":       strconv.FormatBool(session.host.RDPPrinting),
 		"enable-multimon":       strconv.FormatBool(session.host.RDPMultiMonitor),
+	}
+	if m.rdpResizeMethod != "none" {
+		config.Parameters["resize-method"] = m.rdpResizeMethod
 	}
 	if drivePath != "" {
 		config.Parameters["drive-path"] = drivePath

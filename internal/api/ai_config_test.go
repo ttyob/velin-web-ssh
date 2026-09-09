@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"velin-webssh/internal/agent"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 func TestSaveAIModelConfigEncryptsAPIKey(t *testing.T) {

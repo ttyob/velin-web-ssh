@@ -21,9 +21,9 @@ case "$delete_data" in
     if [ -d "$DATA_ROOT" ]; then
       find "$DATA_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
     fi
-    log_uninstall "已删除 Velin Web SSH 应用数据：$DATA_ROOT"
+    log_uninstall "已删除 VelinWebSSH 应用数据：$DATA_ROOT"
     ;;
   *)
-    log_uninstall "已保留 Velin Web SSH 应用数据：$DATA_ROOT"
+    log_uninstall "已保留 VelinWebSSH 应用数据：$DATA_ROOT"
     ;;
 esac

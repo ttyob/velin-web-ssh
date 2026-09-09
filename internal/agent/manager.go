@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 	"golang.org/x/crypto/ssh"
-	"velin-webssh/internal/terminal"
 )
 
 const probeCommand = `printf 'system\t'; uname -s 2>/dev/null || printf unknown; printf '\narch\t'; uname -m 2>/dev/null || printf unknown; printf '\nkernel\t'; uname -r 2>/dev/null || true; printf '\nhostname\t'; hostname 2>/dev/null || printf unknown; printf '\n'`

@@ -1,7 +1,7 @@
-# Velin Web SSH for fnOS
+# VelinWebSSH for fnOS
 
 This directory is a native fnOS application package source. The package runs
-the Velin Go binary and guacd as native processes. Docker is not required on
+the VelinWebSSH Go binary and guacd as native processes. Docker is not required on
 the NAS.
 
 Build it from the repository root:

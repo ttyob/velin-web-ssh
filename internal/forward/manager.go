@@ -10,10 +10,10 @@ import (
 
 	"github.com/armon/go-socks5"
 	"github.com/google/uuid"
+	"github.com/ttyob/velin-web-ssh/internal/netdial"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 	"golang.org/x/crypto/ssh"
-	"velin-webssh/internal/netdial"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/terminal"
 )
 
 type running struct {

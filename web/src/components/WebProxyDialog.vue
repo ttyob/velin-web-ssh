@@ -122,13 +122,13 @@ async function save() {
         v-if="form.proxyMode === 'path'"
         type="warning"
         :closable="false"
-        title="路径代理复用 Velin 登录与站点端口；依赖根路径的应用可能不兼容。"
+        title="路径代理复用 VelinWebSSH 登录与站点端口；依赖根路径的应用可能不兼容。"
       />
       <el-alert
         v-else
         type="warning"
         :closable="false"
-        title="主机端口默认仅监听本机并验证 Velin 登录；如配置为局域网监听，仍应使用防火墙限制来源。"
+        title="主机端口默认仅监听本机并验证 VelinWebSSH 登录；如配置为局域网监听，仍应使用防火墙限制来源。"
       />
       <el-form-item label="网页类型">
         <el-segmented

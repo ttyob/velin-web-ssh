@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 func testManager(t *testing.T) (*Manager, *store.Store, *security.Vault) {

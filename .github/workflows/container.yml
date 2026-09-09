@@ -56,7 +56,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/ttyob/velinwebssh
+          images: ghcr.io/ttyob/velin-web-ssh
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -64,7 +64,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
           labels: |
-            org.opencontainers.image.title=Velin Web SSH
+            org.opencontainers.image.title=VelinWebSSH
             org.opencontainers.image.description=Self-hosted browser SSH workspace
       - uses: docker/build-push-action@v6
         with:
@@ -109,19 +109,19 @@ jobs:
         shell: pwsh
         run: |
           $env:Path = "$(go env GOPATH)\bin;$env:Path"
-          wails.exe build -platform windows/amd64 -clean -m -s -skipbindings -ldflags "-X velin-webssh/internal/version.Current=$env:VELIN_VERSION"
+          wails.exe build -platform windows/amd64 -clean -m -s -skipbindings -ldflags "-X github.com/ttyob/velin-web-ssh/internal/version.Current=$env:VELIN_VERSION"
       - name: Package Windows desktop release
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force release/velin-windows-gui-amd64/web | Out-Null
-          Copy-Item build/bin/Velin-GUI.exe release/velin-windows-gui-amd64/Velin-GUI.exe
-          Copy-Item -Recurse web/dist release/velin-windows-gui-amd64/web/dist
-          Copy-Item desktop/.env.example release/velin-windows-gui-amd64/.env.example
-          Compress-Archive -Path release/velin-windows-gui-amd64 -DestinationPath release/velin-windows-gui-amd64.zip -Force
+          New-Item -ItemType Directory -Force release/velin-web-ssh-windows-gui-amd64/web | Out-Null
+          Copy-Item build/bin/velin-web-ssh.exe release/velin-web-ssh-windows-gui-amd64/velin-web-ssh.exe
+          Copy-Item -Recurse web/dist release/velin-web-ssh-windows-gui-amd64/web/dist
+          Copy-Item desktop/.env.example release/velin-web-ssh-windows-gui-amd64/.env.example
+          Compress-Archive -Path release/velin-web-ssh-windows-gui-amd64 -DestinationPath release/velin-web-ssh-windows-gui-amd64.zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-desktop-release
-          path: release/velin-windows-gui-amd64.zip
+          name: velin-web-ssh-windows-desktop-release
+          path: release/velin-web-ssh-windows-gui-amd64.zip
 
   fnos-package:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -154,8 +154,8 @@ jobs:
         run: packaging/fnos/build.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: fnos-package-${{ matrix.arch }}
-          path: dist/fnos/velin-fnos-native-*.fpk
+          name: velin-web-ssh-fnos-package-${{ matrix.arch }}
+          path: dist/fnos/velin-web-ssh-fnos-native-*.fpk
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -176,11 +176,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: actions/download-artifact@v4
         with:
-          name: windows-desktop-release
+          name: velin-web-ssh-windows-desktop-release
           path: release
       - uses: actions/download-artifact@v4
         with:
-          pattern: fnos-package-*
+          pattern: velin-web-ssh-fnos-package-*
           path: release
           merge-multiple: true
       - name: Build frontend
@@ -194,23 +194,23 @@ jobs:
           set -euo pipefail
           mkdir -p release
           for arch in amd64 arm64; do
-            package="velin-linux-web-${arch}"
+            package="velin-web-ssh-linux-${arch}"
             mkdir -p "release/${package}/web"
             CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build \
-              -trimpath -ldflags="-s -w -X velin-webssh/internal/version.Current=${{ github.ref_name }}" -o "release/${package}/velin-web" ./cmd/velin
+              -trimpath -ldflags="-s -w -X github.com/ttyob/velin-web-ssh/internal/version.Current=${{ github.ref_name }}" -o "release/${package}/velin-web-ssh" ./cmd/velin
             cp -R web/dist "release/${package}/web/dist"
             cp .env.example README.md "release/${package}/"
             tar -C release -czf "release/${package}.tar.gz" "${package}"
           done
           cd release
-          sha256sum velin-linux-*.tar.gz velin-windows-*.zip velin-fnos-native-*.fpk > checksums.txt
+          sha256sum velin-web-ssh-linux-*.tar.gz velin-web-ssh-windows-*.zip velin-web-ssh-fnos-native-*.fpk > checksums.txt
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            release/velin-linux-web-amd64.tar.gz
-            release/velin-linux-web-arm64.tar.gz
-            release/velin-windows-gui-amd64.zip
-            release/velin-fnos-native-*.fpk
+            release/velin-web-ssh-linux-amd64.tar.gz
+            release/velin-web-ssh-linux-arm64.tar.gz
+            release/velin-web-ssh-windows-gui-amd64.zip
+            release/velin-web-ssh-fnos-native-*.fpk
             release/checksums.txt

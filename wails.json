@@ -1,10 +1,10 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Velin",
-  "outputfilename": "Velin-GUI",
+  "name": "VelinWebSSH",
+  "outputfilename": "velin-web-ssh",
   "frontend:dir": "desktop",
   "build:dir": "build",
   "author": {
-    "name": "Velin"
+    "name": "VelinWebSSH"
   }
 }

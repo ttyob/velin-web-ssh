@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ttyob/velin-web-ssh/internal/security"
 	_ "modernc.org/sqlite"
-	"velin-webssh/internal/security"
 )
 
 func testStore(t *testing.T) *Store {

@@ -216,7 +216,7 @@ export const accentPresets: AccentPreset[] = [
 export const terminalThemePresets: TerminalThemePreset[] = [
   {
     id: "velin",
-    name: "Velin Dark",
+    name: "VelinWebSSH Dark",
     background: "#111318",
     foreground: "#d8deea",
     cursor: "#8eafff",

@@ -19,17 +19,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ttyob/velin-web-ssh/internal/netdial"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 	"golang.org/x/crypto/ssh"
-	"velin-webssh/internal/netdial"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
 )
 
 var (
 	ErrHostKeyUnknown     = errors.New("host key is not trusted")
 	ErrHostKeyChanged     = errors.New("host key changed")
 	ErrNotController      = errors.New("terminal is controlled by another client")
-	ErrNormalSessionEnded = errors.New("normal SSH sessions cannot be restored after the Velin service restarts")
+	ErrNormalSessionEnded = errors.New("normal SSH sessions cannot be restored after the VelinWebSSH service restarts")
 )
 
 const (

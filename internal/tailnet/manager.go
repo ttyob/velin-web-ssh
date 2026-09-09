@@ -12,10 +12,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 	"tailscale.com/tsnet"
-	"velin-webssh/internal/config"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
 )
 
 const settingKey = "tailscale_config"

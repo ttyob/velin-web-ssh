@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"velin-webssh/internal/tailnet"
+	"github.com/ttyob/velin-web-ssh/internal/tailnet"
 )
 
 type tailscaleConfigResponse struct {

@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/ttyob/velin-web-ssh/internal/netdial"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 	guac "github.com/wwt/guac"
-	"velin-webssh/internal/netdial"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/terminal"
 )
 
 var ErrCredentialRequired = errors.New("desktop credential required")

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 func TestRingBufferTruncatesOldOutput(t *testing.T) {

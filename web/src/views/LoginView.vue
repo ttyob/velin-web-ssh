@@ -102,7 +102,7 @@ async function submit() {
       <div class="brand-lockup">
         <span class="brand-mark"><Server :size="24" /></span>
         <div>
-          <h1>Velin Web SSH</h1>
+          <h1>VelinWebSSH</h1>
           <p>Secure terminal workspace</p>
         </div>
       </div>

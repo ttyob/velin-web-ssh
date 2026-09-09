@@ -14,7 +14,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X velin-webssh/internal/version.Current=${VELIN_VERSION}" -o /velin ./cmd/velin
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/ttyob/velin-web-ssh/internal/version.Current=${VELIN_VERSION}" -o /velin ./cmd/velin
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates ffmpeg && addgroup -S velin && adduser -S -G velin velin

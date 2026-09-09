@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"velin-webssh/internal/config"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/terminal"
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
 func TestTerminalSharePasswordAccess(t *testing.T) {

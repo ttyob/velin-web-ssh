@@ -51,7 +51,7 @@ async function verify(name, contextOptions, expectedMobile = false) {
     touchPoints: navigator.maxTouchPoints,
   }))
   if (metrics.scrollWidth > metrics.width) throw new Error(`${name}: horizontal overflow ${metrics.scrollWidth} > ${metrics.width}`)
-  if (metrics.title !== 'Velin Web SSH') throw new Error(`${name}: unexpected title ${metrics.title}`)
+  if (metrics.title !== 'VelinWebSSH') throw new Error(`${name}: unexpected title ${metrics.title}`)
   if (expectedMobile && (!metrics.userAgent.includes('Android') || !metrics.userAgent.includes('Mobile') || metrics.touchPoints < 1)) {
     throw new Error(`${name}: Android mobile emulation failed ${JSON.stringify(metrics)}`)
   }

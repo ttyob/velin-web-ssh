@@ -1,11 +1,11 @@
 appname=velin-web-ssh
-version=0.3.45
-display_name=Velin Web SSH
+version=0.3.46
+display_name=VelinWebSSH
 desc=浏览器端 SSH 工作台，支持远程桌面、文件管理和内网穿透。
 platform=x86
 source=thirdparty
-maintainer=Velin Web SSH
-distributor=Velin Web SSH
+maintainer=VelinWebSSH
+distributor=VelinWebSSH
 desktop_uidir=ui
 desktop_applaunchname=velin-web-ssh.main
 service_port=8377

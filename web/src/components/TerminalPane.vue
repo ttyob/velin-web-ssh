@@ -855,7 +855,7 @@ function writeConnectionNotice(message: string, tone: "muted" | "error" = "muted
   if (!terminal || !clean || clean === lastConnectionNotice) return;
   lastConnectionNotice = clean;
   const color = tone === "error" ? "31" : "90";
-  terminal.writeln(`\r\n\x1b[${color}m[Velin] ${clean}\x1b[0m`);
+  terminal.writeln(`\r\n\x1b[${color}m[VelinWebSSH] ${clean}\x1b[0m`);
 }
 
 async function recoverConnection(statusName: string, message: string, detail: Record<string, unknown> = {}) {

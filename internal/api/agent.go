@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	"velin-webssh/internal/agent"
-	"velin-webssh/internal/terminal"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
 func (a *API) agentStatus(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func sshAddressFirewallCommand(address net.IP, block bool) string {
 	quotedIP := shellQuote(ip)
 	if block {
 		return fmt.Sprintf(
-			"ip=%s; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active; then ufw insert deny from \"$ip\" comment 'Velin SSH monitor'; elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then firewall-cmd --add-rich-rule=\"rule family='%s' source address='$ip' reject\" --permanent && firewall-cmd --reload; elif command -v %s >/dev/null 2>&1; then %s -C INPUT -s \"$ip\" -j DROP 2>/dev/null || %s -I INPUT -s \"$ip\" -j DROP; else printf '未找到可用防火墙工具（ufw、firewall-cmd 或 %s）\\n' >&2; exit 127; fi",
+			"ip=%s; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active; then ufw insert deny from \"$ip\" comment 'VelinWebSSH monitor'; elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then firewall-cmd --add-rich-rule=\"rule family='%s' source address='$ip' reject\" --permanent && firewall-cmd --reload; elif command -v %s >/dev/null 2>&1; then %s -C INPUT -s \"$ip\" -j DROP 2>/dev/null || %s -I INPUT -s \"$ip\" -j DROP; else printf '未找到可用防火墙工具（ufw、firewall-cmd 或 %s）\\n' >&2; exit 127; fi",
 			quotedIP, family, tableCommand, tableCommand, tableCommand, tableCommand,
 		)
 	}

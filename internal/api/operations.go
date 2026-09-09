@@ -13,8 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 const maxRecordingUploadBytes int64 = 1 << 30

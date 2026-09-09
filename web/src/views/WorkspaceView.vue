@@ -2061,7 +2061,7 @@ onBeforeUnmount(() => {
       <header class="sidebar-header">
         <div class="brand-mini">
           <span class="brand-mark"><TerminalSquare :size="20" /></span
-          ><strong>Velin</strong>
+          ><strong>VelinWebSSH</strong>
         </div>
         <button
           class="icon-btn desktop-only"

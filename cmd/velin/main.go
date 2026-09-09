@@ -16,15 +16,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"velin-webssh/internal/adminreset"
-	"velin-webssh/internal/agent"
-	"velin-webssh/internal/api"
-	"velin-webssh/internal/config"
-	"velin-webssh/internal/forward"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/tailnet"
-	"velin-webssh/internal/terminal"
+	"github.com/ttyob/velin-web-ssh/internal/adminreset"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/api"
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/forward"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/tailnet"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
 func main() {
@@ -109,12 +109,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	slog.Info("Velin Web SSH listening", "addr", cfg.Addr, "pid", os.Getpid())
+	slog.Info("VelinWebSSH listening", "addr", cfg.Addr, "pid", os.Getpid())
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
-		slog.Info("Velin Web SSH shutting down")
+		slog.Info("VelinWebSSH shutting down")
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)

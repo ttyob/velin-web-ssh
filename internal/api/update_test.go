@@ -32,7 +32,7 @@ func TestFetchLatestRelease(t *testing.T) {
 			t.Errorf("Accept = %q", r.Header.Get("Accept"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"tag_name":"v0.3.36","name":"Release v0.3.36","html_url":"https://github.com/ttyob/VelinWebSsh/releases/tag/v0.3.36","published_at":"2026-09-07T00:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v0.3.36","name":"Release v0.3.36","html_url":"https://github.com/ttyob/velin-web-ssh/releases/tag/v0.3.36","published_at":"2026-09-07T00:00:00Z"}`))
 	}))
 	defer server.Close()
 
@@ -49,7 +49,7 @@ func TestUpdateCachesReleaseCheck(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
-		_, _ = w.Write([]byte(`{"tag_name":"v0.3.36","html_url":"https://github.com/ttyob/VelinWebSsh/releases/tag/v0.3.36"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v0.3.36","html_url":"https://github.com/ttyob/velin-web-ssh/releases/tag/v0.3.36"}`))
 	}))
 	defer server.Close()
 

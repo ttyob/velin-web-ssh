@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"velin-webssh/internal/remotedesktop"
+	"github.com/ttyob/velin-web-ssh/internal/remotedesktop"
 )
 
 func (a *API) createDesktopSession(w http.ResponseWriter, r *http.Request) {

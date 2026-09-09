@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"velin-webssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/config"
 )
 
 func TestManagerIsDisabledUntilApplied(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/terminal"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
 type shareViewerConnection struct {

@@ -242,7 +242,7 @@ function dispose() {
 <template>
   <main class="share-page">
     <header class="share-header">
-      <div class="share-brand"><Radio :size="20" /><strong>Velin Live</strong></div>
+      <div class="share-brand"><Radio :size="20" /><strong>VelinWebSSH Live</strong></div>
       <div v-if="share" class="share-status">
         <span><i :class="{ live: connected }" />{{ connected ? "实时连接" : "未连接" }}</span>
         <span>{{ share.permission === "operate" ? "可操作" : "仅观看" }}</span>

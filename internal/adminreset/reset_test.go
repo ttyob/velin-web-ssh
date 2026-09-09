@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 func TestResetAdministratorPassword(t *testing.T) {

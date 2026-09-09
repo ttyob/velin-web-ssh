@@ -15,10 +15,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/pquerna/otp/totp"
-	"velin-webssh/internal/config"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/terminal"
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
 func TestForwardTerminalEventDuringReplay(t *testing.T) {
@@ -83,7 +83,7 @@ Host broken
 }
 
 func TestVerifySecondFactor(t *testing.T) {
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Velin", AccountName: "test"})
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "VelinWebSSH", AccountName: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

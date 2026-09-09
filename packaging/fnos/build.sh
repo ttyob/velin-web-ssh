@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-VERSION="${VELIN_FNOS_VERSION:-0.3.45}"
+VERSION="${VELIN_FNOS_VERSION:-0.3.46}"
 VERSION="${VERSION#v}"
 ARCH="${VELIN_FNOS_ARCH:-$(uname -m)}"
 GUACD_IMAGE="${VELIN_FNOS_GUACD_IMAGE:-guacamole/guacd:1.6.0}"
@@ -115,7 +115,7 @@ cp -R "$WEB_DIST"/. "$STAGE_DIR/app/web/dist/"
 
 if [ -n "$PREBUILT_BINARY" ]; then
   if [ ! -f "$PREBUILT_BINARY" ]; then
-    echo "Prebuilt Velin binary was not found: $PREBUILT_BINARY" >&2
+    echo "Prebuilt VelinWebSSH binary was not found: $PREBUILT_BINARY" >&2
     exit 1
   fi
   cp "$PREBUILT_BINARY" "$STAGE_DIR/app/bin/velin"
@@ -124,7 +124,7 @@ else
   (
     cd "$REPO_DIR"
     CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build \
-      -trimpath -ldflags="-s -w -X velin-webssh/internal/version.Current=${VERSION}" -o "$STAGE_DIR/app/bin/velin" ./cmd/velin
+      -trimpath -ldflags="-s -w -X github.com/ttyob/velin-web-ssh/internal/version.Current=${VERSION}" -o "$STAGE_DIR/app/bin/velin" ./cmd/velin
   )
 fi
 
@@ -205,6 +205,6 @@ for ICON_PATH in ui/images/icon_64.png ui/images/icon_256.png; do
   fi
 done
 
-OUTPUT_FILE="$OUTPUT_DIR/velin-fnos-native-${ARCH}-${VERSION}.fpk"
+OUTPUT_FILE="$OUTPUT_DIR/velin-web-ssh-fnos-native-${ARCH}-${VERSION}.fpk"
 cp "$PACKAGE_FILE" "$OUTPUT_FILE"
 printf '%s\n' "$OUTPUT_FILE"

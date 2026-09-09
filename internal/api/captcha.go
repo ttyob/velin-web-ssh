@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"velin-webssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/security"
 )
 
 const (

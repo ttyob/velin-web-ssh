@@ -13,9 +13,9 @@ npm --prefix web run build
 
 CONTAINER="$(docker compose ps -q velin)"
 if [ -z "$CONTAINER" ]; then
-  echo "Velin 容器未运行，请先执行 docker compose up -d。" >&2
+  echo "VelinWebSSH 容器未运行，请先执行 docker compose up -d。" >&2
   exit 1
 fi
 
 docker cp web/dist/. "$CONTAINER:/app/web/dist/"
-echo "前端已更新，未重启 Velin 容器，会话保持不变。"
+echo "前端已更新，未重启 VelinWebSSH 容器，会话保持不变。"

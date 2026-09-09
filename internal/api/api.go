@@ -31,15 +31,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/pquerna/otp/totp"
-	"velin-webssh/internal/agent"
-	"velin-webssh/internal/config"
-	"velin-webssh/internal/forward"
-	"velin-webssh/internal/netdial"
-	"velin-webssh/internal/remotedesktop"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/tailnet"
-	"velin-webssh/internal/terminal"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/forward"
+	"github.com/ttyob/velin-web-ssh/internal/netdial"
+	"github.com/ttyob/velin-web-ssh/internal/remotedesktop"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/tailnet"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
 const cookieName = "velin_session"
@@ -748,7 +748,7 @@ func (a *API) setupTOTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "totp_already_enabled", "双因素认证已启用，请先验证并关闭现有设置")
 		return
 	}
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Velin Web SSH", AccountName: u.Username})
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "VelinWebSSH", AccountName: u.Username})
 	if err != nil {
 		writeError(w, 500, "totp_setup_failed", "无法生成 TOTP 密钥")
 		return
@@ -2318,7 +2318,7 @@ func (a *API) staticHandler() http.Handler {
 			http.ServeFile(w, r, index)
 			return
 		}
-		http.Error(w, "Velin frontend has not been built", http.StatusServiceUnavailable)
+		http.Error(w, "VelinWebSSH frontend has not been built", http.StatusServiceUnavailable)
 	})
 }
 

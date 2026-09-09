@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"velin-webssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
 )
 
 const aiModelSettingKey = "ai_model_config"

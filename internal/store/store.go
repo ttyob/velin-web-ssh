@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ttyob/velin-web-ssh/internal/security"
 	_ "modernc.org/sqlite"
-	"velin-webssh/internal/security"
 )
 
 type Store struct{ DB *sql.DB }

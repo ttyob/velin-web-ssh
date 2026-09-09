@@ -109,7 +109,7 @@ async function copyValue(value: string, label: string) {
 }
 
 function downloadRecoveryCodes() {
-  const content = `Velin Web SSH 恢复码\n账号：${auth.user?.username || ""}\n生成时间：${new Date().toLocaleString()}\n\n${recoveryCodes.value.join("\n")}\n`;
+  const content = `VelinWebSSH 恢复码\n账号：${auth.user?.username || ""}\n生成时间：${new Date().toLocaleString()}\n\n${recoveryCodes.value.join("\n")}\n`;
   const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -172,7 +172,7 @@ onMounted(load);
               <QrcodeVue :value="setup.uri" :size="220" level="M" render-as="svg" background="#ffffff" foreground="#101817" />
             </div>
             <strong>用验证器扫描二维码</strong>
-            <p>请确认应用中显示 Velin Web SSH 后，再输入动态码完成绑定。</p>
+            <p>请确认应用中显示 VelinWebSSH 后，再输入动态码完成绑定。</p>
           </div>
           <div class="security-form">
             <h3>确认绑定</h3>

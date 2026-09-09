@@ -1,7 +1,7 @@
 {
   ".url": {
     "velin-web-ssh.main": {
-      "title": "Velin Web SSH",
+      "title": "VelinWebSSH",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",

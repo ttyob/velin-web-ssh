@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 func TestValidateForward(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 type Result struct {

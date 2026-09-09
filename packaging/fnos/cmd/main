@@ -75,7 +75,7 @@ start() {
   echo "$!" > "$VELIN_PID"
   sleep 1
   if ! pid_alive "$(cat "$VELIN_PID")"; then
-    echo "Velin failed to start; see $LOG_ROOT/velin.log" >&2
+    echo "VelinWebSSH failed to start; see $LOG_ROOT/velin.log" >&2
     stop_pid "$GUACD_PID"
     return 1
   fi

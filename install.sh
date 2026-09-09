@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-REPOSITORY="ttyob/VelinWebSsh"
-IMAGE_REPOSITORY="ghcr.io/ttyob/velinwebssh"
+REPOSITORY="ttyob/velin-web-ssh"
+IMAGE_REPOSITORY="ghcr.io/ttyob/velin-web-ssh"
 VERSION="${VELIN_VERSION:-latest}"
 
 if [ "$(uname -s)" != "Linux" ]; then
-  echo "Velin 快速安装目前仅支持 Linux。" >&2
+  echo "VelinWebSSH 快速安装目前仅支持 Linux。" >&2
   exit 1
 fi
 
@@ -89,6 +89,9 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
   PASSWORD_CREATED=true
 else
   ADMIN_PASSWORD=""
+  if grep -q '^VELIN_IMAGE=ghcr.io/ttyob/velinwebssh:' "$INSTALL_DIR/.env"; then
+    sed -i 's#^VELIN_IMAGE=ghcr.io/ttyob/velinwebssh:#VELIN_IMAGE=ghcr.io/ttyob/velin-web-ssh:#' "$INSTALL_DIR/.env"
+  fi
 fi
 
 cd "$INSTALL_DIR"
@@ -102,7 +105,7 @@ until $DOCKER compose exec -T velin sh -c \
   'port=${VELIN_ADDR##*:}; wget -q -O - "http://127.0.0.1:${port}/api/health/ready"' >/dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 30 ]; then
-    echo "Velin 未能在预期时间内启动，请检查：cd $INSTALL_DIR && $DOCKER compose logs" >&2
+    echo "VelinWebSSH 未能在预期时间内启动，请检查：cd $INSTALL_DIR && $DOCKER compose logs" >&2
     exit 1
   fi
   sleep 2
@@ -120,7 +123,7 @@ fi ;;
 esac
 
 echo
-echo "Velin 已安装完成"
+echo "VelinWebSSH 已安装完成"
 echo "访问地址: http://${HOST_IP}:${SERVICE_PORT}"
 echo "安装目录: ${INSTALL_DIR}"
 if [ "$PASSWORD_CREATED" = true ]; then

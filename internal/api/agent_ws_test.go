@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"velin-webssh/internal/agent"
-	"velin-webssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
 func TestAgentWSReusesConnectionForMultipleRequests(t *testing.T) {

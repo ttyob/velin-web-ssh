@@ -25,7 +25,7 @@ services:
       start_period: 2s
 
   velin:
-    image: ${VELIN_IMAGE:-ghcr.io/ttyob/velinwebssh:latest}
+    image: ${VELIN_IMAGE:-ghcr.io/ttyob/velin-web-ssh:latest}
     container_name: velin
     network_mode: host
     restart: unless-stopped

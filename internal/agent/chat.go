@@ -82,7 +82,7 @@ type chatUsage struct {
 }
 
 func (m *Manager) Backends() []BackendInfo {
-	return []BackendInfo{{ID: "native", Label: "Velin", Available: true}}
+	return []BackendInfo{{ID: "native", Label: "VelinWebSSH", Available: true}}
 }
 
 func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext string, options ...ChatOptions) (ChatResponse, error) {
@@ -167,7 +167,7 @@ func (m *Manager) chatRequest(ctx context.Context, history []ChatMessage, hostCo
 	}
 	messages := []map[string]string{{
 		"role":    "system",
-		"content": "You are Velin SSH Agent. Help the user operate a remote host. Reply in the user's language. Use run_ssh_command when host inspection or an operation is needed. The application automatically executes ordinary non-sensitive read-only commands and displays an approval dialog for writes, sensitive reads, dangerous commands, and commands it cannot classify. Call run_ssh_command directly without first asking the user to approve or narrating that approval is needed. Never claim an unexecuted command has run. Prefer small, auditable commands and avoid destructive operations unless the user explicitly requested them. Connected host: " + hostContext,
+		"content": "You are VelinWebSSH Agent. Help the user operate a remote host. Reply in the user's language. Use run_ssh_command when host inspection or an operation is needed. The application automatically executes ordinary non-sensitive read-only commands and displays an approval dialog for writes, sensitive reads, dangerous commands, and commands it cannot classify. Call run_ssh_command directly without first asking the user to approve or narrating that approval is needed. Never claim an unexecuted command has run. Prefer small, auditable commands and avoid destructive operations unless the user explicitly requested them. Connected host: " + hostContext,
 	}}
 	for _, item := range history {
 		role := strings.TrimSpace(item.Role)

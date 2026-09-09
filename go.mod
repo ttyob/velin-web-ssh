@@ -1,4 +1,4 @@
-module velin-webssh
+module github.com/ttyob/velin-web-ssh
 
 go 1.25.0
 

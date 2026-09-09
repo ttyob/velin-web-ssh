@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"velin-webssh/internal/version"
+	"github.com/ttyob/velin-web-ssh/internal/version"
 )
 
 const (
@@ -102,7 +102,7 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, endpoint, curr
 		return updateInfo{}, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", "Velin-WebSSH/"+current)
+	request.Header.Set("User-Agent", "VelinWebSSH/"+current)
 	response, err := client.Do(request)
 	if err != nil {
 		return updateInfo{}, err

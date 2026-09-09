@@ -23,20 +23,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
+	"github.com/ttyob/velin-web-ssh/internal/adminreset"
+	"github.com/ttyob/velin-web-ssh/internal/agent"
+	"github.com/ttyob/velin-web-ssh/internal/api"
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/forward"
+	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/tailnet"
+	"github.com/ttyob/velin-web-ssh/internal/terminal"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
-	"velin-webssh/internal/adminreset"
-	"velin-webssh/internal/agent"
-	"velin-webssh/internal/api"
-	"velin-webssh/internal/config"
-	"velin-webssh/internal/forward"
-	"velin-webssh/internal/security"
-	"velin-webssh/internal/store"
-	"velin-webssh/internal/tailnet"
-	"velin-webssh/internal/terminal"
 )
 
 //go:embed desktop/dist/index.html
@@ -134,7 +134,7 @@ func runDesktop() (runErr error) {
 		return fmt.Errorf("find desktop executable: %w", err)
 	}
 	executableDir := filepath.Dir(executable)
-	logPath := filepath.Join(executableDir, "velin-gui.log")
+	logPath := filepath.Join(executableDir, "velin-web-ssh.log")
 	closeLog, err := configureDesktopLogging(executableDir)
 	if err != nil {
 		return fmt.Errorf("configure desktop logging: %w", err)
@@ -145,7 +145,7 @@ func runDesktop() (runErr error) {
 		}
 		closeLog()
 	}()
-	slog.Info("Velin GUI starting", "executable", executable, "log_file", logPath)
+	slog.Info("VelinWebSSH starting", "executable", executable, "log_file", logPath)
 
 	if err = os.Chdir(executableDir); err != nil {
 		return fmt.Errorf("set desktop working directory: %w", err)
@@ -275,7 +275,7 @@ func runDesktop() (runErr error) {
 	}
 
 	return wails.Run(&options.App{
-		Title:            "Velin Web SSH",
+		Title:            "VelinWebSSH",
 		Width:            1440,
 		Height:           900,
 		MinWidth:         980,
@@ -369,7 +369,7 @@ func configureDesktopLogging(logDir string) (func(), error) {
 	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return func() {}, err
 	}
-	file, err := os.OpenFile(filepath.Join(logDir, "velin-gui.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	file, err := os.OpenFile(filepath.Join(logDir, "velin-web-ssh.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return func() {}, err
 	}

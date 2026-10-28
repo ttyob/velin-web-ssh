@@ -1,0 +1,132 @@
+/* ======================================================================
+ * Right-click tool dialogs: files, git, docker, monitor, share.
+ * Narrower frames, shorter bodies, denser rows, quieter controls.
+ * Prefixed with .el-dialog so they win over component-scoped rules.
+ * ==================================================================== */
+.el-dialog.file-manager-dialog { width: min(760px, calc(100vw - 24px)) !important; }
+.el-dialog.docker-dialog { width: min(900px, calc(100vw - 24px)) !important; }
+.el-dialog.git-dialog { width: min(900px, calc(100vw - 24px)) !important; }
+.el-dialog.host-monitor-dialog { width: min(900px, calc(100vw - 24px)) !important; }
+.el-dialog.git-diff-dialog,
+.el-dialog.docker-logs-dialog { width: min(860px, calc(100vw - 24px)) !important; }
+.el-dialog.text-editor-dialog { width: min(900px, calc(100vw - 24px)) !important; }
+.el-dialog.image-preview-dialog { width: min(820px, calc(100vw - 24px)) !important; }
+
+.file-manager-dialog .el-dialog__body,
+.docker-dialog .el-dialog__body,
+.git-dialog .el-dialog__body,
+.host-monitor-dialog .el-dialog__body,
+.git-diff-dialog .el-dialog__body,
+.docker-logs-dialog .el-dialog__body {
+  max-height: min(640px, calc(100dvh - 112px));
+  padding: 14px 18px 16px !important;
+}
+
+/* ---- File manager ---- */
+.el-dialog.file-manager-dialog .file-manager-toolbar {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 6px;
+}
+.el-dialog.file-manager-dialog .file-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 6px;
+  font-size: 12px;
+}
+.el-dialog.file-manager-dialog .file-manager-list { min-height: 220px; max-height: min(52vh, 520px); }
+.el-dialog.file-manager-dialog .file-row {
+  grid-template-columns: 28px minmax(0, 1fr) 30px;
+  min-height: 44px;
+  padding: 4px 6px;
+  gap: 10px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.1s var(--ease-ui);
+}
+.el-dialog.file-manager-dialog .file-row:hover { background: var(--surface-hover); }
+.el-dialog.file-manager-dialog .file-row > div:nth-child(2) { gap: 1px; }
+.el-dialog.file-manager-dialog .file-row strong { font-size: 13px; font-weight: 500; }
+.el-dialog.file-manager-dialog .file-row small { font: 11px var(--font-mono); color: var(--muted); }
+.el-dialog.file-manager-dialog .file-kind-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: 0;
+}
+.el-dialog.file-manager-dialog .file-kind-icon svg { width: 15px; height: 15px; }
+.el-dialog.file-manager-dialog .file-kind-icon::after,
+.el-dialog.file-manager-dialog .file-kind-icon::before { display: none; }
+.el-dialog.file-manager-dialog .file-kind-icon * { font-size: 0; }
+.el-dialog.file-manager-dialog .file-kind-icon svg { font-size: initial; }
+
+/* ---- Docker ---- */
+.el-dialog.docker-dialog .docker-heading { margin-bottom: 0; }
+.el-dialog.docker-dialog .docker-summary { font-size: 13px; font-weight: 600; }
+.el-dialog.docker-dialog .docker-tabs { margin-top: 2px; }
+.el-dialog.docker-dialog .docker-list { min-height: 180px; }
+.el-dialog.docker-dialog .docker-row {
+  min-height: 60px;
+  gap: 12px;
+  padding: 8px 6px;
+}
+.el-dialog.docker-dialog .docker-row-main { gap: 1px; }
+.el-dialog.docker-dialog .docker-row-main strong { font-size: 13px; font-weight: 600; }
+.el-dialog.docker-dialog .docker-row-main span,
+.el-dialog.docker-dialog .docker-row-main small { font-size: 11.5px; color: var(--muted); }
+.el-dialog.docker-dialog .docker-row-actions { gap: 0; }
+.el-dialog.docker-dialog .docker-row-actions .el-button {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+.el-dialog.docker-dialog .docker-row-actions .el-button + .el-button { margin-left: 0; }
+
+/* ---- Git ---- */
+.el-dialog.git-dialog .git-heading { gap: 10px; }
+.el-dialog.git-dialog .git-tabs { margin-top: 4px; }
+.el-dialog.git-dialog .el-button { min-height: 28px; padding: 0 10px; font-size: 12.5px; }
+.el-dialog.git-dialog .git-history-list > *,
+.el-dialog.git-dialog .git-branch-row,
+.el-dialog.git-dialog .git-remote-row { min-height: 40px; }
+
+/* ---- Host monitor ---- */
+.el-dialog.host-monitor-dialog .monitor-body { gap: 10px; }
+.el-dialog.host-monitor-dialog .monitor-metric { padding: 12px 14px; }
+.el-dialog.host-monitor-dialog .monitor-charts > * { min-height: 0; }
+
+/* ---- Share ---- */
+.el-dialog .share-session-heading { padding-bottom: 12px; }
+.el-dialog .share-row { padding: 10px 12px; border-radius: var(--radius-md); }
+
+@media (max-width: 760px) {
+  .file-manager-dialog .el-dialog__body,
+  .docker-dialog .el-dialog__body,
+  .git-dialog .el-dialog__body,
+  .host-monitor-dialog .el-dialog__body { max-height: calc(100dvh - 96px); padding: 12px 14px 14px !important; }
+}
+
+/* Monitor: shorter charts; tables follow the theme instead of hard-coded greens. */
+.el-dialog.host-monitor-dialog .monitor-chart svg { height: 68px; }
+.el-dialog.host-monitor-dialog .monitor-charts { gap: 10px; }
+.el-dialog.host-monitor-dialog .el-table {
+  --el-table-header-bg-color: var(--surface-2) !important;
+  --el-table-row-hover-bg-color: var(--surface-hover) !important;
+  --el-table-border-color: var(--line) !important;
+}
+.el-dialog.git-dialog textarea.el-textarea__inner { min-height: 60px !important; }
+
+/* ---- Session manager ---- */
+.el-dialog.sessions-dialog { width: min(760px, calc(100vw - 24px)) !important; }
+.sessions-dialog .el-dialog__body { padding: 14px 18px 16px !important; }
+.sessions-dialog .session-dialog-toolbar {
+  grid-template-columns: minmax(160px, 1fr) 128px 150px auto auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sessions-dialog .session-dialog-list { max-height: min(56vh, 520px); padding: 0; }
+@media (max-width: 760px) {
+  .sessions-dialog .session-dialog-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .sessions-dialog .session-dialog-toolbar > .el-input { grid-column: 1 / -1; }
+  .sessions-dialog .session-dialog-toolbar > .el-button { grid-column: auto; width: 100%; }
+}

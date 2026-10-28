@@ -48,17 +48,17 @@ function points(values: number[]) {
 </template>
 
 <style scoped>
-.monitor-chart { min-width: 0; display: grid; gap: 7px; padding: 11px 12px; border: 1px solid #354039; border-radius: 6px; background: #151a1e; }
+.monitor-chart { min-width: 0; display: grid; gap: 7px; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); }
 .monitor-chart header, .monitor-chart footer, .monitor-chart-legend, .monitor-chart-legend span { display: flex; align-items: center; }
 .monitor-chart header { justify-content: space-between; gap: 8px; }
-.monitor-chart header span { color: #91a098; font-size: 12px; }
-.monitor-chart header strong { color: #e1e8e3; font-size: 17px; }
+.monitor-chart header span { color: var(--muted); font-size: 12px; }
+.monitor-chart header strong { color: var(--text); font-size: 17px; }
 .monitor-chart svg { width: 100%; height: 112px; overflow: visible; }
 .monitor-chart svg line { stroke: #2b3430; stroke-width: .35; vector-effect: non-scaling-stroke; }
 .monitor-chart svg polyline { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .monitor-chart footer { min-height: 18px; justify-content: space-between; gap: 8px; }
 .monitor-chart-legend { flex-wrap: wrap; gap: 9px; }
-.monitor-chart-legend span { gap: 4px; color: #829087; font-size: 10px; }
+.monitor-chart-legend span { gap: 4px; color: var(--muted); font-size: 10px; }
 .monitor-chart-legend i { width: 7px; height: 7px; border-radius: 2px; }
-.monitor-chart footer small { overflow: hidden; color: #748178; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.monitor-chart footer small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 </style>

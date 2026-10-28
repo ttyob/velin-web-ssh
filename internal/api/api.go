@@ -184,6 +184,7 @@ func (a *API) Router() http.Handler {
 		r.Delete("/api/credentials/{id}", a.deleteCredential)
 		r.Get("/api/sessions", a.sessions)
 		r.Post("/api/sessions", a.createSession)
+		r.Post("/api/sessions/cleanup", a.cleanupSessions)
 		r.Post("/api/sessions/{id}/restore", a.restoreSession)
 		r.Get("/api/sessions/{id}/directory", a.sessionDirectory)
 		r.Get("/api/sessions/{id}/foreground", a.sessionForeground)
@@ -1402,6 +1403,16 @@ func (a *API) sessions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, nonNil(out))
 }
+
+// cleanupSessions deletes the caller's inactive (ended) session records.
+func (a *API) cleanupSessions(w http.ResponseWriter, r *http.Request) {
+	removed, err := a.store.DeleteEndedTerminals(currentUser(r).ID)
+	if err != nil {
+		writeError(w, 500, "database_error", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]int64{"removed": removed})
+}
 func (a *API) sessionDirectory(w http.ResponseWriter, r *http.Request) {
 	session, err := a.terminals.Get(currentUser(r).ID, chi.URLParam(r, "id"))
 	if err != nil {
@@ -2099,6 +2110,7 @@ type terminalWSMessage struct {
 	Foreground, Background string
 	Rows, Cols             int
 	Position, HistorySize  int
+	Lines, Row, Column     int
 	Sequence               uint64
 	Approved               bool
 }
@@ -2162,12 +2174,13 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 		controller = clientID
 	}
 	meta := s.Meta()
-	if err = writeJSON(terminal.Event{Type: "hello", ClientID: clientID, Controller: controller, Status: meta.Status, Message: meta.LastError, Truncated: replay.Truncated, StreamID: replay.StreamID, Offset: replay.Offset, HistorySize: s.CachedHistorySize()}); err != nil {
+	historySize, alternateScreen := s.CachedHistoryState()
+	if err = writeJSON(terminal.Event{Type: "hello", ClientID: clientID, Controller: controller, Status: meta.Status, Message: meta.LastError, Truncated: replay.Truncated, StreamID: replay.StreamID, Offset: replay.Offset, HistorySize: historySize, AlternateScreen: alternateScreen}); err != nil {
 		return
 	}
 	go func() {
-		size := s.HistorySize()
-		_ = writeJSON(terminal.Event{Type: "history_state", HistorySize: size, Position: size})
+		size, alternate := s.HistoryState()
+		_ = writeJSON(terminal.Event{Type: "history_state", HistorySize: size, AlternateScreen: alternate, Position: size})
 	}()
 	done := make(chan struct{})
 	go func() {
@@ -2263,6 +2276,10 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 			_ = s.Resize(clientID, msg.Rows, msg.Cols)
 		case "scroll_history":
 			_ = s.ScrollHistory(clientID, msg.Rows)
+		case "scroll_application":
+			_ = s.SendApplicationMouse(clientID, "scroll", msg.Lines, msg.Row, msg.Column)
+		case "click_application":
+			_ = s.SendApplicationMouse(clientID, "click", 0, msg.Row, msg.Column)
 		case "scroll_history_to":
 			s.QueueHistoryPosition(clientID, position, historySize, msg.Sequence)
 		case "history_state":

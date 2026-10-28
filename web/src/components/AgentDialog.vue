@@ -103,7 +103,7 @@ const approvalConfirmButton = ref<HTMLButtonElement>();
 const conversations = ref<AgentConversation[]>([]);
 const activeConversationID = ref("");
 const historyOpen = ref(false);
-const windowRect = reactive({ left: 24, top: 48, width: 1040, height: 820 });
+const windowRect = reactive({ left: 24, top: 48, width: 760, height: 640 });
 type ResizeEdge = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 let pointerCleanup: (() => void) | undefined;
 let chatScrollFrame: number | undefined;
@@ -114,7 +114,12 @@ const windowStyle = computed(() => ({
   top: `${windowRect.top}px`,
   width: `${windowRect.width}px`,
   height: `${windowRect.height}px`,
+  // The window is user-resizable, so inner sizing must follow the window, not
+  // the browser viewport. These replace vw/vh in the styles below.
+  "--aw": `${windowRect.width}px`,
+  "--ah": `${windowRect.height}px`,
 }));
+const narrowWindow = computed(() => windowRect.width <= 720);
 
 const connected = computed(() => status.value?.state === "connected");
 const aiReady = computed(
@@ -238,8 +243,8 @@ onBeforeUnmount(() => {
 });
 
 function resetWindowRect() {
-  const width = Math.min(1040, Math.max(minWindowWidth(), window.innerWidth - 24));
-  const height = Math.min(820, Math.max(minWindowHeight(), window.innerHeight - 32));
+  const width = Math.min(760, Math.max(minWindowWidth(), window.innerWidth - 24));
+  const height = Math.min(640, Math.max(minWindowHeight(), window.innerHeight - 32));
   windowRect.width = width;
   windowRect.height = height;
   windowRect.left = Math.max(12, Math.round((window.innerWidth - width) / 2));
@@ -1024,6 +1029,7 @@ function resultCommand(content: string) {
     <div v-if="modelValue" v-show="!suspended" class="agent-floating-layer">
       <section
         class="agent-window"
+        :class="{ 'is-narrow': narrowWindow }"
         role="dialog"
         aria-modal="false"
         :aria-label="`后台 Agent${host ? ` · ${host.name}` : ''}`"
@@ -1524,7 +1530,7 @@ function resultCommand(content: string) {
 .agent-model-control { flex: 0 1 auto; }
 .agent-reasoning-control { flex: 0 0 auto; }
 .agent-ai-controls :deep(.el-select) { min-width: 0; }
-.agent-model-control :deep(.el-select) { width: min(230px, 30vw); }
+.agent-model-control :deep(.el-select) { width: min(230px, calc(var(--aw) * 0.3)); }
 .agent-reasoning-control :deep(.el-select) { width: 72px; }
 .agent-ai-controls :deep(.el-select__wrapper) {
   min-height: 28px;
@@ -1600,7 +1606,7 @@ function resultCommand(content: string) {
   display: flex;
   flex-direction: column;
   width: min(520px, 100%);
-  max-height: min(70vh, 560px);
+  max-height: min(calc(var(--ah) * 0.7), 560px);
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -1862,7 +1868,7 @@ function resultCommand(content: string) {
   background: color-mix(in srgb, var(--el-color-primary) 10%, var(--surface-soft));
 }
 .agent-result-output {
-  max-height: min(320px, 42vh);
+  max-height: min(320px, calc(var(--ah) * 0.42));
   overflow: auto;
   font-family: "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   font-size: 12px;
@@ -1894,7 +1900,7 @@ function resultCommand(content: string) {
   z-index: 8;
   display: grid;
   gap: 8px;
-  max-height: min(310px, 46vh);
+  max-height: min(310px, calc(var(--ah) * 0.46));
   padding: 11px;
   overflow: auto;
   border: 1px solid color-mix(in srgb, #d6a84d 48%, var(--border-subtle));
@@ -2003,7 +2009,7 @@ function resultCommand(content: string) {
 .agent-command-approval-confirm {
   border: 1px solid color-mix(in srgb, var(--el-color-primary) 72%, #fff);
   background: var(--el-color-primary);
-  color: #fff;
+  color: var(--text);
 }
 .agent-command-approval-confirm:focus-visible,
 .agent-command-approval-cancel:focus-visible {
@@ -2134,22 +2140,21 @@ function resultCommand(content: string) {
 @keyframes agent-thinking { 50% { opacity: 0.25; transform: translateY(-2px); } }
 .agent-empty { display: grid; place-items: center; gap: 8px; min-height: 170px; color: var(--text-muted); }
 .agent-chat-empty { flex: 1 1 auto; }
-@media (max-width: 720px) {
-  .agent-window-body { padding: 12px 12px 18px; }
-  .agent-message-body { max-width: 84%; }
-  .agent-chat-message.result .agent-message-body {
+/* window-size driven (was @media on the viewport) */
+.agent-window.is-narrow .agent-window-body { padding: 12px 12px 18px; }
+.agent-window.is-narrow .agent-message-body { max-width: 84%; }
+.agent-window.is-narrow .agent-chat-message.result .agent-message-body {
     width: calc(100% - 42px);
     max-width: calc(100% - 42px);
   }
-  .agent-chat-log { padding: 16px 10px 24px; }
-  .agent-composer-dock { margin-top: auto; padding: 8px 8px 9px; }
-  .agent-chat-input { grid-template-rows: minmax(44px, auto) auto; min-height: 82px; }
-  .agent-ai-controls { flex-wrap: wrap; gap: 6px; }
-  .agent-model-control { flex: 1 1 auto; }
-  .agent-model-control :deep(.el-select) { width: min(180px, 42vw); }
-  .agent-context-size { margin-left: 0; }
-  .agent-command-flyout { max-height: 38vh; }
-  .agent-command-proposal { align-items: stretch; flex-direction: column; }
-  .agent-command-actions { align-self: flex-end; }
-}
+.agent-window.is-narrow .agent-chat-log { padding: 16px 10px 24px; }
+.agent-window.is-narrow .agent-composer-dock { margin-top: auto; padding: 8px 8px 9px; }
+.agent-window.is-narrow .agent-chat-input { grid-template-rows: minmax(44px, auto) auto; min-height: 82px; }
+.agent-window.is-narrow .agent-ai-controls { flex-wrap: wrap; gap: 6px; }
+.agent-window.is-narrow .agent-model-control { flex: 1 1 auto; }
+.agent-window.is-narrow .agent-model-control :deep(.el-select) { width: min(180px, calc(var(--aw) * 0.42)); }
+.agent-window.is-narrow .agent-context-size { margin-left: 0; }
+.agent-window.is-narrow .agent-command-flyout { max-height: calc(var(--ah) * 0.38); }
+.agent-window.is-narrow .agent-command-proposal { align-items: stretch; flex-direction: column; }
+.agent-window.is-narrow .agent-command-actions { align-self: flex-end; }
 </style>

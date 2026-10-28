@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
+import { ChevronRight } from "@lucide/vue";
 import { api, json } from "../api";
 import type { Credential, Host } from "../types";
 
@@ -55,7 +56,8 @@ const availableCredentials = computed(() =>
     ? props.credentials
     : props.credentials.filter((credential) => credential.kind === "password"),
 );
-const advancedOpen = ref<string[]>([]),
+const moreOpen = ref(false),
+  advOpen = ref(false),
   authMode = ref<"password" | "credential" | "prompt">("password"),
   password = ref("");
 watch(
@@ -71,7 +73,11 @@ watch(
           : "prompt"
         : "password";
       password.value = "";
-      advancedOpen.value = [];
+      moreOpen.value = !!(
+        props.host &&
+        (props.host.groupName || props.host.tags || props.host.notes)
+      );
+      advOpen.value = false;
     }
   },
 );
@@ -129,115 +135,148 @@ async function save() {
     :model-value="modelValue"
     class="host-dialog"
     :title="form.id ? '编辑主机' : '新增主机'"
-    width="min(660px, calc(100vw - 28px))"
+    width="min(520px, calc(100vw - 24px))"
+    align-center
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <el-form label-position="top">
-      <section class="host-form-section">
-        <h3>基础设置</h3>
-        <div class="form-grid">
-          <el-form-item label="连接协议" class="span-2">
-            <el-segmented
-              v-model="form.protocol"
-              :options="[
-                { label: 'SSH 终端', value: 'ssh' },
-                { label: 'VNC 桌面', value: 'vnc' },
-                { label: 'RDP 桌面', value: 'rdp' },
-              ]"
-            />
-          </el-form-item>
-          <el-form-item
-            v-if="form.protocol === 'rdp'"
-            label="RDP 连接方式"
-            class="span-2"
-          >
-            <el-segmented
-              v-model="form.rdpMode"
-              :options="[
-                { label: '浏览器内连接', value: 'web' },
-                { label: '调用本地远程桌面', value: 'native' },
-              ]"
-            />
-          </el-form-item>
-          <el-form-item label="名称"
-            ><el-input v-model="form.name"
-          /></el-form-item>
-          <el-form-item label="分组"
-            ><el-input
-              v-model="form.groupName"
-              placeholder="例如 生产/华东/数据库"
-          /></el-form-item>
-          <el-form-item label="主机地址" class="span-2"
-            ><el-input v-model="form.address" placeholder="server.example.com"
-          /></el-form-item>
-          <el-form-item label="端口"
-            ><el-input-number
-              v-model="form.port"
-              :min="1"
-              :max="65535"
-              controls-position="right"
-          /></el-form-item>
-          <el-form-item v-if="form.protocol !== 'vnc'" label="用户名"
-            ><el-input v-model="form.username"
-          /></el-form-item>
-          <el-form-item label="认证方式" class="span-2">
-            <el-segmented
-              v-model="authMode"
-              :options="[
-                { label: '直接输入密码', value: 'password' },
-                { label: '已保存凭据', value: 'credential' },
-                { label: '连接时输入', value: 'prompt' },
-              ]"
-            />
-          </el-form-item>
-          <el-form-item
-            v-if="authMode === 'password'"
-            :label="`${form.protocol.toUpperCase()} 密码`"
-            class="span-2"
-          >
-            <el-input
-              v-model="password"
-              type="password"
-              show-password
-              autocomplete="new-password"
-              placeholder="保存后独立加密存储，留空保留当前密码"
-            />
-          </el-form-item>
-          <el-form-item
-            v-else-if="authMode === 'credential'"
-            label="凭据"
-            class="span-2"
-            ><el-select v-model="form.credentialID" placeholder="选择已保存凭据"
-              ><el-option
-                v-for="credential in availableCredentials"
-                :key="credential.id"
-                :label="credential.name"
-                :value="credential.id" /></el-select
-          ></el-form-item>
-          <el-form-item
-            v-if="form.protocol === 'ssh'"
-            label="终端会话"
-            class="span-2"
-          >
-            <el-segmented
-              v-model="form.sessionMode"
-              :options="[
-                { label: 'tmux 持久模式', value: 'tmux' },
-                { label: '普通 SSH', value: 'normal' },
-              ]"
-            />
-          </el-form-item>
-          <el-form-item label="标签" class="span-2"
-            ><el-input v-model="form.tags" placeholder="逗号分隔"
-          /></el-form-item>
-          <el-form-item label="备注" class="span-2"
-            ><el-input v-model="form.notes" type="textarea" :rows="2"
-          /></el-form-item>
+    <el-form
+      label-position="top"
+      class="hd-form"
+      @submit.prevent="save"
+    >
+      <el-segmented
+        v-model="form.protocol"
+        class="hd-proto"
+        :options="[
+          { label: 'SSH 终端', value: 'ssh' },
+          { label: 'VNC 桌面', value: 'vnc' },
+          { label: 'RDP 桌面', value: 'rdp' },
+        ]"
+      />
+      <el-segmented
+        v-if="form.protocol === 'rdp'"
+        v-model="form.rdpMode"
+        class="hd-proto hd-sub"
+        :options="[
+          { label: '浏览器内连接', value: 'web' },
+          { label: '调用本地远程桌面', value: 'native' },
+        ]"
+      />
+
+      <div class="hd-row hd-addr">
+        <el-form-item label="主机地址">
+          <el-input
+            v-model="form.address"
+            placeholder="server.example.com"
+            autofocus
+          />
+        </el-form-item>
+        <el-form-item label="端口">
+          <el-input-number
+            v-model="form.port"
+            :min="1"
+            :max="65535"
+            :controls="false"
+          />
+        </el-form-item>
+      </div>
+      <div class="hd-row" :class="{ single: form.protocol === 'vnc' }">
+        <el-form-item label="名称">
+          <el-input v-model="form.name" placeholder="例如 生产 API" />
+        </el-form-item>
+        <el-form-item v-if="form.protocol !== 'vnc'" label="用户名">
+          <el-input v-model="form.username" />
+        </el-form-item>
+      </div>
+
+      <div class="hd-auth">
+        <div class="hd-auth-head">
+          <span class="hd-label">认证方式</span>
+          <el-segmented
+            v-model="authMode"
+            size="small"
+            :options="[
+              { label: '密码', value: 'password' },
+              { label: '已存凭据', value: 'credential' },
+              { label: '连接时输入', value: 'prompt' },
+            ]"
+          />
         </div>
-      </section>
-      <el-collapse v-model="advancedOpen" class="host-advanced">
-        <el-collapse-item title="高级设置" name="advanced">
-          <div class="form-grid">
+        <el-input
+          v-if="authMode === 'password'"
+          v-model="password"
+          type="password"
+          show-password
+          autocomplete="new-password"
+          :placeholder="
+            form.hasPassword
+              ? '留空保留当前密码'
+              : `${form.protocol.toUpperCase()} 密码，保存后加密存储`
+          "
+        />
+        <el-select
+          v-else-if="authMode === 'credential'"
+          v-model="form.credentialID"
+          placeholder="选择已保存凭据"
+        >
+          <el-option
+            v-for="credential in availableCredentials"
+            :key="credential.id"
+            :label="credential.name"
+            :value="credential.id"
+          />
+        </el-select>
+        <p v-else class="hd-note">每次连接时会弹出输入框，不保存密码。</p>
+      </div>
+
+      <button
+        type="button"
+        class="hd-disclosure"
+        :class="{ open: moreOpen }"
+        :aria-expanded="moreOpen"
+        @click="moreOpen = !moreOpen"
+      >
+        <ChevronRight :size="14" />
+        <span>更多信息</span>
+        <small>分组 · 标签 · 备注{{ form.protocol === "ssh" ? " · 会话模式" : "" }}</small>
+      </button>
+      <div v-if="moreOpen" class="hd-panel">
+        <div class="hd-row">
+          <el-form-item label="分组">
+            <el-input v-model="form.groupName" placeholder="生产/华东/数据库" />
+          </el-form-item>
+          <el-form-item label="标签">
+            <el-input v-model="form.tags" placeholder="逗号分隔" />
+          </el-form-item>
+        </div>
+        <el-form-item v-if="form.protocol === 'ssh'" label="终端会话">
+          <el-segmented
+            v-model="form.sessionMode"
+            size="small"
+            :options="[
+              { label: 'tmux 持久模式', value: 'tmux' },
+              { label: '普通 SSH', value: 'normal' },
+            ]"
+          />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.notes" type="textarea" :rows="2" resize="none" />
+        </el-form-item>
+      </div>
+
+      <button
+        type="button"
+        class="hd-disclosure"
+        :class="{ open: advOpen }"
+        :aria-expanded="advOpen"
+        @click="advOpen = !advOpen"
+      >
+        <ChevronRight :size="14" />
+        <span>高级连接</span>
+        <small>跳板机 · 超时 · 重试{{ form.protocol === "rdp" ? " · 安全模式" : "" }}</small>
+      </button>
+      <div v-if="advOpen" class="hd-panel">
+        <div class="form-grid hd-adv">
             <el-form-item label="跳板机" class="span-2">
               <el-select
                 v-model="form.jumpHostID"
@@ -350,8 +389,7 @@ async function save() {
               </el-form-item>
             </template>
           </div>
-        </el-collapse-item>
-      </el-collapse>
+      </div>
     </el-form>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>

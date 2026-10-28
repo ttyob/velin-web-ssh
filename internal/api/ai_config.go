@@ -15,9 +15,10 @@ import (
 const aiModelSettingKey = "ai_model_config"
 
 type storedAIModelConfig struct {
-	BaseURL         string `json:"baseURL"`
-	Model           string `json:"model"`
-	APIKeyEncrypted string `json:"apiKeyEncrypted"`
+	BaseURL           string `json:"baseURL"`
+	Model             string `json:"model"`
+	APIKeyEncrypted   string `json:"apiKeyEncrypted"`
+	ProxyURLEncrypted string `json:"proxyURLEncrypted,omitempty"`
 }
 
 type aiModelConfigResponse struct {
@@ -25,6 +26,7 @@ type aiModelConfigResponse struct {
 	Model            string `json:"model"`
 	APIKeyConfigured bool   `json:"apiKeyConfigured"`
 	Configured       bool   `json:"configured"`
+	ProxyURL         string `json:"proxyURL"`
 }
 
 func (a *API) restoreAIModelConfig() {
@@ -44,7 +46,16 @@ func (a *API) restoreAIModelConfig() {
 			return
 		}
 	}
-	a.agents.UpdateAI(agent.AIConfig{BaseURL: stored.BaseURL, Model: stored.Model, APIKey: apiKey})
+	proxyURL := ""
+	if stored.ProxyURLEncrypted != "" {
+		var err error
+		proxyURL, err = a.vault.Decrypt(stored.ProxyURLEncrypted)
+		if err != nil {
+			slog.Warn("decrypt AI model proxy", "error", err)
+			return
+		}
+	}
+	a.agents.UpdateAI(agent.AIConfig{BaseURL: stored.BaseURL, Model: stored.Model, APIKey: apiKey, ProxyURL: proxyURL})
 }
 
 func (a *API) getAIModelConfig(w http.ResponseWriter, _ *http.Request) {
@@ -53,10 +64,11 @@ func (a *API) getAIModelConfig(w http.ResponseWriter, _ *http.Request) {
 
 func (a *API) saveAIModelConfig(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		BaseURL     string `json:"baseURL"`
-		Model       string `json:"model"`
-		APIKey      string `json:"apiKey"`
-		ClearAPIKey bool   `json:"clearAPIKey"`
+		BaseURL     string  `json:"baseURL"`
+		Model       string  `json:"model"`
+		APIKey      string  `json:"apiKey"`
+		ClearAPIKey bool    `json:"clearAPIKey"`
+		ProxyURL    *string `json:"proxyURL"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -68,7 +80,16 @@ func (a *API) saveAIModelConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_ai_model_config", err.Error())
 		return
 	}
-	apiKey := a.agents.AIConfig().APIKey
+	current := a.agents.AIConfig()
+	proxyURL := current.ProxyURL
+	if input.ProxyURL != nil {
+		proxyURL = strings.TrimSpace(*input.ProxyURL)
+	}
+	if _, err := agent.ParseAIProxyURL(proxyURL); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_ai_model_config", err.Error())
+		return
+	}
+	apiKey := current.APIKey
 	if input.ClearAPIKey {
 		apiKey = ""
 	}
@@ -84,12 +105,20 @@ func (a *API) saveAIModelConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	stored := storedAIModelConfig{BaseURL: input.BaseURL, Model: input.Model, APIKeyEncrypted: encrypted}
+	proxyEncrypted := ""
+	if proxyURL != "" {
+		proxyEncrypted, err = a.vault.Encrypt(proxyURL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "encryption_error", "代理地址加密失败")
+			return
+		}
+	}
+	stored := storedAIModelConfig{BaseURL: input.BaseURL, Model: input.Model, APIKeyEncrypted: encrypted, ProxyURLEncrypted: proxyEncrypted}
 	if err = a.store.SaveSystemSetting(aiModelSettingKey, stored); err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error", "AI 模型配置保存失败")
 		return
 	}
-	value := agent.AIConfig{BaseURL: input.BaseURL, Model: input.Model, APIKey: apiKey}
+	value := agent.AIConfig{BaseURL: input.BaseURL, Model: input.Model, APIKey: apiKey, ProxyURL: proxyURL}
 	a.agents.UpdateAI(value)
 	writeJSON(w, http.StatusOK, aiModelResponse(value))
 }
@@ -106,7 +135,7 @@ func (a *API) testAIModelConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func aiModelResponse(value agent.AIConfig) aiModelConfigResponse {
-	return aiModelConfigResponse{BaseURL: value.BaseURL, Model: value.Model, APIKeyConfigured: value.APIKey != "", Configured: value.Configured()}
+	return aiModelConfigResponse{BaseURL: value.BaseURL, Model: value.Model, APIKeyConfigured: value.APIKey != "", Configured: value.Configured(), ProxyURL: value.ProxyURL}
 }
 
 func validateAIModelConfig(baseURL, model, apiKey string) error {

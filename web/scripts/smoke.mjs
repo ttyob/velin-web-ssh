@@ -2,7 +2,7 @@ import { chromium, devices } from 'playwright-core'
 import { mkdir } from 'node:fs/promises'
 
 const baseURL = process.env.VELIN_TEST_URL || 'http://127.0.0.1:8377'
-const password = process.env.VELIN_TEST_PASSWORD
+let password = process.env.VELIN_TEST_PASSWORD
 if (!password) throw new Error('VELIN_TEST_PASSWORD is required')
 await mkdir('../artifacts', { recursive: true })
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })
@@ -23,6 +23,16 @@ async function verify(name, contextOptions, expectedMobile = false) {
   await page.getByLabel('用户名').fill('admin')
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '登录' }).click()
+  await page.waitForURL(url => ['/workspace', '/change-password'].includes(url.pathname))
+  if (new URL(page.url()).pathname === '/change-password') {
+    const newPassword = process.env.VELIN_TEST_NEW_PASSWORD
+    if (!newPassword) throw new Error('First login requires VELIN_TEST_NEW_PASSWORD for the isolated test account')
+    await page.getByLabel('当前密码', { exact: true }).fill(password)
+    await page.getByLabel('新密码', { exact: true }).fill(newPassword)
+    await page.getByLabel('确认新密码', { exact: true }).fill(newPassword)
+    await page.getByRole('button', { name: '修改并进入工作区' }).click()
+    password = newPassword
+  }
   await page.waitForURL('**/workspace')
   await page.getByText('没有打开的终端').waitFor()
   const rejected = await context.request.put(`${baseURL}/api/preferences`, {
@@ -40,7 +50,7 @@ async function verify(name, contextOptions, expectedMobile = false) {
   if (csrf.live !== 200 || csrf.ready !== 200 || csrf.metrics.status !== 200 || !csrf.metrics.body.includes('velin_websockets')) throw new Error(`${name}: health or metrics failed ${JSON.stringify(csrf)}`)
   const viewport = page.viewportSize()
   if (viewport && viewport.width <= 760) await page.getByTitle('打开侧栏').click()
-  await page.getByText('设置', { exact: true }).click()
+  await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('dialog', { name: '设置' }).waitFor()
   await page.keyboard.press('Escape')
   const metrics = await page.evaluate(() => ({

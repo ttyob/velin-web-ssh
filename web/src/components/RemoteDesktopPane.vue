@@ -45,8 +45,17 @@ const uploadRate = ref(0);
 const busy = ref(false);
 let rfb: any;
 let guacClient: any;
+let guacTunnel: any;
 let guacMouse: any;
 let guacKeyboard: any;
+let disposed = false;
+let rdpHealthTimer: number | undefined;
+let rdpPendingFrameAt: number | undefined;
+let rdpLatestFrame: string | undefined;
+let rdpAcknowledgedFrame: string | undefined;
+let lastRDPWidth = 0;
+let lastRDPHeight = 0;
+const rdpFrameTimeout = 20_000;
 const pressedRDPKeys = new Set<number>();
 const clipboardPasteKeys = new Set<number>();
 let resizeObserver: ResizeObserver | undefined;
@@ -165,14 +174,66 @@ function guacamoleInstructionBytes(values: unknown[]) {
 function instrumentGuacamoleTunnel(tunnel: any) {
   const sendMessage = tunnel.sendMessage.bind(tunnel);
   tunnel.sendMessage = (...values: unknown[]) => {
+    if (guacTunnel !== tunnel) return;
     recordTraffic("upload", guacamoleInstructionBytes(values));
+    if (values[0] === "sync") {
+      rdpAcknowledgedFrame = String(values[1]);
+      rdpPendingFrameAt = rdpAcknowledgedFrame === rdpLatestFrame
+        ? undefined
+        : Date.now();
+    }
     return sendMessage(...values);
   };
   const oninstruction = tunnel.oninstruction;
   tunnel.oninstruction = (opcode: string, parameters: string[]) => {
+    if (guacTunnel !== tunnel) return;
     recordTraffic("download", guacamoleInstructionBytes([opcode, ...parameters]));
+    if (opcode === "sync") {
+      rdpLatestFrame = String(Number(parameters[0]));
+      if (rdpLatestFrame !== rdpAcknowledgedFrame && rdpPendingFrameAt === undefined)
+        rdpPendingFrameAt = Date.now();
+    }
     return oninstruction?.call(tunnel, opcode, parameters);
   };
+}
+
+function recoverRDP(client: any, message: string) {
+  if (disposed || guacClient !== client) return;
+  disconnect();
+  scheduleReconnect(message);
+}
+
+function checkRDPHealth() {
+  if (!guacClient || !props.visible || document.hidden) return;
+  if (guacTunnel?.state === Guacamole.Tunnel.State.CLOSED) {
+    recoverRDP(guacClient, "RDP 连接已断开");
+  } else if (
+    rdpPendingFrameAt !== undefined &&
+    Date.now() - rdpPendingFrameAt >= rdpFrameTimeout
+  ) {
+    // A live WebSocket can still have a blocked display queue after WebView
+    // suspension. Track frame acknowledgements, not changes in screen pixels.
+    recoverRDP(guacClient, "RDP 画面响应超时");
+  }
+}
+
+function resumeDesktop() {
+  if (
+    disposed ||
+    busy.value ||
+    !props.visible ||
+    document.hidden ||
+    props.host.protocol !== "rdp"
+  )
+    return;
+  checkRDPHealth();
+  if (reconnectTimer !== undefined) {
+    clearReconnect();
+    void connectDesktop(true);
+  } else if (guacTunnel?.isConnected()) {
+    guacTunnel.sendMessage("nop");
+    resizeDisplay();
+  }
 }
 
 function clearReconnect() {
@@ -184,9 +245,11 @@ function releasePressedKeys() {
   for (const keysym of pressedRDPKeys) guacClient?.sendKeyEvent(0, keysym);
   pressedRDPKeys.clear();
   clipboardPasteKeys.clear();
+  guacKeyboard?.reset();
 }
 
 function scheduleReconnect(message = "连接已断开") {
+  if (disposed) return;
   if (reconnectTimer !== undefined) return;
   if (reconnectAttempt >= 5) {
     setStatus("error", "连接失败，请手动重连");
@@ -238,24 +301,48 @@ async function requestSession(): Promise<DesktopSession> {
 function disconnect() {
   connectGeneration++;
   stopTraffic();
+  window.clearInterval(rdpHealthTimer);
+  rdpHealthTimer = undefined;
+  rdpPendingFrameAt = undefined;
+  rdpLatestFrame = undefined;
+  rdpAcknowledgedFrame = undefined;
+  lastRDPWidth = 0;
+  lastRDPHeight = 0;
   releasePressedKeys();
-  try {
-    rfb?.disconnect();
-  } catch {}
-  try {
-    guacClient?.disconnect();
-  } catch {}
+  const previousRFB = rfb;
+  const previousClient = guacClient;
+  const previousTunnel = guacTunnel;
   rfb = undefined;
   guacClient = undefined;
+  if (guacKeyboard) {
+    guacKeyboard.onkeydown = null;
+    guacKeyboard.onkeyup = null;
+  }
+  if (previousClient) {
+    previousClient.onstatechange = null;
+    previousClient.onerror = null;
+    previousClient.onclipboard = null;
+    previousClient.getDisplay().onresize = null;
+  }
+  if (previousTunnel) {
+    previousTunnel.onstatechange = null;
+    previousTunnel.onerror = null;
+  }
+  try {
+    previousRFB?.disconnect();
+  } catch {}
+  try {
+    previousClient?.disconnect();
+  } catch {}
+  guacTunnel = undefined;
   guacMouse = undefined;
-  guacKeyboard = undefined;
   pressedRDPKeys.clear();
   clipboardPasteKeys.clear();
   if (surface.value) surface.value.replaceChildren();
 }
 
 async function connectDesktop(automatic = false) {
-  if (busy.value) return;
+  if (disposed || busy.value) return;
   clearReconnect();
   if (!automatic) reconnectAttempt = 0;
   busy.value = true;
@@ -272,6 +359,7 @@ async function connectDesktop(automatic = false) {
     if (session.protocol === "vnc") connectVNC(session);
     else connectRDP(session);
   } catch (error: any) {
+    if (disposed || generation !== connectGeneration) return;
     if (error !== "cancel" && error !== "close") {
       setStatus("error", error instanceof Error ? error.message : "连接失败");
       scheduleReconnect("连接失败");
@@ -314,10 +402,21 @@ function connectVNC(session: DesktopSession) {
 function connectRDP(session: DesktopSession) {
   if (!surface.value) return;
   const tunnel = new Guacamole.WebSocketTunnel(websocketURL(session.websocketPath));
+  guacTunnel = tunnel;
   guacClient = new Guacamole.Client(tunnel);
   instrumentGuacamoleTunnel(tunnel);
   startTraffic();
   const client = guacClient;
+  // Guacamole.Client reports protocol errors, but does not forward tunnel
+  // errors or closure. Without these handlers a timed-out socket leaves a
+  // frozen display which still appears connected.
+  tunnel.onerror = (error: any) =>
+    recoverRDP(client, error?.message || "RDP 连接超时");
+  tunnel.onstatechange = (state: number) => {
+    if (state === Guacamole.Tunnel.State.CLOSED)
+      recoverRDP(client, "RDP 连接中断");
+  };
+  rdpHealthTimer = window.setInterval(checkRDPHealth, 2_000);
   const display = guacClient.getDisplay();
   surface.value.appendChild(display.getElement());
   display.onresize = () => resizeDisplay();
@@ -329,14 +428,11 @@ function connectRDP(session: DesktopSession) {
       setStatus("connected", "已连接");
       resizeDisplay();
     } else if (state === Guacamole.Client.State.DISCONNECTED && guacClient === client) {
-      setStatus("disconnected", "已断开");
-      scheduleReconnect("连接中断");
+      recoverRDP(client, "RDP 连接中断");
     }
   };
   guacClient.onerror = (error: any) => {
-    if (guacClient !== client) return;
-    setStatus("error", error?.message || "RDP 连接失败");
-    scheduleReconnect("连接失败");
+    recoverRDP(client, error?.message || "RDP 连接失败");
   };
   guacClient.onclipboard = (stream: any, mimetype: string) => {
     const reader = new Guacamole.StringReader(stream);
@@ -348,12 +444,12 @@ function connectRDP(session: DesktopSession) {
   };
   if (!session.readOnly) {
     guacMouse = new Guacamole.Mouse(display.getElement());
-    guacMouse.onEach(["mousedown", "mousemove", "mouseup"], (event: any) =>
-      guacClient?.sendMouseState(event.state, true),
-    );
-    guacKeyboard = new Guacamole.Keyboard(document);
+    guacMouse.onEach(["mousedown", "mousemove", "mouseup"], (event: any) => {
+      if (guacClient === client) client.sendMouseState(event.state, true);
+    });
+    guacKeyboard ||= new Guacamole.Keyboard(document);
     guacKeyboard.onkeydown = (keysym: number) => {
-      if (!props.visible) return true;
+      if (!props.visible || !connected.value || guacClient !== client) return true;
       if (
         (keysym === 0x76 || keysym === 0x56) &&
         [0xffe3, 0xffe4].some((modifier) => pressedRDPKeys.has(modifier))
@@ -398,7 +494,11 @@ function resizeDisplay() {
     connectionInfo.value = `${width}×${height} · ${Math.round(96 * desktopPixelRatio())} DPI · ${props.host.rdpQuality === "smooth" ? "流畅" : "清晰"}${connectionLatency ? ` · ${connectionLatency} ms` : ""}`;
   }
   if (connected.value && !props.host.desktopReadOnly) {
+    if (!props.visible || bounds.width <= 0 || bounds.height <= 0) return;
     const size = viewportPixels();
+    if (size.width === lastRDPWidth && size.height === lastRDPHeight) return;
+    lastRDPWidth = size.width;
+    lastRDPHeight = size.height;
     guacClient.sendSize(size.width, size.height);
   }
 }
@@ -546,7 +646,10 @@ watch(scaleMode, resizeDisplay);
 watch(
   () => props.visible,
   (visible) => {
-    if (visible) return void nextTick(resizeDisplay);
+    if (visible) return void nextTick(() => {
+      resumeDesktop();
+      resizeDisplay();
+    });
     releasePressedKeys();
   },
 );
@@ -555,14 +658,23 @@ onMounted(() => {
   if (viewport.value) resizeObserver.observe(viewport.value);
   document.addEventListener("paste", handleDesktopPaste, true);
   document.addEventListener("fullscreenchange", resizeDisplay);
+  document.addEventListener("visibilitychange", resumeDesktop);
   window.addEventListener("blur", releasePressedKeys);
+  window.addEventListener("focus", resumeDesktop);
+  window.addEventListener("pageshow", resumeDesktop);
+  window.addEventListener("online", resumeDesktop);
   void connectDesktop();
 });
 onBeforeUnmount(() => {
+  disposed = true;
   resizeObserver?.disconnect();
   document.removeEventListener("paste", handleDesktopPaste, true);
   document.removeEventListener("fullscreenchange", resizeDisplay);
+  document.removeEventListener("visibilitychange", resumeDesktop);
   window.removeEventListener("blur", releasePressedKeys);
+  window.removeEventListener("focus", resumeDesktop);
+  window.removeEventListener("pageshow", resumeDesktop);
+  window.removeEventListener("online", resumeDesktop);
   clearReconnect();
   disconnect();
 });
@@ -653,7 +765,7 @@ onBeforeUnmount(() => {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  background: #0d1014;
+  background: var(--field-bg);
 }
 .remote-desktop-toolbar {
   display: flex;
@@ -669,21 +781,21 @@ onBeforeUnmount(() => {
 .desktop-connection { gap: 8px; }
 .desktop-connection strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .desktop-connection small { color: var(--muted, #8f9aa5); font-size: 11px; white-space: nowrap; }
-.clipboard-status { color: #8f9aa5; font-size: 10px; white-space: nowrap; }
+.clipboard-status { color: var(--muted); font-size: 10px; white-space: nowrap; }
 .clipboard-status.synced { color: #67c99a; }
 .clipboard-status.blocked { color: #e0ad57; }
-.traffic-info { color: #8f9aa5; font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.traffic-info { color: var(--muted); font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .desktop-tools { flex: none; gap: 5px; }
 .desktop-status { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #7e8992; }
 .desktop-status.connected { background: #58c98d; box-shadow: 0 0 0 3px rgba(88, 201, 141, 0.12); }
 .desktop-status.connecting { background: #e0ad57; }
 .desktop-status.error { background: #ef7169; }
-.remote-desktop-viewport { position: relative; min-width: 0; min-height: 0; overflow: auto; background: #090b0e; }
+.remote-desktop-viewport { position: relative; min-width: 0; min-height: 0; overflow: auto; background: var(--workspace-bg); }
 .remote-desktop-surface { width: 100%; height: 100%; display: grid; place-items: center; outline: none; }
 .remote-desktop-surface :deep(canvas) { max-width: none; max-height: none; }
-.desktop-status-layer { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; background: rgba(9, 11, 14, 0.9); color: #cbd3d9; }
-.desktop-status-layer button { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border: 1px solid #3b444c; border-radius: 6px; background: #20262c; color: #e7ecef; cursor: pointer; }
-.desktop-status-spinner { width: 24px; height: 24px; border: 2px solid #394149; border-top-color: #68c99a; border-radius: 50%; }
+.desktop-status-layer { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; background: rgba(9, 11, 14, 0.9); color: var(--text); }
+.desktop-status-layer button { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-2); color: var(--text); cursor: pointer; }
+.desktop-status-spinner { width: 24px; height: 24px; border: 2px solid var(--line-strong); border-top-color: #68c99a; border-radius: 50%; }
 .desktop-status-spinner.connecting { animation: desktop-spin 0.8s linear infinite; }
 .desktop-status-spinner.error { border-color: #ef7169; }
 .desktop-status-spinner.disconnected { border-color: #7e8992; }

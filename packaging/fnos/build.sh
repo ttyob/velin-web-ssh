@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
-VERSION="${VELIN_FNOS_VERSION:-0.3.46}"
+VERSION="${VELIN_FNOS_VERSION:-0.3.47}"
 VERSION="${VERSION#v}"
 ARCH="${VELIN_FNOS_ARCH:-$(uname -m)}"
 GUACD_IMAGE="${VELIN_FNOS_GUACD_IMAGE:-guacamole/guacd:1.6.0}"
@@ -178,6 +178,17 @@ chmod 755 "$STAGE_DIR/app/bin/guacd"
 sed -i "s/^version=.*/version=${VERSION}/" "$STAGE_DIR/manifest"
 sed -i "s/^platform=.*/platform=${FNOS_PLATFORM}/" "$STAGE_DIR/manifest"
 
+# fnOS and browsers can retain desktop icons across application upgrades.
+# Give each package version a distinct URL so corrected icons take effect.
+ICON_CACHE_KEY="$(printf '%s' "$VERSION" | tr -c 'A-Za-z0-9._-' '-')"
+for ICON_SIZE in 64 256; do
+  cp "$STAGE_DIR/app/ui/images/icon_${ICON_SIZE}.png" \
+    "$STAGE_DIR/app/ui/images/icon_${ICON_CACHE_KEY}_${ICON_SIZE}.png"
+done
+sed -i \
+  "s#images/icon_{0}\\.png#images/icon_${ICON_CACHE_KEY}_{0}.png#" \
+  "$STAGE_DIR/app/ui/config"
+
 mkdir -p "$OUTPUT_DIR"
 (
   cd "$STAGE_DIR"
@@ -198,12 +209,23 @@ if ! tar -xOf "$PACKAGE_FILE" app.tgz | tar -tzf - >/dev/null; then
   echo "fnpack produced an invalid app.tgz tar archive" >&2
   exit 1
 fi
-for ICON_PATH in ui/images/icon_64.png ui/images/icon_256.png; do
+for ICON_PATH in \
+  ui/images/icon_64.png \
+  ui/images/icon_256.png \
+  "ui/images/icon_${ICON_CACHE_KEY}_64.png" \
+  "ui/images/icon_${ICON_CACHE_KEY}_256.png"
+do
   if ! tar -xOf "$PACKAGE_FILE" app.tgz | tar -tzf - | grep -Fxq "$ICON_PATH"; then
     echo "fnpack omitted required desktop icon: $ICON_PATH" >&2
     exit 1
   fi
 done
+EXPECTED_ICON_REF="images/icon_${ICON_CACHE_KEY}_{0}.png"
+if ! tar -xOf "$PACKAGE_FILE" app.tgz | tar -xOzf - ui/config | \
+  grep -Fq "\"icon\": \"$EXPECTED_ICON_REF\""; then
+  echo "fnpack desktop config does not reference $EXPECTED_ICON_REF" >&2
+  exit 1
+fi
 
 OUTPUT_FILE="$OUTPUT_DIR/velin-web-ssh-fnos-native-${ARCH}-${VERSION}.fpk"
 cp "$PACKAGE_FILE" "$OUTPUT_FILE"

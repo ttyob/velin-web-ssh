@@ -127,8 +127,8 @@ let pasting = false;
 let terminalTextarea: HTMLTextAreaElement | undefined;
 let terminalTitle = "";
 let conversationMode = false;
-let transcriptModeForced = false;
-let connectionRecoveryOpen = false;
+const connectionRecoveryOpen = ref(false);
+let attaching = false;
 let lastConnectionNotice = "";
 let outputSettleTimer: number | undefined;
 let resizeFrame: number | undefined;
@@ -143,10 +143,24 @@ let resizeFollowingBottom = false;
 let resizeAwaitingRemoteOutput = false;
 let resizeRemoteOutputSeen = false;
 let pendingWrites = 0;
+let pendingReplayWrites = 0;
+let selectingTerminalText = false;
+let applicationClickStart: { x: number; y: number; row: number; column: number } | undefined;
+let applicationHoverEvent: MouseEvent | undefined;
+const applicationButtonHovered = ref(false);
+let remoteSelectionText = "";
+let clipboardWarningShown = false;
 let resizeAfterWrite = false;
 let scrollFrame: number | undefined;
 let smoothScrolling = false;
 const remoteHistoryMode = ref(false);
+const remoteAlternateScreen = ref(false);
+const localAlternateScreen = ref(false);
+const applicationAlternateScreen = computed(() =>
+  props.session.sessionMode === "tmux"
+    ? remoteAlternateScreen.value
+    : localAlternateScreen.value,
+);
 let historyTransitionSnapshot: HTMLElement | undefined;
 let historyTransitionTimer: number | undefined;
 let historyTransitionFrame: number | undefined;
@@ -189,7 +203,7 @@ const latencyTone = computed(() => {
   return "bad";
 });
 const showRemoteHistoryScrollbar = computed(
-  () => props.session.sessionMode === "tmux" && remoteHistorySize.value > 0,
+  () => props.session.sessionMode === "tmux" && !remoteAlternateScreen.value && remoteHistorySize.value > 0,
 );
 const remoteHistoryThumbStyle = computed(() => {
 	const positionRatio = remoteHistorySize.value
@@ -262,15 +276,31 @@ function isAtBottom() {
 function handleTerminalWheel(event: WheelEvent) {
 	if (!terminal || event.deltaY === 0) return true;
 	const buffer = terminal.buffer.active;
-	// Normal SSH sessions have no remote transcript for alternate-screen apps.
-	// In tmux mode, keep upward wheel input out of the TUI so xterm does not
-	// turn one gesture into a burst of cursor keys.
-	if (
-		buffer.type === "alternate" &&
-		props.session.sessionMode !== "tmux" &&
-		!remoteHistoryMode.value
-	)
-		return true;
+	const useRemoteHistory =
+		props.session.sessionMode === "tmux" &&
+		controller.value &&
+		socket?.readyState === WebSocket.OPEN;
+	// tmux's outer alternate buffer and mouse mode do not identify the pane's
+	// buffer. Full-screen applications own their history; an inline application
+	// or shell uses tmux history, even if it has enabled mouse reporting.
+	if (!remoteHistoryMode.value) {
+		if (applicationAlternateScreen.value) {
+			if (terminal.modes.mouseTrackingMode !== "none") return true;
+			// Page keys jump by a viewport and arrows edit the composer. Send
+			// native wheel steps to the transcript even when capture is disabled.
+			const lines = terminalWheelLines(event);
+			if (lines !== 0) {
+				sendApplicationMouse("scroll_application", {
+					lines,
+					row: Math.max(1, Math.floor(terminal.rows / 3)),
+					column: Math.max(1, Math.floor(terminal.cols / 2)),
+				});
+			}
+			event.preventDefault();
+			event.stopPropagation();
+			return false;
+		}
+	}
 	const scrollingUp = event.deltaY < 0;
 	const viewingHistory = buffer.viewportY < buffer.baseY;
   // Full-screen TUIs can enable mouse tracking and consume wheel events as
@@ -278,36 +308,27 @@ function handleTerminalWheel(event: WheelEvent) {
 	if (
 		scrollingUp ||
 		viewingHistory ||
-		remoteHistoryMode.value
+		remoteHistoryMode.value ||
+		useRemoteHistory
 	) {
-		const now = performance.now();
-		if (now - lastWheelAt > 180) wheelRemainder = 0;
-		lastWheelAt = now;
-		const normalized = normalizeTerminalWheelDelta(
-			event.deltaY,
-			event.deltaMode,
-			wheelRemainder,
-		);
-		wheelRemainder = normalized.remainder;
-		const atLocalTop = buffer.viewportY === 0;
-		if (normalized.lines !== 0) {
-			if (
-				remoteHistoryMode.value ||
-				(scrollingUp &&
-					atLocalTop &&
-					remoteHistorySize.value > 0 &&
-					controller.value &&
-					socket?.readyState === WebSocket.OPEN)
-			) {
-				if (!remoteHistoryMode.value) {
+		const lines = terminalWheelLines(event);
+		if (lines !== 0) {
+			// tmux redraws and copy-mode navigation also enter xterm's local
+			// scrollback. Only tmux's own history contains the original lines.
+			if (useRemoteHistory) {
+				if (
+					!remoteHistoryMode.value &&
+					scrollingUp &&
+					remoteHistorySize.value > 0
+				) {
 					captureHistoryTransitionSnapshot();
 					remoteHistoryMode.value = true;
 					historyLocked.value = false;
 					terminal.scrollToBottom();
 				}
-				sendRemoteHistoryScroll(normalized.lines);
+				sendRemoteHistoryScroll(lines);
 			} else {
-				terminal.scrollLines(normalized.lines);
+				terminal.scrollLines(lines);
 			}
 		}
 		event.preventDefault();
@@ -315,6 +336,76 @@ function handleTerminalWheel(event: WheelEvent) {
     return false;
   }
 	return true;
+}
+
+function terminalWheelLines(event: WheelEvent) {
+	const now = performance.now();
+	if (now - lastWheelAt > 180) wheelRemainder = 0;
+	lastWheelAt = now;
+	const normalized = normalizeTerminalWheelDelta(event.deltaY, event.deltaMode, wheelRemainder);
+	wheelRemainder = normalized.remainder;
+	return normalized.lines;
+}
+
+function canBridgeApplicationMouse() {
+  return terminal && applicationAlternateScreen.value &&
+    terminal.modes.mouseTrackingMode === "none" && !remoteHistoryMode.value &&
+    !replaying && !pendingReplayWrites && controller.value &&
+    socket?.readyState === WebSocket.OPEN;
+}
+
+function sendApplicationMouse(
+  type: "scroll_application" | "click_application",
+  position: { row: number; column: number; lines?: number },
+) {
+  if (!canBridgeApplicationMouse()) return;
+  socket!.send(JSON.stringify({ type, ...position }));
+}
+
+function applicationMouseCell(event: MouseEvent) {
+  const screen = terminal?.element?.querySelector(".xterm-screen");
+  if (!terminal || !screen) return;
+  const rect = screen.getBoundingClientRect();
+  if (!rect.width || !rect.height || event.clientX < rect.left ||
+      event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom) return;
+  return {
+    row: Math.floor((event.clientY - rect.top) * terminal.rows / rect.height) + 1,
+    column: Math.floor((event.clientX - rect.left) * terminal.cols / rect.width) + 1,
+  };
+}
+
+function updateApplicationButtonHover(event?: MouseEvent) {
+  if (event) applicationHoverEvent = event;
+  applicationButtonHovered.value = false;
+  const pointer = applicationHoverEvent;
+  if (!terminal || !pointer || !applicationAlternateScreen.value ||
+      !controller.value || !connected.value || !props.visible ||
+      remoteHistoryMode.value || replaying || pointer.buttons ||
+      pointer.shiftKey || pointer.ctrlKey || pointer.altKey || pointer.metaKey) return;
+  const cell = applicationMouseCell(pointer);
+  if (!cell) return;
+  const buffer = terminal.buffer.active;
+  const line = buffer.getLine(buffer.viewportY + cell.row - 1);
+  if (!line) return;
+  // This control is drawn into terminal cells, so it has no DOM button whose
+  // cursor the browser can change. Match its standalone label, not prose.
+  const text = line.translateToString(true);
+  const button = /(?:↓\s*)?Back to bottom(?:\s*·\s*esc)?/.exec(text);
+  if (!button || text.trim() !== button[0]) return;
+  const offset = line.translateToString(false, 0, cell.column - 1).length;
+  applicationButtonHovered.value = offset >= button.index &&
+    offset < button.index + button[0].length;
+}
+
+function clearApplicationButtonHover() {
+  applicationHoverEvent = undefined;
+  applicationButtonHovered.value = false;
+}
+
+function updateRemoteHistoryState(message: Record<string, unknown>) {
+	remoteAlternateScreen.value = Boolean(message.alternateScreen);
+	if (remoteAlternateScreen.value && remoteHistoryMode.value) leaveRemoteHistoryMode();
+	updateRemoteHistorySize(Number(message.historySize) || 0);
 }
 
 function sendRemoteHistoryScroll(lines: number) {
@@ -347,8 +438,9 @@ function updateRemoteHistorySize(size: number) {
 }
 
 function scheduleHistoryStateRefresh() {
-  clearTimeout(historyRefreshTimer);
+  if (historyRefreshTimer !== undefined) return;
   historyRefreshTimer = window.setTimeout(() => {
+    historyRefreshTimer = undefined;
     if (socket?.readyState === WebSocket.OPEN)
       socket.send(JSON.stringify({ type: "history_state" }));
   }, 600);
@@ -373,6 +465,11 @@ function sendRemoteHistoryPosition(position: number, immediate = false) {
 			);
 			return;
 		}
+		// Show the remote viewport for wheel, keyboard and scrollbar requests,
+		// including when local search previously moved xterm into scrollback.
+		terminal?.scrollToBottom();
+		historyLocked.value = false;
+		hasNewOutput.value = false;
 		historyRequestPosition = pendingHistoryPosition;
 		historyRequestSequence++;
 		historyRequestInFlight = historyRequestSequence;
@@ -607,7 +704,7 @@ function resumeOutputFollow(smooth = false) {
   scrollFrame = requestAnimationFrame(step);
 }
 
-function writeTerminal(data: Uint8Array, callback?: () => void) {
+function writeTerminal(data: Uint8Array, callback?: () => void, isReplay = false) {
   if (!terminal) return callback?.();
   const resizingAtBottom = Boolean(resizeSnapshot && resizeFollowingBottom);
   if (!resizingAtBottom && (historyLocked.value || !isAtBottom())) {
@@ -617,10 +714,13 @@ function writeTerminal(data: Uint8Array, callback?: () => void) {
   // xterm keeps ydisp aligned with ybase when already at the bottom and
   // preserves the viewport when the user has scrolled up.
   pendingWrites++;
+  if (isReplay) pendingReplayWrites++;
   terminal.write(data, () => {
     updateConversationMode();
     pendingWrites = Math.max(0, pendingWrites - 1);
+    if (isReplay) pendingReplayWrites = Math.max(0, pendingReplayWrites - 1);
     callback?.();
+    updateApplicationButtonHover();
     if (resizeSnapshot) {
       if (resizeFollowingBottom) {
         historyLocked.value = false;
@@ -645,20 +745,13 @@ function updateConversationMode() {
   const titleMatch = /(?:^|[\s/])(codex|claude|aider|gemini|opencode|goose|cursor-agent)(?:$|\s)/i.test(
     terminalTitle.trim(),
   );
-  const activeScreen = terminal.buffer.active.type === "alternate";
-  const detected = transcriptModeForced || titleMatch || activeScreen;
+  const activeScreen =
+    props.session.sessionMode !== "tmux" &&
+    terminal.buffer.active.type === "alternate";
+  const detected = titleMatch || activeScreen;
   if (detected === conversationMode) return;
   conversationMode = detected;
   emit("conversation", props.session.id, detected);
-}
-
-function forceTranscriptMode() {
-  if (transcriptModeForced) return;
-  transcriptModeForced = true;
-  if (!conversationMode) {
-    conversationMode = true;
-    emit("conversation", props.session.id, true);
-  }
 }
 
 function resetTerminalForReplay() {
@@ -744,7 +837,11 @@ function finishReplay(current: WebSocket) {
 }
 
 async function ensureAttached() {
+  if (disposed || attaching || connectionRecoveryOpen.value) return;
+  attaching = true;
+  clearTimeout(reconnectTimer);
   status.value = "reconnecting";
+  statusMessage.value = "";
   try {
     await api(`/api/sessions/${props.session.id}/restore`, {
       method: "POST",
@@ -752,66 +849,31 @@ async function ensureAttached() {
     });
     connectSocket();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "恢复失败";
-    if (
-      error instanceof ApiError &&
-      error.body.code === "normal_session_ended"
-    ) {
-      status.value = "ended";
-      statusMessage.value = message;
-      emit("status", props.session.id, status.value, statusMessage.value);
-      return;
-    } else if (message.toLowerCase().includes("credential required")) {
-      status.value = "auth_required";
-      statusMessage.value = "需要重新输入 SSH 凭据";
-      try {
-        const { value } = await ElMessageBox.prompt(
-          "远程 tmux 任务仍在运行，请输入同一远程账号的 SSH 密码。",
-          "恢复会话",
-          {
-            confirmButtonText: "重新附着",
-            cancelButtonText: "稍后处理",
-            inputType: "password",
-            inputValidator: (v) => Boolean(v) || "请输入密码",
-          },
-        );
-        await restoreWith({ secret: value });
-        connectSocket();
-        return;
-      } catch {}
-    } else if (
-      error instanceof ApiError &&
-      (error.body.code === "unknown_host_key" ||
-        error.body.code === "host_key_changed")
-    ) {
-      try {
-        await ElMessageBox.confirm(
-          `远程主机${error.body.hostName ? `“${error.body.hostName}”` : ""}${error.body.hostAddress ? `（${error.body.hostAddress}）` : ""}指纹：\n${error.body.fingerprint}`,
-          "确认主机指纹",
-          {
-            confirmButtonText: "信任并恢复",
-            cancelButtonText: "取消",
-            type: "warning",
-          },
-        );
-        await restoreWith({ trustFingerprint: error.body.fingerprint || "" });
-        connectSocket();
-        return;
-      } catch {}
-    } else {
-      status.value =
-        props.session.status === "auth_required"
-          ? "auth_required"
-          : "unreachable";
-      statusMessage.value = message;
-	  scheduleReconnect();
-    }
-    emit("status", props.session.id, status.value, statusMessage.value);
+    if (disposed) return;
+    const failureStatus = applyConnectionError(error);
+    if (failureStatus === "auth_required" || failureStatus === "host_key_required")
+      await recoverConnection(failureStatus, error instanceof ApiError ? { ...error.body } : {});
+    else if (failureStatus === "unreachable") scheduleReconnect();
+  } finally {
+    attaching = false;
   }
 }
 
+function applyConnectionError(error: unknown) {
+  const code = error instanceof ApiError ? error.body.code : "";
+  statusMessage.value = error instanceof Error ? error.message : "恢复失败";
+  if (code === "normal_session_ended") status.value = "ended";
+  else if (code === "unknown_host_key" || code === "host_key_changed")
+    status.value = "host_key_required";
+  else if (statusMessage.value.toLowerCase().includes("credential required"))
+    status.value = "auth_required";
+  else status.value = "unreachable";
+  emit("status", props.session.id, status.value, statusMessage.value);
+  return status.value;
+}
+
 function scheduleReconnect() {
-  if (disposed || status.value === "ended" || status.value === "auth_required") return;
+  if (disposed || connectionRecoveryOpen.value || ["ended", "auth_required", "host_key_required"].includes(status.value)) return;
   clearTimeout(reconnectTimer);
   const delay = reconnectDelay(reconnectAttempts);
   reconnectAttempts = Math.min(reconnectAttempts + 1, 5);
@@ -841,6 +903,7 @@ async function restoreWith(extra: {
   secret?: string;
   trustFingerprint?: string;
 }) {
+  if (disposed) return;
   await api(`/api/sessions/${props.session.id}/restore`, {
     method: "POST",
     body: json({
@@ -858,9 +921,11 @@ function writeConnectionNotice(message: string, tone: "muted" | "error" = "muted
   terminal.writeln(`\r\n\x1b[${color}m[VelinWebSSH] ${clean}\x1b[0m`);
 }
 
-async function recoverConnection(statusName: string, message: string, detail: Record<string, unknown> = {}) {
-  if (connectionRecoveryOpen) return;
-  connectionRecoveryOpen = true;
+async function recoverConnection(statusName: string, detail: Record<string, unknown> = {}) {
+  if (disposed || connectionRecoveryOpen.value) return;
+  if (statusName !== "auth_required" && statusName !== "host_key_required") return;
+  clearTimeout(reconnectTimer);
+  connectionRecoveryOpen.value = true;
   try {
     if (statusName === "auth_required") {
       const { value } = await ElMessageBox.prompt(
@@ -873,7 +938,9 @@ async function recoverConnection(statusName: string, message: string, detail: Re
           inputValidator: (v) => Boolean(v) || "请输入密码",
         },
       );
+      if (disposed) return;
       await restoreWith({ secret: value });
+      if (disposed) return;
       status.value = "reconnecting";
       statusMessage.value = "正在使用输入的密码重试连接";
       connectSocket();
@@ -889,16 +956,20 @@ async function recoverConnection(statusName: string, message: string, detail: Re
           type: "warning",
         },
       );
+      if (disposed) return;
       await restoreWith({ trustFingerprint: String(detail.fingerprint) });
+      if (disposed) return;
       status.value = "reconnecting";
       statusMessage.value = "正在使用已确认的主机指纹重试连接";
       connectSocket();
       return;
     }
-    if (statusName === "unreachable") writeConnectionNotice(message, "error");
-  } catch {}
+  } catch (error) {
+    if (!disposed && error !== "cancel" && error !== "close")
+      applyConnectionError(error);
+  }
   finally {
-    connectionRecoveryOpen = false;
+    connectionRecoveryOpen.value = false;
   }
 }
 
@@ -927,10 +998,6 @@ function connectSocket() {
 	terminalLatency.value = undefined;
 	latencyPingAt = 0;
 	reconnectAttempts = 0;
-    if (status.value !== "creating") {
-      status.value = "attached";
-      emit("status", props.session.id, "attached");
-    }
     const sendPing = () => {
       if (current.readyState !== WebSocket.OPEN || latencyPingAt) return;
       latencyPingAt = performance.now();
@@ -953,11 +1020,10 @@ function connectSocket() {
 		} else if (message.type === "hello") {
       clientID = message.clientID || "";
       controller.value = Boolean(clientID && message.controller === clientID);
-			updateRemoteHistorySize(Number(message.historySize) || 0);
+			updateRemoteHistoryState(message);
 			pendingHistoryPosition = remoteHistorySize.value;
 			historyRequestPosition = remoteHistorySize.value;
 			historyRequestInFlight = 0;
-      sendTerminalTheme();
       replaying = true;
       const nextStreamID = String(message.streamID || "");
       replayResumesCurrentTerminal =
@@ -979,15 +1045,14 @@ function connectSocket() {
         hasNewOutput.value = false;
       }
       terminalInitialized = true;
-      if (message.status && message.status !== "attached") {
-        status.value = message.status;
-        statusMessage.value = message.message || "";
-        emit("status", props.session.id, message.status, statusMessage.value);
-        if (message.status === "creating")
-          writeConnectionNotice("正在建立 SSH 连接，请稍候…");
-        else if (message.status === "auth_required" || message.status === "host_key_required")
-          void recoverConnection(message.status, message.message || "SSH 连接失败", message);
-      }
+      status.value = message.status || "attached";
+      statusMessage.value = message.message || "";
+      emit("status", props.session.id, status.value, statusMessage.value);
+      sendTerminalTheme();
+      if (message.status === "creating")
+        writeConnectionNotice("正在建立 SSH 连接，请稍候…");
+      else if (message.status === "auth_required" || message.status === "host_key_required")
+        void recoverConnection(message.status, message);
       if (controller.value) flushPendingInput();
       if (seedReplayFromPreview && replayPreviewData?.length) {
         const seed = replayPreviewData;
@@ -997,13 +1062,13 @@ function connectSocket() {
         writeTerminal(seed, () => {
           replaySeedPending = false;
           if (replayFinishPending === current) finishReplay(current);
-        });
+        }, true);
       }
       // New servers stream replay chunks and finish with replay_end. Keep the
       // legacy inline-data path for older connections during a rolling update.
       if (message.data) {
         resetTerminalForReplay();
-        writeTerminal(base64ToBytes(message.data), () => finishReplay(current));
+        writeTerminal(base64ToBytes(message.data), () => finishReplay(current), true);
       }
     } else if (message.type === "replay_preview" && message.data) {
       showReplayPreview(base64ToBytes(message.data));
@@ -1023,6 +1088,7 @@ function connectSocket() {
 	          if (!historyLocked.value) terminal?.scrollToBottom();
 					if (message.replayFinal) finishReplay(current);
 				},
+				true,
 			);
     } else if (message.type === "replay_end") {
       resetTerminalForReplay();
@@ -1053,7 +1119,7 @@ function connectSocket() {
       scheduleHistoryStateRefresh();
       scheduleOutputSettledAttention();
 		} else if (message.type === "history_state") {
-			updateRemoteHistorySize(Number(message.historySize) || 0);
+			updateRemoteHistoryState(message);
 			if (!remoteHistoryMode.value) {
 				pendingHistoryPosition = remoteHistorySize.value;
 				historyRequestPosition = remoteHistorySize.value;
@@ -1125,13 +1191,23 @@ function connectSocket() {
       status.value = message.status;
       statusMessage.value = message.message || "";
       emit("status", props.session.id, message.status, message.message);
-      if (message.status === "attached")
-        writeConnectionNotice("SSH 连接已建立");
+      if (message.status === "attached") {
+        // The initial hello can precede SSH PTY startup. Retry geometry and
+        // theme once it is ready, even if this size was previously attempted.
+        lastSentCols = 0;
+        lastSentRows = 0;
+        sendTerminalSize();
+        sendTerminalTheme();
+        resize();
+      }
       else if (message.status === "creating")
         writeConnectionNotice("正在建立 SSH 连接，请稍候…");
+      else if (message.status === "auth_required" || message.status === "host_key_required") {
+        writeConnectionNotice(message.message || "等待确认后继续连接");
+        void recoverConnection(message.status, message);
+      }
       else {
         writeConnectionNotice(message.message || "SSH 连接失败", "error");
-        void recoverConnection(message.status, message.message || "SSH 连接失败", message);
       }
     }
   };
@@ -1163,7 +1239,10 @@ function connectSocket() {
 }
 
 function sendTerminalSize() {
-  if (!terminal || socket?.readyState !== WebSocket.OPEN || !controller.value)
+  if (
+    !terminal || socket?.readyState !== WebSocket.OPEN ||
+    !controller.value || status.value !== "attached"
+  )
     return;
   if (terminal.cols === lastSentCols && terminal.rows === lastSentRows) return;
   socket.send(
@@ -1177,7 +1256,10 @@ function sendTerminalSize() {
   lastSentRows = terminal.rows;
 }
 function sendTerminalTheme() {
-  if (socket?.readyState !== WebSocket.OPEN || !controller.value) return;
+  if (
+    socket?.readyState !== WebSocket.OPEN ||
+    !controller.value || status.value !== "attached"
+  ) return;
   const theme = terminalXtermTheme(props.preferences.terminalTheme);
   socket.send(
     JSON.stringify({
@@ -1538,22 +1620,85 @@ function handleTerminalPaste(event: ClipboardEvent) {
   pasteThroughTerminal(text);
 }
 async function copySelection() {
-  const selected = terminal?.getSelection() || "";
+  const selected = terminal?.getSelection() || remoteSelectionText;
   if (!selected) return ElMessage.info("请先选中终端内容");
+  await copyTerminalText(selected);
+}
+async function copyTerminalText(selected: string, automatic = false) {
   try {
     await navigator.clipboard.writeText(selected);
   } catch {
+    const focused = document.activeElement as HTMLElement | null;
     const input = document.createElement("textarea");
     input.value = selected;
     input.style.position = "fixed";
     input.style.opacity = "0";
     document.body.appendChild(input);
     input.select();
-    const copied = document.execCommand("copy");
-    input.remove();
-    if (!copied) return ElMessage.error("浏览器禁止访问剪贴板");
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch {} finally {
+      input.remove();
+      focused?.focus({ preventScroll: true });
+    }
+    if (!copied) {
+      if (!automatic) ElMessage.error("浏览器禁止访问剪贴板");
+      else if (!clipboardWarningShown) {
+        clipboardWarningShown = true;
+        ElMessage.warning("自动复制受限，请点击终端上方的复制按钮");
+      }
+      return;
+    }
   }
-  ElMessage.success("已复制");
+  clipboardWarningShown = false;
+  if (!automatic) ElMessage.success("已复制");
+}
+function startSelectionCopy(event: MouseEvent) {
+  applicationClickStart = undefined;
+  if (event.button !== 0) return;
+  selectingTerminalText = true;
+  if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey ||
+      event.detail > 1 || !canBridgeApplicationMouse()) return;
+  const cell = applicationMouseCell(event);
+  if (cell) applicationClickStart = { ...cell, x: event.clientX, y: event.clientY };
+}
+function trackApplicationClick(event: MouseEvent) {
+  if (applicationClickStart && Math.hypot(
+    event.clientX - applicationClickStart.x, event.clientY - applicationClickStart.y,
+  ) > 3) applicationClickStart = undefined;
+}
+function finishSelectionCopy(event: MouseEvent) {
+  if (!selectingTerminalText || event.button !== 0) return;
+  selectingTerminalText = false;
+  trackApplicationClick(event);
+  const click = applicationClickStart;
+  applicationClickStart = undefined;
+  // Read the final selection after xterm's document mouseup handler has run.
+  queueMicrotask(() => {
+    if (disposed || !props.visible) return;
+    const selected = terminal?.getSelection();
+    if (selected) void copyTerminalText(selected, true);
+    else if (click && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      sendApplicationMouse("click_application", { row: click.row, column: click.column });
+    }
+  });
+}
+function handleTerminalClipboard(value: string) {
+  // OSC 52 is used by Claude Code and tmux for their own highlighted selection.
+  // History replay and clipboard queries must never read or change clipboard.
+  if (disposed || !props.visible || replaying || pendingReplayWrites) return true;
+  const separator = value.indexOf(";");
+  const encoded = separator < 0 ? "" : value.slice(separator + 1);
+  if (!encoded || encoded === "?" || encoded.length > 1_400_000) return true;
+  try {
+    const selected = new TextDecoder().decode(base64ToBytes(encoded));
+    if (selected) {
+      remoteSelectionText = selected;
+      void copyTerminalText(selected, true);
+    }
+  } catch {}
+  return true;
 }
 async function pasteClipboard() {
   try {
@@ -1769,14 +1914,13 @@ onMounted(() => {
     fontWeight: props.preferences.fontWeight,
     letterSpacing: props.preferences.letterSpacing,
     theme: terminalXtermTheme(props.preferences.terminalTheme),
-    // Codex and other interactive tools can emit thousands of lines quickly.
-    // Keep the early Codex transcript available while the TUI is still
-    // redrawing the active screen.
+    // Keep local history for ordinary SSH and read-only views. tmux
+    // controllers browse the remote history to avoid redraw artifacts.
     scrollback: 100000,
     scrollOnUserInput: true,
-    // Normal SSH alternate-screen apps still rely on xterm's native wheel
-    // forwarding. Limit the generated cursor/mouse event rate there as well.
-    scrollSensitivity: 0.25,
+    // Native mouse reporting already sends one report per wheel event. Lower
+    // sensitivity can swallow reversed gestures through fractional carryover.
+    scrollSensitivity: 1,
     // A short duration keeps normal output smooth without making fast TUI
     // updates visibly lag behind the remote session.
     // Streamed output should follow immediately; animated scrolling is
@@ -1791,42 +1935,20 @@ onMounted(() => {
   terminal.loadAddon(search);
   terminal.loadAddon(new WebLinksAddon(previewTerminalLink));
   terminal.open(container.value!);
-  if (props.session.sessionMode === "tmux") {
-    // Full-screen CLIs such as Codex redraw a footer inside a partial scroll
-    // region. xterm correctly honors that region, but lines leaving it are
-    // overwritten instead of entering scrollback. Keep the browser buffer a
-    // transcript for tmux sessions once such a region is detected.
-    terminal.parser.registerCsiHandler({ final: "r" }, (params) => {
-      if (transcriptModeForced) return true;
-      const values = params.map((value) =>
-        Array.isArray(value) ? value[0] || 0 : value,
-      );
-      const top = values[0] || 1;
-      const bottom = values[1] || terminal?.rows || 0;
-      if (values.length > 1 && (top > 1 || bottom < (terminal?.rows || 0))) {
-        forceTranscriptMode();
-        return true;
-      }
-      return false;
-    });
-    for (const final of ["h", "l"] as const) {
-      terminal.parser.registerCsiHandler({ prefix: "?", final }, (params) => {
-        const values = params.map((value) =>
-          Array.isArray(value) ? value[0] || 0 : value,
-        );
-        if (!values.some((value) => [47, 1047, 1049].includes(value)))
-          return false;
-        forceTranscriptMode();
-        return true;
-      });
-    }
-  }
+  // Honor scroll regions and screen switches so TUI redraws keep their
+  // cursor positions. tmux history is reached through the remote scrollbar.
   fitTerminal();
   if (status.value === "creating")
     writeConnectionNotice("正在建立 SSH 连接，请稍候…");
   rememberTerminalDimensions(terminal.cols, terminal.rows);
 	terminalTextarea = terminal.textarea || undefined;
 	terminalTextarea?.addEventListener("paste", handleTerminalPaste, true);
+  container.value?.addEventListener("mousedown", startSelectionCopy, true);
+  container.value?.addEventListener("mousemove", updateApplicationButtonHover);
+  container.value?.addEventListener("mouseleave", clearApplicationButtonHover);
+  document.addEventListener("mouseup", finishSelectionCopy);
+  document.addEventListener("mousemove", trackApplicationClick);
+  terminal.parser.registerOscHandler(52, handleTerminalClipboard);
   terminal.parser.registerOscHandler(7, (value) => {
     try {
       const url = new URL(value);
@@ -1841,6 +1963,9 @@ onMounted(() => {
     if (smoothScrolling) return;
     historyLocked.value = !isAtBottom();
     if (!historyLocked.value) hasNewOutput.value = false;
+  });
+  terminal.buffer.onBufferChange(buffer => {
+    localAlternateScreen.value = buffer.type === "alternate";
   });
   terminal.onResize(({ cols, rows }) =>
     rememberTerminalDimensions(cols, rows),
@@ -1862,6 +1987,14 @@ onMounted(() => {
   window.addEventListener("pageshow", handlePageShow);
   ensureAttached();
 });
+
+watch(
+  [applicationAlternateScreen, remoteHistoryMode, controller, connected, () => props.visible],
+  () => {
+    if (!props.visible) clearApplicationButtonHover();
+    else updateApplicationButtonHover();
+  },
+);
 
 watch(
   () => props.visible,
@@ -1892,6 +2025,12 @@ watch(
 );
 onBeforeUnmount(() => {
   disposed = true;
+  container.value?.removeEventListener("mousedown", startSelectionCopy, true);
+  container.value?.removeEventListener("mousemove", updateApplicationButtonHover);
+  container.value?.removeEventListener("mouseleave", clearApplicationButtonHover);
+  clearApplicationButtonHover();
+  document.removeEventListener("mouseup", finishSelectionCopy);
+  document.removeEventListener("mousemove", trackApplicationClick);
   window.removeEventListener("pagehide", handlePageHide);
   window.removeEventListener("pageshow", handlePageShow);
   clearTimeout(reconnectTimer);
@@ -1955,6 +2094,11 @@ defineExpose({
         >
       </div>
       <div class="terminal-tools">
+        <el-tooltip content="复制选中内容">
+          <button class="icon-btn" aria-label="复制选中内容" @click="copySelection">
+            <Copy :size="15" />
+          </button>
+        </el-tooltip>
         <el-tooltip :content="controller ? '释放控制权' : '请求控制权'"
           ><button
             class="icon-btn"
@@ -2028,6 +2172,8 @@ defineExpose({
 				class="terminal-canvas"
 				:class="{
 					'has-remote-history': showRemoteHistoryScrollbar,
+					'has-application-history': applicationAlternateScreen,
+					'application-button-hover': applicationButtonHovered,
 					'is-browsing-history': remoteHistoryMode,
 				}"
 			></div>
@@ -2066,10 +2212,10 @@ defineExpose({
       <ArrowDown :size="14" />
       <span>有新消息</span>
     </button>
-    <div v-if="!connected && statusMessage" class="terminal-error">
+    <div v-if="!connected && statusMessage && !connectionRecoveryOpen" class="terminal-error">
       <strong>{{ statusLabel }}</strong
       ><span>{{ statusMessage }}</span
-      ><el-button size="small" @click="ensureAttached">重新连接</el-button>
+      ><el-button size="small" @click="ensureAttached">{{ status === 'host_key_required' ? '确认主机指纹' : status === 'auth_required' ? '输入凭据' : '重新连接' }}</el-button>
     </div>
     <el-dialog
       v-model="linkPreviewOpen"
@@ -2104,3 +2250,11 @@ defineExpose({
     </el-dialog>
   </section>
 </template>
+
+<style scoped>
+.terminal-canvas.application-button-hover :deep(.xterm),
+.terminal-canvas.application-button-hover :deep(.xterm-screen),
+.terminal-canvas.application-button-hover :deep(.xterm-viewport) {
+  cursor: pointer;
+}
+</style>

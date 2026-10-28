@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +122,7 @@ type Session struct {
 	historyScrollEnd      int
 	historyScrollSequence uint64
 	historySize           int
+	alternateScreen       bool
 	historySizeUpdated    time.Time
 	closed                bool
 	connectCancel         context.CancelFunc
@@ -145,25 +145,26 @@ func (s *terminalSubscriber) close() {
 }
 
 type Event struct {
-	Type        string `json:"type"`
-	Data        string `json:"data,omitempty"`
-	Status      string `json:"status,omitempty"`
-	Message     string `json:"message,omitempty"`
-	ClientID    string `json:"clientID,omitempty"`
-	Controller  string `json:"controller,omitempty"`
-	Truncated   bool   `json:"truncated,omitempty"`
-	Requester   string `json:"requester,omitempty"`
-	ReplayFinal bool   `json:"replayFinal,omitempty"`
-	StreamID    string `json:"streamID,omitempty"`
-	Offset      uint64 `json:"offset,omitempty"`
-	HistorySize int    `json:"historySize,omitempty"`
-	Position    int    `json:"position,omitempty"`
-	Sequence    uint64 `json:"sequence,omitempty"`
-	DurationMS  int64  `json:"durationMs,omitempty"`
-	Error       string `json:"error,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	HostName    string `json:"hostName,omitempty"`
-	HostAddress string `json:"hostAddress,omitempty"`
+	Type            string `json:"type"`
+	Data            string `json:"data,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Message         string `json:"message,omitempty"`
+	ClientID        string `json:"clientID,omitempty"`
+	Controller      string `json:"controller,omitempty"`
+	Truncated       bool   `json:"truncated,omitempty"`
+	Requester       string `json:"requester,omitempty"`
+	ReplayFinal     bool   `json:"replayFinal,omitempty"`
+	StreamID        string `json:"streamID,omitempty"`
+	Offset          uint64 `json:"offset,omitempty"`
+	HistorySize     int    `json:"historySize,omitempty"`
+	AlternateScreen bool   `json:"alternateScreen,omitempty"`
+	Position        int    `json:"position,omitempty"`
+	Sequence        uint64 `json:"sequence,omitempty"`
+	DurationMS      int64  `json:"durationMs,omitempty"`
+	Error           string `json:"error,omitempty"`
+	Fingerprint     string `json:"fingerprint,omitempty"`
+	HostName        string `json:"hostName,omitempty"`
+	HostAddress     string `json:"hostAddress,omitempty"`
 }
 
 type Replay struct {
@@ -824,7 +825,7 @@ func (s *Session) connect(ctx context.Context, host store.Host, cred store.Crede
 			if strings.TrimSpace(host.InitialDir) != "" {
 				startDir = " -c " + shellQuote(strings.TrimSpace(host.InitialDir))
 			}
-			cmd := fmt.Sprintf("tmux -L %s new-session -d -s %s%s \\; set-option -t %s @velin_owner %s \\; set-option -t %s history-limit %d \\; set-option -t %s status off \\; set-window-option -t %s alternate-screen off", s.meta.TmuxSocket, s.meta.TmuxName, startDir, s.meta.TmuxName, s.meta.OwnerMarker, s.meta.TmuxName, tmuxHistoryLimit, s.meta.TmuxName, s.meta.TmuxName)
+			cmd := fmt.Sprintf("tmux -L %s new-session -d -s %s%s \\; set-option -t %s @velin_owner %s \\; set-option -t %s history-limit %d \\; set-option -t %s status off", s.meta.TmuxSocket, s.meta.TmuxName, startDir, s.meta.TmuxName, s.meta.OwnerMarker, s.meta.TmuxName, tmuxHistoryLimit, s.meta.TmuxName)
 			if out, err := run(client, cmd); err != nil {
 				client.Close()
 				return fmt.Errorf("create tmux session: %s", cleanOutput(out, err))
@@ -841,20 +842,11 @@ func (s *Session) connect(ctx context.Context, host store.Host, cred store.Crede
 			client.Close()
 			return fmt.Errorf("configure tmux history: %s", cleanOutput(out, err))
 		}
-		// Full-screen TUIs such as Codex redraw their alternate buffer in place.
-		// Keeping them on tmux's normal buffer makes those lines part of history.
-		if out, err := run(client, fmt.Sprintf("tmux -L %s set-window-option -t %s alternate-screen off", s.meta.TmuxSocket, s.meta.TmuxName)); err != nil {
+		if err := configureTmuxTerminal(s.meta, func(command string) ([]byte, error) {
+			return run(client, command)
+		}); err != nil {
 			client.Close()
-			return fmt.Errorf("configure tmux scrollback: %s", cleanOutput(out, err))
-		}
-		// Keep browser xterm.js on its normal buffer so tmux history remains
-		// available through the browser viewport scrollbar.
-		// Do not expose the partial-scroll-region capability to full-screen TUIs.
-		// Lines that leave a partial region are overwritten in place and never
-		// enter terminal scrollback, which creates gaps in long Codex responses.
-		if out, err := run(client, fmt.Sprintf("tmux -L %s set-option -as terminal-overrides ',xterm-256color:smcup@:rmcup@:csr@'", s.meta.TmuxSocket)); err != nil {
-			client.Close()
-			return fmt.Errorf("configure tmux terminal: %s", cleanOutput(out, err))
+			return err
 		}
 	}
 	sshSess, err := client.NewSession()
@@ -912,8 +904,20 @@ func (s *Session) connect(ctx context.Context, host store.Host, cred store.Crede
 	s.closed = false
 	s.meta.Status = "attached"
 	s.meta.LastError = ""
-	s.mu.Unlock()
 	_ = s.manager.store.UpdateTerminalStatus(s.meta.UserID, s.meta.ID, "attached", "")
+	// A browser may already be subscribed while Create is still dialing.
+	// Publish readiness before starting output, atomically with the metadata
+	// transition so a concurrent close cannot be followed by stale success.
+	for _, subscriber := range s.subs {
+		select {
+		case subscriber.events <- Event{Type: "status", Status: "attached"}:
+		case <-subscriber.done:
+		default:
+			// Reconnect a stalled subscriber rather than leave it "creating".
+			subscriber.close()
+		}
+	}
+	s.mu.Unlock()
 	go s.readLoop(stdout)
 	if host.KeepaliveInterval > 0 {
 		go keepalive(client, time.Duration(host.KeepaliveInterval)*time.Second)
@@ -1462,6 +1466,33 @@ func (s *Session) Write(clientID string, data []byte) error {
 	return err
 }
 
+func (s *Session) SendApplicationMouse(clientID, action string, lines, row, column int) error {
+	if !s.IsController(clientID) {
+		return ErrNotController
+	}
+	data, err := applicationMouseInput(action, lines, row, column)
+	if err != nil {
+		return err
+	}
+	meta := s.Meta()
+	if meta.SessionMode == "normal" {
+		return s.Write(clientID, data)
+	}
+	lock := s.manager.tmuxLock(meta)
+	lock.Lock()
+	defer lock.Unlock()
+	s.mu.RLock()
+	client, closed := s.sshClient, s.closed
+	s.mu.RUnlock()
+	if closed || client == nil {
+		return errors.New("terminal not attached")
+	}
+	if out, err := s.runCommand(client, tmuxApplicationMouseCommand(meta, data)); err != nil {
+		return fmt.Errorf("send application mouse: %s", cleanOutput(out, err))
+	}
+	return nil
+}
+
 func (s *Session) ScrollHistory(clientID string, lines int) error {
 	if !s.IsController(clientID) {
 		return ErrNotController
@@ -1528,52 +1559,55 @@ func (s *Session) ScrollHistory(clientID string, lines int) error {
 	return nil
 }
 
-func (s *Session) HistorySize() int {
+func (s *Session) HistoryState() (int, bool) {
 	s.mu.RLock()
 	client, meta, closed := s.sshClient, s.meta, s.closed
 	cached, updated := s.historySize, s.historySizeUpdated
+	alternate := s.alternateScreen
 	s.mu.RUnlock()
 	if closed || client == nil || meta.SessionMode == "normal" {
-		return 0
+		return 0, false
 	}
-	if !updated.IsZero() && time.Since(updated) < time.Second {
-		return cached
+	if !updated.IsZero() && time.Since(updated) < 250*time.Millisecond {
+		return cached, alternate
 	}
 	lock := s.manager.tmuxLock(meta)
 	lock.Lock()
 	defer lock.Unlock()
 	s.mu.RLock()
 	cached, updated = s.historySize, s.historySizeUpdated
+	alternate = s.alternateScreen
 	s.mu.RUnlock()
-	if !updated.IsZero() && time.Since(updated) < time.Second {
-		return cached
+	if !updated.IsZero() && time.Since(updated) < 250*time.Millisecond {
+		return cached, alternate
 	}
-	out, err := s.runCommand(client, fmt.Sprintf("tmux -L %s display-message -p -t %s '#{history_size}'", meta.TmuxSocket, meta.TmuxName))
+	out, err := s.runCommand(client, fmt.Sprintf("tmux -L %s display-message -p -t %s '#{history_size} #{alternate_on}'", meta.TmuxSocket, meta.TmuxName))
 	if err != nil {
-		return 0
+		return cached, alternate
 	}
-	size, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil || size < 0 {
-		return 0
+	size, nextAlternate, err := parseTmuxHistoryState(string(out))
+	if err != nil {
+		return cached, alternate
 	}
 	s.mu.Lock()
 	s.historySize = size
+	s.alternateScreen = nextAlternate
 	s.historySizeUpdated = time.Now()
 	s.mu.Unlock()
-	return size
+	return size, nextAlternate
 }
 
-func (s *Session) CachedHistorySize() int {
+func (s *Session) CachedHistoryState() (int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.closed || s.meta.SessionMode == "normal" {
-		return 0
+		return 0, false
 	}
-	return s.historySize
+	return s.historySize, s.alternateScreen
 }
 
 func (s *Session) SendHistoryState(clientID string) {
-	size := s.HistorySize()
+	size, alternate := s.HistoryState()
 	s.mu.RLock()
 	subscriber := s.subs[clientID]
 	s.mu.RUnlock()
@@ -1581,7 +1615,7 @@ func (s *Session) SendHistoryState(clientID string) {
 		return
 	}
 	select {
-	case subscriber.events <- Event{Type: "history_state", HistorySize: size, Position: size}:
+	case subscriber.events <- Event{Type: "history_state", HistorySize: size, AlternateScreen: alternate, Position: size}:
 	case <-subscriber.done:
 	default:
 	}

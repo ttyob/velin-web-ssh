@@ -27,7 +27,7 @@
 - TOTP、PIN 锁屏、主机指纹校验和加密备份
 - 主机资源监控、Docker/Git 工具和可选 AI Agent
 - 终端会话限时分享，支持密码、只读/可操作权限、在线预览和分享期录制
-- Linux Web 版和 Windows Wails GUI
+- Docker Web 版和飞牛 fnOS 原生应用包
 
 ## 快速安装
 
@@ -100,17 +100,13 @@ docker compose run --rm --no-deps \
 
 ### GitHub Release
 
-[Releases](https://github.com/ttyob/velin-web-ssh/releases) 提供以下运行包：
+[Releases](https://github.com/ttyob/velin-web-ssh/releases) 提供飞牛 fnOS 安装包及校验文件：
 
-- `velin-web-ssh-linux-amd64.tar.gz`
-- `velin-web-ssh-linux-arm64.tar.gz`
-- `velin-web-ssh-windows-gui-amd64.zip`
+- `velin-web-ssh-fnos-native-amd64-<版本号>.fpk`
+- `velin-web-ssh-fnos-native-arm64-<版本号>.fpk`
+- `checksums.txt`
 
-Linux Release 包可在解压目录中直接重置管理员密码：
-
-```bash
-./velin-web-ssh --reset-admin-password
-```
+Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 版本标签后，工作流会完成测试、Docker 镜像推送和飞牛安装包构建，再发布 GitHub Release；发布说明中提供对应版本的 Docker 镜像地址。
 
 ### 飞牛 fnOS 原生应用包
 
@@ -123,8 +119,8 @@ packaging/fnos/build.sh
 构建脚本默认构建当前主机架构，也可以显式指定架构：
 
 ```bash
-VELIN_FNOS_VERSION=0.3.27 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
-VELIN_FNOS_VERSION=0.3.27 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.47 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.47 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
 ```
 
 忘记 fnOS 原生应用的管理员密码时，通过 SSH 登录 NAS 后执行：
@@ -142,25 +138,11 @@ sudo -u velin env \
 
 将生成的 `dist/fnos/velin-web-ssh-fnos-native-*.fpk` 在飞牛应用中心手动安装。首次安装向导会设置管理员账号和密码。构建脚本需要 Docker 和 GitHub 网络来提取对应架构的 guacd 运行库；安装后的 NAS 不需要 Docker。
 
-Linux 包解压后复制配置并运行：
-
-```bash
-cp .env.example .env
-chmod +x velin-web-ssh
-./velin-web-ssh
-```
-
-Windows GUI 需要 Microsoft Edge WebView2。解压后在 PowerShell 中执行：
-
-```powershell
-.\velin-web-ssh.exe
-```
-
-Windows GUI 无需配置，默认自动选择空闲本机端口。数据库、主密钥、录制文件和启动日志均写入 `velin-web-ssh.exe` 所在目录；需要覆盖默认值时才从 `.env.example` 创建 `.env`。VNC 可直接使用，RDP 需要在本机 Docker 或其他受信任服务器上单独运行 guacd，并通过 `VELIN_GUACD_ADDR` 指定地址。
-
 ## 配置
 
 VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优先。
+
+管理员可在「设置 → AI 模型」配置 Agent 专用代理，支持 HTTP、HTTPS、SOCKS5（例如 `http://127.0.0.1:7890`），留空时直连。代理仅用于 AI Agent 的模型列表、对话和连接测试，保存后立即生效；包含账号密码的代理地址会加密保存。Docker 部署时填写容器能够访问的代理地址。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -217,6 +199,18 @@ cd web
 npm test
 npm run typecheck
 npm run build
+```
+
+终端历史、远程桌面恢复、标签关闭和首次连接的浏览器回归检查（需要 Chromium，可用 `CHROMIUM_PATH` 指定路径）：
+
+安装 `tmux` 和 Python 3 后，终端检查还会验证真实 tmux 输出在浏览器中的历史行序和反复滚动；缺少这两项时会提示跳过该部分。
+
+```bash
+cd web
+npm run test:terminal
+npm run test:desktop
+npm run test:sessions
+npm run test:connections
 ```
 
 Windows GUI 使用 Wails 构建：

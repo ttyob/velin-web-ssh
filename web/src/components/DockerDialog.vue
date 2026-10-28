@@ -1597,7 +1597,7 @@ watch(
 
 <style scoped>
 .docker-dialog {
-  color: #e8ece9;
+  color: var(--text);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   letter-spacing: 0;
 }
@@ -1679,7 +1679,7 @@ watch(
 .compose-children {
   margin-left: 28px;
   border-left: 1px solid var(--line, #35403a);
-  background: #171b24;
+  background: var(--surface);
 }
 .compose-empty {
   padding: 13px 12px;
@@ -1766,7 +1766,7 @@ watch(
 .docker-row-main .docker-image-usage.active {
   border-color: #49658f;
   background: #202d47;
-  color: #aec4f5;
+  color: var(--accent-strong);
 }
 .docker-row-main span,
 .docker-row-main small,
@@ -1919,7 +1919,7 @@ watch(
   display: grid;
   grid-template-columns: repeat(2, minmax(100px, 1fr));
   gap: 3px 12px;
-  color: #b8c6c0;
+  color: var(--text-soft);
   font: 11px/1.45 var(--font-mono, monospace);
 }
 .docker-monitor-values span {
@@ -1973,7 +1973,7 @@ watch(
 .docker-detail-title strong {
   min-width: 0;
   overflow: hidden;
-  color: #e7eee9;
+  color: var(--text);
   font-size: 16px;
   font-weight: 650;
   text-overflow: ellipsis;
@@ -1981,7 +1981,7 @@ watch(
 }
 .docker-detail-title span {
   flex: 0 0 auto;
-  color: #9aa8a1;
+  color: var(--text-soft);
   font: 11px var(--font-mono, monospace);
 }
 .docker-detail-actions,
@@ -2010,14 +2010,14 @@ watch(
   align-items: start;
 }
 .docker-detail-list dt {
-  color: #8f9d95;
+  color: var(--muted);
   font-size: 12px;
 }
 .docker-detail-list dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  color: #d4ddd7;
+  color: var(--text);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -2040,7 +2040,7 @@ watch(
 }
 .docker-detail-section p {
   margin: 0;
-  color: #8f9d95;
+  color: var(--muted);
   font-size: 12px;
 }
 .docker-detail-section pre {
@@ -2048,8 +2048,8 @@ watch(
   margin: 0;
   overflow: auto;
   padding: 10px;
-  background: #141b25;
-  color: #cbd6cf;
+  background: var(--surface);
+  color: var(--text);
   font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -2062,8 +2062,8 @@ watch(
   gap: 10px;
   min-width: 0;
   padding: 7px 0;
-  border-bottom: 1px solid #2a332f;
-  color: #cbd6cf;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--text);
   font-size: 12px;
 }
 .docker-detail-line > span {
@@ -2074,7 +2074,7 @@ watch(
 }
 .docker-detail-line small {
   flex: 0 0 auto;
-  color: #8f9d95;
+  color: var(--muted);
   font: 11px var(--font-mono, monospace);
 }
 .docker-logs-toolbar {
@@ -2090,8 +2090,8 @@ watch(
   margin: 0;
   overflow: auto;
   padding: 14px;
-  background: #0e1117;
-  color: #cbd3e0;
+  background: var(--field-bg);
+  color: var(--text);
   font: 12px/1.55 var(--font-mono, monospace);
   white-space: pre-wrap;
   word-break: break-word;

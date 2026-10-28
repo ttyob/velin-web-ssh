@@ -287,20 +287,20 @@ function dispose() {
 </template>
 
 <style scoped>
-.share-page { min-height: 100vh; display: grid; grid-template-rows: 58px minmax(0, 1fr); color: #dce5df; background: #090c0b; }
-.share-header { display: flex; align-items: center; gap: 18px; padding: 0 18px; border-bottom: 1px solid #28302d; background: #111614; }
+.share-page { min-height: 100vh; display: grid; grid-template-rows: 58px minmax(0, 1fr); color: var(--text); background: var(--workspace-bg); }
+.share-header { display: flex; align-items: center; gap: 18px; padding: 0 18px; border-bottom: 1px solid var(--line-strong); background: var(--surface); }
 .share-brand { display: flex; align-items: center; gap: 8px; color: #64d98b; white-space: nowrap; }
-.share-status { display: flex; align-items: center; gap: 14px; min-width: 0; color: #89958f; font-size: 12px; flex: 1; }
+.share-status { display: flex; align-items: center; gap: 14px; min-width: 0; color: var(--muted); font-size: 12px; flex: 1; }
 .share-status span { white-space: nowrap; }
 .share-status i { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #59615e; }
 .share-status i.live { background: #64d98b; box-shadow: 0 0 0 3px rgb(100 217 139 / 12%); }
-.share-terminal-shell { position: relative; display: grid; grid-template-rows: 44px minmax(0, 1fr); margin: 14px; min-height: 420px; overflow: hidden; border: 1px solid #28302d; border-radius: 6px; background: #0b0e0d; }
-.share-terminal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border-bottom: 1px solid #222927; background: #121715; }
+.share-terminal-shell { position: relative; display: grid; grid-template-rows: 44px minmax(0, 1fr); margin: 14px; min-height: 420px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--field-bg); }
+.share-terminal-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .share-terminal-bar div { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.share-terminal-bar small, .view-mode { color: #89958f; font-size: 12px; }
+.share-terminal-bar small, .view-mode { color: var(--muted); font-size: 12px; }
 .view-mode { display: flex; align-items: center; gap: 6px; }
 .share-terminal { min-width: 0; min-height: 0; padding: 8px; }
-.share-overlay { position: absolute; inset: 44px 0 0; z-index: 2; display: grid; place-items: center; background: #0b0e0d; color: #89958f; }
+.share-overlay { position: absolute; inset: 44px 0 0; z-index: 2; display: grid; place-items: center; background: var(--field-bg); color: var(--muted); }
 .share-ended { align-content: center; gap: 10px; }
 .share-access { padding: 20px; }
 .share-access-panel { width: min(340px, 100%); display: grid; gap: 12px; }

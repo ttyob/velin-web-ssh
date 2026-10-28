@@ -11,6 +11,10 @@
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc -b",
     "test": "node scripts/unit.mjs",
+    "test:terminal": "node scripts/terminal-history.mjs",
+    "test:desktop": "node scripts/desktop-recovery.mjs",
+    "test:sessions": "node scripts/session-close.mjs",
+    "test:connections": "node scripts/connection-onboarding.mjs",
     "test:e2e": "node scripts/smoke.mjs",
     "generate:fnos-icons": "node scripts/fnos-icons.mjs",
     "screenshot:readme": "node scripts/readme-screenshot.mjs"

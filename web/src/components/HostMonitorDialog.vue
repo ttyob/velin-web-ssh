@@ -476,53 +476,53 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.host-monitor-dialog { color: #e5ebe7; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; letter-spacing: 0; }
+.host-monitor-dialog { color: var(--text); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; letter-spacing: 0; }
 .monitor-toolbar, .monitor-actions, .monitor-connection, .monitor-system-strip, .monitor-section > header, .monitor-section > header > div, .monitor-disk-row { display: flex; align-items: center; }
 .monitor-toolbar { justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.monitor-connection { gap: 7px; color: #91a098; font-size: 12px; }
+.monitor-connection { gap: 7px; color: var(--muted); font-size: 12px; }
 .monitor-connection > span { width: 8px; height: 8px; border-radius: 50%; background: #a86460; }
 .monitor-connection.connected > span { background: #66b786; box-shadow: 0 0 0 3px rgb(102 183 134 / 12%); }
 .monitor-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.monitor-actions label { display: inline-flex; align-items: center; gap: 7px; color: #91a098; font-size: 12px; }
+.monitor-actions label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .monitor-interval { width: 92px; }
 .monitor-error { margin-bottom: 10px; }
 .monitor-body { min-height: 470px; }
-.monitor-system-strip { gap: 10px; padding: 10px 12px; border-top: 1px solid #354039; border-bottom: 1px solid #354039; color: #91a098; }
+.monitor-system-strip { gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); color: var(--muted); }
 .monitor-system-strip > div { min-width: 0; flex: 1; display: grid; gap: 3px; }
-.monitor-system-strip strong { color: #e1e8e3; font-size: 14px; }
+.monitor-system-strip strong { color: var(--text); font-size: 14px; }
 .monitor-system-strip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--font-mono, monospace); }
 .monitor-system-strip time { flex: 0 0 auto; font-size: 11px; }
 .monitor-tabs { margin-top: 4px; }
 .monitor-tabs :deep(.el-tabs__item) { height: 44px; font-size: 12px; }
 .monitor-tab-label { display: inline-flex; align-items: center; gap: 6px; }
 .monitor-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; padding: 12px 0; }
-.monitor-metric { min-width: 0; min-height: 125px; display: grid; grid-template-columns: auto 1fr; align-content: start; gap: 5px 8px; padding: 12px; border: 1px solid #354039; border-radius: 6px; background: #171c20; color: #8fa098; }
+.monitor-metric { min-width: 0; min-height: 125px; display: grid; grid-template-columns: auto 1fr; align-content: start; gap: 5px 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--muted); }
 .monitor-metric > span { font-size: 12px; }
-.monitor-metric > strong { grid-column: 1 / -1; overflow-wrap: anywhere; color: #e2e9e4; font-size: 21px; font-weight: 650; }
-.monitor-metric > small { grid-column: 1 / -1; min-height: 17px; color: #819087; font-size: 11px; }
+.monitor-metric > strong { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--text); font-size: 21px; font-weight: 650; }
+.monitor-metric > small { grid-column: 1 / -1; min-height: 17px; color: var(--muted); font-size: 11px; }
 .monitor-metric :deep(.el-progress) { grid-column: 1 / -1; margin-top: 5px; }
 .monitor-charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.monitor-section { margin-top: 8px; border-top: 1px solid #354039; }
+.monitor-section { margin-top: 8px; border-top: 1px solid var(--line-strong); }
 .monitor-section > header { min-height: 48px; justify-content: space-between; gap: 10px; }
 .monitor-section > header > div { gap: 7px; }
 .monitor-section > header strong { font-size: 13px; }
-.monitor-section > header span { color: #829088; font-size: 11px; }
+.monitor-section > header span { color: var(--muted); font-size: 11px; }
 .monitor-disks { display: grid; gap: 6px; padding-bottom: 8px; }
-.monitor-disk-row { display: grid; grid-template-columns: minmax(80px, 1fr) 190px minmax(160px, 2fr) 58px; gap: 10px; padding: 6px 8px; color: #8c9a92; font-size: 11px; }
-.monitor-disk-row code { overflow: hidden; text-overflow: ellipsis; color: #d8e0db; white-space: nowrap; }
-.monitor-disk-row strong { text-align: right; color: #d8e0db; }
+.monitor-disk-row { display: grid; grid-template-columns: minmax(80px, 1fr) 190px minmax(160px, 2fr) 58px; gap: 10px; padding: 6px 8px; color: var(--muted); font-size: 11px; }
+.monitor-disk-row code { overflow: hidden; text-overflow: ellipsis; color: var(--text); white-space: nowrap; }
+.monitor-disk-row strong { text-align: right; color: var(--text); }
 .monitor-process-search { width: min(310px, 40vw); }
-.monitor-processes :deep(.el-table), .monitor-ssh-sessions :deep(.el-table), .monitor-ssh-records :deep(.el-table) { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; --el-table-header-bg-color: #1b2125; --el-table-row-hover-bg-color: #202b31; --el-table-border-color: #303a34; color: #cdd6d0; }
+.monitor-processes :deep(.el-table), .monitor-ssh-sessions :deep(.el-table), .monitor-ssh-records :deep(.el-table) { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; --el-table-header-bg-color: #1b2125; --el-table-row-hover-bg-color: #202b31; --el-table-border-color: #303a34; color: var(--text); }
 .monitor-command { font: 11px var(--font-mono, monospace); }
 .ssh-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; padding: 12px 0; }
-.ssh-summary section { min-width: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; padding: 12px; border: 1px solid #354039; border-radius: 6px; background: #171c20; color: #8fa098; }
+.ssh-summary section { min-width: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--muted); }
 .ssh-summary section > span { font-size: 12px; }
-.ssh-summary section > strong { grid-column: 1 / -1; color: #e2e9e4; font-size: 24px; }
-.ssh-summary section > small { grid-column: 1 / -1; color: #819087; font-size: 11px; }
+.ssh-summary section > strong { grid-column: 1 / -1; color: var(--text); font-size: 24px; }
+.ssh-summary section > small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
 .ssh-result { display: inline-flex; min-width: 40px; justify-content: center; padding: 2px 6px; border-radius: 3px; font-size: 11px; }
 .ssh-result.success { background: #173324; color: #91cca5; }
 .ssh-result.failed { background: #3a2023; color: #dfa0a5; }
-.monitor-empty { min-height: 430px; display: grid; place-items: center; align-content: center; gap: 8px; color: #8b9991; font-size: 12px; }
+.monitor-empty { min-height: 430px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); font-size: 12px; }
 @media (max-width: 820px) {
   .monitor-toolbar { align-items: stretch; flex-direction: column; }
   .monitor-actions { justify-content: flex-start; }

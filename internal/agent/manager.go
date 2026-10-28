@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,12 +85,14 @@ type Process struct {
 }
 
 type Manager struct {
-	terminals *terminal.Manager
-	aiMu      sync.RWMutex
-	ai        AIConfig
-	mu        sync.RWMutex
-	conns     map[string]*connection
-	statuses  map[string]Status
+	terminals      *terminal.Manager
+	aiMu           sync.RWMutex
+	ai             AIConfig
+	aiTransport    *http.Transport
+	aiTransportErr error
+	mu             sync.RWMutex
+	conns          map[string]*connection
+	statuses       map[string]Status
 }
 
 type connection struct {
@@ -104,7 +107,9 @@ type connection struct {
 }
 
 func NewManager(terminals *terminal.Manager, ai AIConfig) *Manager {
-	return &Manager{terminals: terminals, ai: ai, conns: make(map[string]*connection), statuses: make(map[string]Status)}
+	m := &Manager{terminals: terminals, conns: make(map[string]*connection), statuses: make(map[string]Status)}
+	m.UpdateAI(ai)
+	return m
 }
 
 func (m *Manager) AIConfig() AIConfig {
@@ -114,9 +119,16 @@ func (m *Manager) AIConfig() AIConfig {
 }
 
 func (m *Manager) UpdateAI(value AIConfig) {
+	transport, err := newAITransport(value.ProxyURL)
 	m.aiMu.Lock()
+	previous := m.aiTransport
 	m.ai = value
+	m.aiTransport = transport
+	m.aiTransportErr = err
 	m.aiMu.Unlock()
+	if previous != nil {
+		previous.CloseIdleConnections()
+	}
 }
 
 func (m *Manager) Status(userID, hostID string) Status {

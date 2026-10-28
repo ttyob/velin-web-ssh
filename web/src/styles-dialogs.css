@@ -1,0 +1,184 @@
+/* ======================================================================
+ * Host dialog (compact, progressive) + terminal context menu
+ * ==================================================================== */
+
+/* ---- Host dialog ---- */
+.host-dialog { width: min(520px, calc(100vw - 24px)) !important; }
+.host-dialog .el-dialog__body {
+  padding: 14px 20px 6px !important;
+  max-height: calc(100dvh - 140px);
+}
+.host-dialog .el-dialog__footer { padding: 10px 20px 14px !important; }
+.hd-form { display: block; }
+.hd-form .el-form-item { margin-bottom: 0; min-width: 0; }
+.hd-form .el-form-item__label {
+  padding-bottom: 5px !important;
+  color: var(--muted) !important;
+  font-size: 12px;
+  font-weight: 500;
+}
+.hd-proto {
+  display: flex;
+  width: 100%;
+  margin-bottom: 14px;
+}
+.hd-proto .el-segmented__group { width: 100%; }
+.hd-proto .el-segmented__item { flex: 1 1 0; justify-content: center; }
+.hd-proto.hd-sub { margin: -4px 0 14px; --el-segmented-item-selected-color: var(--text); }
+.hd-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.hd-row.single { grid-template-columns: minmax(0, 1fr); }
+.hd-row.hd-addr { grid-template-columns: minmax(0, 1fr) 104px; }
+.hd-row .el-input-number { width: 100%; }
+.hd-row .el-input-number .el-input__inner { text-align: left; }
+
+.hd-auth { margin-bottom: 6px; }
+.hd-auth-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+.hd-label { color: var(--muted); font-size: 12px; font-weight: 500; }
+.hd-auth .el-segmented { --el-segmented-padding: 2px; min-height: 28px; }
+.hd-auth .el-segmented__item { min-height: 24px; font-size: 12px; padding: 0 10px; }
+.hd-auth .el-select { width: 100%; }
+.hd-note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Flat disclosure rows instead of heavy collapse panels */
+.hd-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 38px;
+  margin-top: 4px;
+  padding: 0 2px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s var(--ease-ui);
+}
+.hd-disclosure:hover { color: var(--text); }
+.hd-disclosure svg { flex: 0 0 auto; transition: transform 0.16s var(--ease-ui); }
+.hd-disclosure.open svg { transform: rotate(90deg); }
+.hd-disclosure small {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hd-panel { padding: 4px 0 12px; animation: pro-pop 0.16s var(--ease-ui) both; }
+.hd-panel .el-form-item { margin-bottom: 12px; }
+.hd-panel .el-form-item:last-child { margin-bottom: 0; }
+.hd-panel .hd-row { margin-bottom: 12px; }
+.hd-panel .form-grid.hd-adv {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.hd-panel .form-grid.hd-adv .el-form-item { margin-bottom: 0; }
+.hd-panel .form-grid.hd-adv .span-2 { grid-column: 1 / -1; }
+.hd-panel .el-input-number,
+.hd-panel .el-select { width: 100%; }
+.hd-panel .el-form-item .el-switch { height: 32px; }
+
+@media (max-width: 560px) {
+  .hd-row,
+  .hd-panel .form-grid.hd-adv { grid-template-columns: minmax(0, 1fr); }
+  .hd-row.hd-addr { grid-template-columns: minmax(0, 1fr) 92px; }
+  .hd-disclosure small { display: none; }
+}
+
+/* ---- Terminal context menu ---- */
+.pane-context-menu {
+  width: 208px;
+  max-height: calc(100dvh - 12px);
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--menu-bg);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: none;
+  scrollbar-width: none;
+}
+.pane-context-menu::-webkit-scrollbar { display: none; }
+.pane-context-menu .context-label {
+  display: block;
+  padding: 7px 10px 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.pane-context-menu .context-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+.pane-context-menu button {
+  height: 30px;
+  padding: 0 10px;
+  gap: 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-size: 12.5px;
+  transition: background-color 0.1s var(--ease-ui), color 0.1s var(--ease-ui);
+}
+.pane-context-menu button svg { flex: 0 0 auto; color: var(--muted); transition: color 0.1s var(--ease-ui); }
+.pane-context-menu button:hover { background: var(--surface-3); color: var(--text); transform: none; }
+.pane-context-menu button:hover svg { color: var(--accent); }
+.pane-context-menu button:disabled,
+.pane-context-menu button:disabled:hover { background: transparent; color: var(--muted); opacity: 0.5; }
+.pane-context-menu button:disabled svg { color: var(--muted); }
+.pane-context-menu button.danger {
+  margin-top: 0;
+  border-top: 0;
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+}
+.pane-context-menu button.danger svg { color: var(--danger); }
+.pane-context-menu button.danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+.hd-label { flex: 0 0 auto; white-space: nowrap; }
+
+/* Legacy narrow-screen rules stacked every segmented control: keep ours inline. */
+.host-dialog .hd-form .el-segmented { display: inline-flex; }
+.host-dialog .hd-form .hd-proto.el-segmented { display: flex; }
+.host-dialog .hd-form .el-segmented__group {
+  display: flex !important;
+  grid-template-columns: none !important;
+}
+.host-dialog .hd-form .el-segmented__item-label {
+  padding: 0 6px;
+  white-space: nowrap;
+  line-height: inherit;
+}
+@media (max-width: 420px) {
+  .hd-auth-head { flex-direction: column; align-items: stretch; gap: 6px; }
+  .hd-auth-head .el-segmented { width: 100%; }
+  .hd-auth .el-segmented__item { flex: 1 1 0; justify-content: center; padding: 0 4px; font-size: 11.5px; }
+}

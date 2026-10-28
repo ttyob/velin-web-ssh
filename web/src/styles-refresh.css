@@ -78,7 +78,7 @@ body {
 }
 
 ::selection {
-  color: #f4faf6;
+  color: var(--text);
   background: var(--accent-border);
 }
 
@@ -613,7 +613,7 @@ body {
 }
 
 .brand-mini strong {
-  color: #e8efea;
+  color: var(--text);
   font-size: 14px;
   font-weight: 680;
 }
@@ -744,7 +744,7 @@ body {
   min-width: 96px;
   max-width: 164px;
   border-color: var(--line);
-  color: #8c9993;
+  color: var(--muted);
   transition:
     color 0.18s var(--ease-ui),
     background-color 0.18s var(--ease-ui),
@@ -950,7 +950,7 @@ body {
 .settings-menu button {
   min-height: 38px;
   border-radius: var(--radius-sm);
-  color: #929f99;
+  color: var(--muted);
 }
 
 .settings-menu button:hover {
@@ -966,7 +966,7 @@ body {
 
 .settings-menu-divider {
   margin: 13px 10px 5px;
-  color: #65726c;
+  color: var(--muted);
 }
 
 .settings-content {
@@ -1163,7 +1163,7 @@ body {
 }
 
 .terminal-theme-card {
-  border-color: #414d48;
+  border-color: var(--line-strong);
   border-radius: var(--radius-md);
 }
 
@@ -1264,7 +1264,7 @@ body {
 }
 
 .user-row:hover {
-  background: #1b231f;
+  background: var(--surface-2);
 }
 
 .user-identity {
@@ -1365,7 +1365,7 @@ body {
 
 .security-state.warning {
   border-color: #765d35;
-  background: #322a1d;
+  background: var(--surface-2);
   color: #e8bd73;
 }
 
@@ -1434,7 +1434,7 @@ body {
 .recovery-panel {
   border-color: #625a3f;
   border-radius: var(--radius-md);
-  background: #252318;
+  background: var(--surface-2);
 }
 
 .host-dialog .el-dialog__body,
@@ -1457,7 +1457,7 @@ body {
 .web-proxy-dialog .el-alert {
   border: 1px solid #5a5137;
   border-radius: var(--radius-md);
-  background: #262217;
+  background: var(--surface-2);
 }
 
 .web-proxy-dialog .el-alert__title {
@@ -1509,9 +1509,9 @@ body {
 }
 
 .new-tab-choices > button {
-  border-color: #3c4843;
+  border-color: var(--line-strong);
   border-radius: var(--radius-md);
-  background: #19201d;
+  background: var(--surface);
 }
 
 .new-tab-choices > button:hover {

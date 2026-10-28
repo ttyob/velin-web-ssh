@@ -26,6 +26,7 @@ export interface SecurityPolicy {
 export interface AIModelConfig {
   baseURL: string;
   model: string;
+  proxyURL: string;
   apiKeyConfigured: boolean;
   configured: boolean;
 }

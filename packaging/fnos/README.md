@@ -13,7 +13,7 @@ packaging/fnos/build.sh
 Build a package for the current host architecture:
 
 ```sh
-VELIN_FNOS_VERSION=0.3.27 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.47 packaging/fnos/build.sh
 ```
 
 The release workflow builds separate `amd64` and `arm64` packages. The build

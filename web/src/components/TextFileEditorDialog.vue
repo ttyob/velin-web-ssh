@@ -216,7 +216,7 @@ onBeforeUnmount(destroyEditor);
   <el-dialog
     :model-value="modelValue"
     class="text-editor-dialog"
-    width="min(1080px, calc(100vw - 24px))"
+    width="min(900px, calc(100vw - 24px))"
     append-to-body
     :close-on-click-modal="false"
 		:before-close="beforeClose"

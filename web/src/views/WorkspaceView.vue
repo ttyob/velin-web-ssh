@@ -26,6 +26,7 @@ import {
   Copy,
   FolderOpen,
   GitBranch,
+  Globe2,
   KeyRound,
   LockKeyhole,
   LogOut,
@@ -58,6 +59,9 @@ import type {
 } from "../types";
 import SplitPaneNode from "../components/SplitPaneNode.vue";
 import HostDialog from "../components/HostDialog.vue";
+import CommandPalette, {
+  type PaletteItem,
+} from "../components/CommandPalette.vue";
 import HostResourceList from "../components/HostResourceList.vue";
 import type { HostDropTarget } from "../components/HostGroupNode.vue";
 import TmuxInstallDialog from "../components/TmuxInstallDialog.vue";
@@ -126,15 +130,16 @@ const search = ref(""),
   sessionSearch = ref(""),
   sidebarOpen = ref(true),
   mobileSidebar = ref(false);
-const defaultSidebarWidth = 274;
+const defaultSidebarWidth = 256;
 const sidebarWidth = ref(defaultSidebarWidth);
 let sidebarResizeCleanup: (() => void) | undefined;
-const defaultWebServiceHeight = 210;
+const defaultWebServiceHeight = 168;
 const webServiceHeight = ref(defaultWebServiceHeight);
 let webServiceResizeCleanup: (() => void) | undefined;
 const sessionStatusFilter = ref(""),
   sessionHostFilter = ref(""),
-  restoringBackground = ref(false);
+  restoringBackground = ref(false),
+  cleaningSessions = ref(false);
 const hostDialog = ref(false),
   settingsOpen = ref(false),
   sessionsDialog = ref(false),
@@ -546,9 +551,22 @@ function startSidebarResize(event: PointerEvent) {
   event.preventDefault();
   webServiceResizeCleanup?.();
   document.body.classList.add("is-resizing-sidebar");
-  const move = (next: PointerEvent) => setSidebarWidth(next.clientX);
+  // Track pointer movement relative to where the drag began. The sidebar no
+  // longer starts at x=0 (the activity rail sits to its left), so the pointer's
+  // absolute X is not its width.
+  const startX = event.clientX;
+  const startWidth = sidebarWidth.value;
+  const handle = event.currentTarget as HTMLElement | null;
+  try {
+    handle?.setPointerCapture(event.pointerId);
+  } catch {}
+  const move = (next: PointerEvent) =>
+    setSidebarWidth(startWidth + (next.clientX - startX));
   const stop = () => {
     setSidebarWidth(sidebarWidth.value, true);
+    try {
+      handle?.releasePointerCapture(event.pointerId);
+    } catch {}
     document.body.classList.remove("is-resizing-sidebar");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
@@ -595,14 +613,21 @@ function startWebServiceResize(event: PointerEvent) {
   sidebarResizeCleanup?.();
   webServiceResizeCleanup?.();
   document.body.classList.add("is-resizing-web-service");
-  const sidebar = (event.currentTarget as HTMLElement).closest(".sidebar");
-  const panelBottom =
-    sidebar?.querySelector<HTMLElement>(".sidebar-footer")?.getBoundingClientRect()
-      .top || window.innerHeight - 50;
+  // Delta-based: dragging up grows the panel. Independent of where the sidebar
+  // footer is (it is hidden on desktop now that settings live on the rail).
+  const startY = event.clientY;
+  const startHeight = webServiceHeight.value;
+  const handle = event.currentTarget as HTMLElement | null;
+  try {
+    handle?.setPointerCapture(event.pointerId);
+  } catch {}
   const move = (next: PointerEvent) =>
-    setWebServiceHeight(panelBottom - next.clientY);
+    setWebServiceHeight(startHeight + (startY - next.clientY));
   const stop = () => {
     setWebServiceHeight(webServiceHeight.value, true);
+    try {
+      handle?.releasePointerCapture(event.pointerId);
+    } catch {}
     document.body.classList.remove("is-resizing-web-service");
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", stop);
@@ -777,6 +802,19 @@ async function connect(
       name: sessionName || host.name,
       sessionMode: sessionMode || "",
     };
+    // Validate SSH trust and tmux before starting asynchronous session creation.
+    // Otherwise its first failure is handled as restoration of a remote session
+    // which has never been created.
+    try {
+      await api(`/api/hosts/${host.id}/test`, {
+        method: "POST",
+        body: json(body),
+      });
+    } catch (error) {
+      // A tmux probe also verifies SSH for the explicit normal-mode fallback.
+      if ((sessionMode || host.sessionMode) !== "normal" || !isTmuxMissing(error))
+        throw error;
+    }
     const session = await api<TerminalSession>("/api/sessions", {
       method: "POST",
       body: json(body),
@@ -824,7 +862,7 @@ async function connect(
         () => connect(host, trustFingerprint, temporary, placement, "normal", initialCommand, sessionName),
       );
     } else if (e instanceof Error && e.message.includes("credential required"))
-      await promptTemporary(host, placement, initialCommand, sessionName);
+      await promptTemporary(host, placement, initialCommand, sessionName, sessionMode, trustFingerprint);
     else ElMessage.error(e instanceof Error ? e.message : "连接失败");
   } finally {
     connecting.value = undefined;
@@ -899,6 +937,8 @@ async function promptTemporary(
   },
   initialCommand = "",
   sessionName = "",
+  sessionMode?: Host["sessionMode"],
+  trustFingerprint = "",
 ) {
   try {
     const { value } = await ElMessageBox.prompt(
@@ -911,7 +951,7 @@ async function promptTemporary(
         inputValidator: (v) => Boolean(v) || "请输入密码",
       },
     );
-    await connect(host, "", { secret: value, passphrase: "" }, placement, undefined, initialCommand, sessionName);
+    await connect(host, trustFingerprint, { secret: value, passphrase: "" }, placement, sessionMode, initialCommand, sessionName);
   } catch {}
 }
 function openSession(session: TerminalSession) {
@@ -981,10 +1021,13 @@ function openContext(event: MouseEvent, leafID: string) {
   dockerContext.conversation = Boolean(session && conversationSessions[session.id]);
   dockerContext.installed = undefined;
   dockerContext.checking = Boolean(session);
-  contextMenu.x = Math.min(event.clientX, window.innerWidth - 188);
+  contextMenu.x = Math.max(
+    6,
+    Math.min(event.clientX, window.innerWidth - 216),
+  );
   contextMenu.y = Math.max(
     6,
-    Math.min(event.clientY, window.innerHeight - 445),
+    Math.min(event.clientY, window.innerHeight - 500),
   );
   const request = ++dockerContextRequest;
   if (!session) {
@@ -1075,14 +1118,19 @@ function removePane(tabID: string, leafID: string) {
   nextTick(() => paneTreeRefs.get(tabID)?.resize());
   scheduleSave();
 }
-async function terminateSession(session: TerminalSession) {
-  if (session.status === "ended") return true;
+async function terminateSession(session: TerminalSession, interactive = true) {
+  if (session.status === "ended") {
+    removeLocal(session.id);
+    return true;
+  }
   try {
     await api(`/api/sessions/${session.id}`, {
       method: "DELETE",
       body: json({}),
+      signal: interactive ? undefined : AbortSignal.timeout(10_000),
     });
   } catch (e: any) {
+    if (!interactive) return false;
     if (
       e instanceof Error &&
       e.message.toLowerCase().includes("credential required")
@@ -1116,6 +1164,18 @@ async function terminateSession(session: TerminalSession) {
   removeLocal(session.id);
   return true;
 }
+async function terminateClosedSessions(targets: TerminalSession[]) {
+  // Closing the UI must not depend on remote reachability or credentials.
+  const results = await Promise.all(
+    targets.map((session) => terminateSession(session, false)),
+  );
+  const failed = results.filter((result) => !result).length;
+  if (failed)
+    ElMessage.warning(
+      `已关闭，但有 ${failed} 个远程会话未能终止，可在会话管理中重试。`,
+    );
+  else ElMessage.success("远程会话已终止");
+}
 async function terminatePane(leafID: string) {
   if (!layout.active) return;
   const tabID = layout.active,
@@ -1123,8 +1183,7 @@ async function terminatePane(leafID: string) {
   if (!tree) return;
   contextMenu.open = false;
   const session = sessionForLeaf(tree, leafID);
-  if (!session) return;
-  if (session.status === "ended") {
+  if (!session || session.status === "ended") {
     removePane(tabID, leafID);
     return;
   }
@@ -1139,7 +1198,8 @@ async function terminatePane(leafID: string) {
         type: "warning",
       },
     );
-    if (await terminateSession(session)) ElMessage.success("远程会话已终止");
+    removePane(tabID, leafID);
+    await terminateClosedSessions([session]);
   } catch (action) {
     if (action === "cancel") {
       removePane(tabID, leafID);
@@ -1340,7 +1400,10 @@ async function closeTab(tabID: string) {
     return;
   }
   const tree = layout.trees?.[tabID];
-  if (!tree) return;
+  if (!tree) {
+    moveBackground(tabID);
+    return;
+  }
   const targets = [...new Set(collectSessionIDs(tree))]
     .map((id) => sessions.value.find((session) => session.id === id))
     .filter(Boolean) as TerminalSession[];
@@ -1360,13 +1423,8 @@ async function closeTab(tabID: string) {
       distinguishCancelAndClose: true,
       type: "warning",
     });
-    let completed = 0;
-    for (const session of running)
-      if (await terminateSession(session)) completed++;
-    if (completed === running.length)
-      ElMessage.success(
-        running.length === 1 ? "远程会话已终止" : "标签内会话已全部终止",
-      );
+    moveBackground(tabID);
+    await terminateClosedSessions(running);
   } catch (action) {
     if (action === "cancel") {
       moveBackground(tabID);
@@ -1881,6 +1939,49 @@ function togglePin(session: TerminalSession) {
     : [...pinnedSessionIDs.value, session.id];
   scheduleSave();
 }
+// Inactive = finished ("ended"). Background / attached / unreachable sessions may
+// still be alive on the remote host, so cleanup never touches them.
+const inactiveSessions = computed(() =>
+  sessions.value.filter((session) => session.status === "ended"),
+);
+async function cleanupInactiveSessions() {
+  const targets = inactiveSessions.value;
+  if (!targets.length) return ElMessage.info("没有可清理的非活跃会话");
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除 ${targets.length} 个已结束的会话记录。运行中、后台和待认证的会话不会受影响。`,
+      "清理非活跃会话",
+      { confirmButtonText: "清理", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+  cleaningSessions.value = true;
+  try {
+    const result = await api<{ removed: number }>("/api/sessions/cleanup", {
+      method: "POST",
+      body: json({}),
+    });
+    // An ended session can still sit in an open tab; drop it from the layout first.
+    for (const session of targets)
+      if (visibleSessionIDs.value.has(session.id)) removeLocal(session.id);
+    sessions.value = sessions.value.filter((item) => item.status !== "ended");
+    pinnedSessionIDs.value = pinnedSessionIDs.value.filter((id) =>
+      sessions.value.some((item) => item.id === id),
+    );
+    ElMessage.success(`已清理 ${result.removed} 个非活跃会话`);
+  } catch (e) {
+    ElMessage.error(
+      e instanceof ApiError && (e.status === 404 || e.status === 405)
+        ? "当前服务端版本不支持清理，请先更新后端"
+        : e instanceof Error
+          ? e.message
+          : "清理失败",
+    );
+  } finally {
+    cleaningSessions.value = false;
+  }
+}
 async function restoreBackgroundSessions() {
   const targets = visibleSessions.value
     .filter(
@@ -2000,8 +2101,71 @@ async function confirmLogout() {
     await logout();
   } catch {}
 }
+const sidePanel = ref<"hosts" | "web">("hosts");
+// Rail buttons: selecting the active panel again collapses the sidebar.
+function showPanel(panel: "hosts" | "web") {
+  if (sidebarOpen.value && sidePanel.value === panel) {
+    sidebarOpen.value = false;
+    return;
+  }
+  sidePanel.value = panel;
+  sidebarOpen.value = true;
+}
+const paletteOpen = ref(false);
+const paletteItems = computed<PaletteItem[]>(() => {
+  const items: PaletteItem[] = [];
+  for (const id of layout.tabs || [])
+    items.push({
+      id: `tab-${id}`,
+      group: "标签页",
+      title: tabTitle(id) || "未命名",
+      hint: id === layout.active ? "当前" : undefined,
+      run: () => activate(id),
+    });
+  for (const host of hosts.value)
+    items.push({
+      id: `host-${host.id}`,
+      group: "连接主机",
+      title: host.name,
+      hint: `${(host.protocol || "ssh").toUpperCase()} · ${host.address}`,
+      keywords: `${host.groupName} ${host.tags} ${host.username}`,
+      run: () => (host.protocol && host.protocol !== "ssh" ? openDesktop(host) : connect(host)),
+    });
+  for (const service of webServices.value)
+    items.push({
+      id: `web-${service.id}`,
+      group: "内网 Web",
+      title: service.name,
+      hint: service.targetURL,
+      run: () => openSavedWebService(service),
+    });
+  items.push(
+    { id: "act-new-host", group: "操作", title: "新增主机", run: () => editHost() },
+    { id: "act-web-panel", group: "操作", title: "打开内网 Web 面板", run: () => showPanel("web") },
+    { id: "act-settings", group: "操作", title: "打开设置", run: () => (settingsOpen.value = true) },
+    { id: "act-sessions", group: "操作", title: "会话管理", run: () => (sessionsDialog.value = true) },
+    { id: "act-sidebar", group: "操作", title: sidebarOpen.value ? "收起侧栏" : "展开侧栏", run: () => (sidebarOpen.value = !sidebarOpen.value) },
+    { id: "act-split-h", group: "操作", title: "左右分屏", hint: "当前终端", run: () => requestSplit("horizontal") },
+    { id: "act-split-v", group: "操作", title: "上下分屏", hint: "当前终端", run: () => requestSplit("vertical") },
+  );
+  if (preferences.lockEnabled)
+    items.push({ id: "act-lock", group: "操作", title: "锁定工作区", run: () => lockWorkspace("manual") });
+  items.push({ id: "act-logout", group: "操作", title: "退出登录", run: () => confirmLogout() });
+  return items;
+});
 function handleKeyboard(event: KeyboardEvent) {
   if (locked.value) return;
+  // Ctrl+K is bash "kill line", so Ctrl needs Shift; bare Cmd+K is safe on macOS.
+  const mod = event.ctrlKey || event.metaKey;
+  if (
+    (event.code === "KeyP" && mod && event.shiftKey) ||
+    (event.code === "KeyK" && event.metaKey && !event.ctrlKey && !event.shiftKey)
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    paletteOpen.value = !paletteOpen.value;
+    return;
+  }
   if (event.key === "Escape") {
     contextMenu.open = false;
     splitDialog.open = false;
@@ -2049,19 +2213,113 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="workspace-shell" @click="contextMenu.open = false">
+    <nav
+      :inert="locked || undefined"
+      class="app-rail desktop-only"
+      aria-label="主导航"
+    >
+      <button
+        class="rail-brand"
+        title="VelinWebSSH"
+        aria-label="切换主机面板"
+        @click="sidebarOpen = !sidebarOpen"
+      >
+        <TerminalSquare :size="18" />
+      </button>
+      <div class="rail-group">
+        <button
+          class="rail-btn"
+          :class="{ active: sidebarOpen && sidePanel === 'hosts' }"
+          title="主机"
+          aria-label="主机面板"
+          :aria-pressed="sidebarOpen && sidePanel === 'hosts'"
+          @click="showPanel('hosts')"
+        >
+          <Server :size="18" />
+        </button>
+        <button
+          class="rail-btn"
+          :class="{ active: sidebarOpen && sidePanel === 'web' }"
+          title="内网 Web（反向代理）"
+          aria-label="内网 Web 面板"
+          :aria-pressed="sidebarOpen && sidePanel === 'web'"
+          @click="showPanel('web')"
+        >
+          <Globe2 :size="18" />
+          <span v-if="webServices.length" class="rail-badge muted">{{ webServices.length }}</span>
+        </button>
+        <button
+          class="rail-btn"
+          title="命令面板 (Ctrl+Shift+P)"
+          aria-label="命令面板"
+          @click="paletteOpen = true"
+        >
+          <Search :size="18" />
+        </button>
+        <button
+          class="rail-btn"
+          title="会话管理"
+          aria-label="会话管理"
+          @click="sessionsDialog = true"
+        >
+          <Monitor :size="18" />
+          <span v-if="backgroundSessions.length" class="rail-badge">{{
+            backgroundSessions.length
+          }}</span>
+        </button>
+      </div>
+      <div class="rail-group rail-bottom">
+        <button
+          v-if="preferences.lockEnabled"
+          class="rail-btn"
+          title="锁定工作区"
+          aria-label="锁定工作区"
+          @click="lockWorkspace('manual')"
+        >
+          <LockKeyhole :size="18" />
+        </button>
+        <button
+          class="rail-btn"
+          title="设置"
+          aria-label="设置"
+          @click="settingsOpen = true"
+        >
+          <Settings :size="18" />
+        </button>
+        <el-dropdown trigger="click" placement="right-end">
+          <button class="user-avatar" :title="auth.user?.username">
+            {{ auth.user?.username.slice(0, 1).toUpperCase() }}
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item disabled>
+                {{ auth.user?.username }}
+              </el-dropdown-item>
+              <el-dropdown-item divided :icon="LogOut" @click="confirmLogout">
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </nav>
     <aside
       :inert="locked || undefined"
       class="sidebar"
       :class="{
         collapsed: !sidebarOpen,
         'mobile-open': mobileSidebar,
+        'panel-web': sidePanel === 'web',
       }"
       :style="sidebarStyle"
     >
       <header class="sidebar-header">
         <div class="brand-mini">
           <span class="brand-mark"><TerminalSquare :size="20" /></span
-          ><strong>VelinWebSSH</strong>
+          ><strong class="mobile-only">VelinWebSSH</strong
+          ><strong class="desktop-only">{{
+            sidePanel === "hosts" ? "主机" : "内网 Web"
+          }}</strong>
         </div>
         <button
           class="icon-btn desktop-only"
@@ -2077,14 +2335,41 @@ onBeforeUnmount(() => {
           <X :size="18" />
         </button>
       </header>
+      <div v-if="mobileSidebar" class="panel-tabs mobile-only" role="tablist">
+        <button
+          role="tab"
+          :class="{ active: sidePanel === 'hosts' }"
+          :aria-selected="sidePanel === 'hosts'"
+          @click="sidePanel = 'hosts'"
+        >
+          <Server :size="14" />主机
+        </button>
+        <button
+          role="tab"
+          :class="{ active: sidePanel === 'web' }"
+          :aria-selected="sidePanel === 'web'"
+          @click="sidePanel = 'web'"
+        >
+          <Globe2 :size="14" />内网 Web
+        </button>
+      </div>
       <template v-if="sidebarOpen || mobileSidebar"
-        ><div class="sidebar-search host-only-search">
+        ><div v-if="sidePanel === 'hosts'" class="sidebar-search host-only-search">
           <Search :size="15" /><input
             v-model="search"
             placeholder="搜索主机、分组或标签"
-          />
+          /><button
+            type="button"
+            class="palette-trigger"
+            title="命令面板 (Ctrl+Shift+P)"
+            aria-label="打开命令面板"
+            @click="paletteOpen = true"
+          >
+            <kbd>⇧⌘P</kbd>
+          </button>
         </div>
         <HostResourceList
+          v-if="sidePanel === 'hosts'"
           :hosts="visibleHosts"
           :testing="testing"
           @connect="connect"
@@ -2097,17 +2382,8 @@ onBeforeUnmount(() => {
           @refresh="refreshHosts"
           @reorder="reorderHost"
         />
-        <button
-          class="web-service-resizer desktop-only"
-          title="拖动调整内网 Web 高度，双击恢复默认"
-          aria-label="调整内网 Web 区域高度"
-          @pointerdown="startWebServiceResize"
-          @dblclick="resetWebServiceHeight"
-          @keydown="resizeWebServiceByKeyboard"
-        >
-          <span></span>
-        </button>
         <WebServiceList
+          v-else
           :services="webServices"
           :hosts="hosts"
           :opening="openingWebService"
@@ -2354,6 +2630,7 @@ onBeforeUnmount(() => {
         :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
         @click.stop
       >
+        <span class="context-label">编辑</span>
         <button @click="copyPaneSelection">
           <Copy :size="16" /><span>复制选中内容</span></button
         ><button @click="pasteIntoPane">
@@ -2362,6 +2639,7 @@ onBeforeUnmount(() => {
           <TextSelect :size="16" /><span>全选终端内容</span></button
         ><button @click="clearPane">
           <BrushCleaning :size="16" /><span>清屏</span></button
+        ><span class="context-separator" /><span class="context-label">工具</span
         ><button @click="openPaneFiles">
           <FolderOpen :size="16" /><span>打开当前目录</span></button
         ><button @click="openPaneAgent">
@@ -2392,7 +2670,8 @@ onBeforeUnmount(() => {
           @click="openPaneDocker"
         >
           <Box :size="16" /><span>Docker 管理</span></button
-        ><span class="context-separator" /><button
+        ><span class="context-separator" /><span class="context-label">窗格</span
+        ><button
           @click="requestSplit('horizontal')"
         >
           <Columns2 :size="16" /><span>左右分屏</span></button
@@ -2567,6 +2846,20 @@ onBeforeUnmount(() => {
           @click="restoreBackgroundSessions"
           >批量恢复</el-button
         >
+        <el-button
+          :icon="BrushCleaning"
+          :loading="cleaningSessions"
+          :disabled="!inactiveSessions.length"
+          :title="
+            inactiveSessions.length
+              ? `清理 ${inactiveSessions.length} 个已结束的会话`
+              : '没有已结束的会话'
+          "
+          @click="cleanupInactiveSessions"
+          >清理<template v-if="inactiveSessions.length">
+            ({{ inactiveSessions.length }})</template
+          ></el-button
+        >
       </div>
       <div v-if="visibleSessions.length" class="session-dialog-list">
         <article
@@ -2595,7 +2888,11 @@ onBeforeUnmount(() => {
             :size="14"
           />
           <el-dropdown trigger="click" @click.stop>
-            <button class="icon-btn row-menu">
+            <button
+              class="icon-btn row-menu"
+              aria-label="会话操作"
+              @click.stop
+            >
               <MoreHorizontal :size="16" />
             </button>
             <template #dropdown>
@@ -2630,6 +2927,7 @@ onBeforeUnmount(() => {
         <Monitor :size="28" /><span>没有符合条件的会话</span>
       </div>
     </el-dialog>
+    <CommandPalette v-if="!locked" v-model="paletteOpen" :items="paletteItems" />
     <HostDialog
       v-model="hostDialog"
       :host="editingHost"

@@ -546,3 +546,56 @@ func TestLegacyWebServiceMigratesToPathMode(t *testing.T) {
 		t.Fatalf("legacy web service proxy=%q page=%q port=%d err=%v", service.ProxyMode, service.PageMode, service.ListenPort, err)
 	}
 }
+
+func TestDeleteEndedTerminalsOnlyRemovesOwnEndedSessions(t *testing.T) {
+	s := testStore(t)
+	for _, id := range []string{"u1", "u2"} {
+		if err := s.CreateUser(id, id, "hash", "user"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save := func(id, userID, status string) {
+		t.Helper()
+		err := s.SaveTerminal(TerminalSession{ID: id, UserID: userID, HostID: "h", Name: id, RemoteUser: "root", TmuxSocket: "sock", TmuxName: id, OwnerMarker: "m", Status: status})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("ended-1", "u1", "ended")
+	save("ended-2", "u1", "ended")
+	save("attached", "u1", "attached")
+	save("background", "u1", "background")
+	save("unreachable", "u1", "unreachable")
+	save("other-ended", "u2", "ended")
+
+	removed, err := s.DeleteEndedTerminals("u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	left, err := s.Terminals("u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, item := range left {
+		got[item.ID] = true
+	}
+	for _, id := range []string{"attached", "background", "unreachable"} {
+		if !got[id] {
+			t.Fatalf("active session %q was removed", id)
+		}
+	}
+	if got["ended-1"] || got["ended-2"] {
+		t.Fatalf("ended sessions survived: %v", got)
+	}
+	other, err := s.Terminals("u2")
+	if err != nil || len(other) != 1 {
+		t.Fatalf("other user's sessions changed: %v err=%v", other, err)
+	}
+	if removed, err = s.DeleteEndedTerminals("u1"); err != nil || removed != 0 {
+		t.Fatalf("second cleanup removed=%d err=%v, want 0", removed, err)
+	}
+}

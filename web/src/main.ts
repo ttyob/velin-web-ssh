@@ -8,6 +8,10 @@ import router from "./router";
 import { applyAccent, applyInterfaceTheme } from "./themePresets";
 import "./styles.css";
 import "./styles-refresh.css";
+import "./styles-polish.css";
+import "./styles-settings.css";
+import "./styles-dialogs.css";
+import "./styles-tools.css";
 
 try {
   applyInterfaceTheme(localStorage.getItem("velin-interface-theme") || "dark");

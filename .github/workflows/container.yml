@@ -1,4 +1,4 @@
-name: Build and publish container
+name: Build and publish Docker and fnOS
 
 on:
   push:
@@ -78,51 +78,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  windows-desktop:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.13"
-          cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "18.20.4"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build frontend
-        working-directory: web
-        shell: bash
-        run: |
-          npm ci
-          npm run build
-      - name: Install Wails CLI
-        shell: pwsh
-        run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
-      - name: Build Windows desktop application
-        env:
-          VELIN_VERSION: ${{ github.ref_name }}
-        shell: pwsh
-        run: |
-          $env:Path = "$(go env GOPATH)\bin;$env:Path"
-          wails.exe build -platform windows/amd64 -clean -m -s -skipbindings -ldflags "-X github.com/ttyob/velin-web-ssh/internal/version.Current=$env:VELIN_VERSION"
-      - name: Package Windows desktop release
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force release/velin-web-ssh-windows-gui-amd64/web | Out-Null
-          Copy-Item build/bin/velin-web-ssh.exe release/velin-web-ssh-windows-gui-amd64/velin-web-ssh.exe
-          Copy-Item -Recurse web/dist release/velin-web-ssh-windows-gui-amd64/web/dist
-          Copy-Item desktop/.env.example release/velin-web-ssh-windows-gui-amd64/.env.example
-          Compress-Archive -Path release/velin-web-ssh-windows-gui-amd64 -DestinationPath release/velin-web-ssh-windows-gui-amd64.zip -Force
-      - uses: actions/upload-artifact@v4
-        with:
-          name: velin-web-ssh-windows-desktop-release
-          path: release/velin-web-ssh-windows-gui-amd64.zip
-
   fnos-package:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
@@ -156,61 +111,35 @@ jobs:
         with:
           name: velin-web-ssh-fnos-package-${{ matrix.arch }}
           path: dist/fnos/velin-web-ssh-fnos-native-*.fpk
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, windows-desktop, fnos-package]
+    needs: [test, publish, fnos-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25.13"
-          cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "18.20.4"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - uses: actions/download-artifact@v4
-        with:
-          name: velin-web-ssh-windows-desktop-release
-          path: release
       - uses: actions/download-artifact@v4
         with:
           pattern: velin-web-ssh-fnos-package-*
           path: release
           merge-multiple: true
-      - name: Build frontend
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
-      - name: Build release archives
+      - name: Generate fnOS package checksums
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release
-          for arch in amd64 arm64; do
-            package="velin-web-ssh-linux-${arch}"
-            mkdir -p "release/${package}/web"
-            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build \
-              -trimpath -ldflags="-s -w -X github.com/ttyob/velin-web-ssh/internal/version.Current=${{ github.ref_name }}" -o "release/${package}/velin-web-ssh" ./cmd/velin
-            cp -R web/dist "release/${package}/web/dist"
-            cp .env.example README.md "release/${package}/"
-            tar -C release -czf "release/${package}.tar.gz" "${package}"
-          done
           cd release
-          sha256sum velin-web-ssh-linux-*.tar.gz velin-web-ssh-windows-*.zip velin-web-ssh-fnos-native-*.fpk > checksums.txt
+          sha256sum velin-web-ssh-fnos-native-*.fpk > checksums.txt
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            Docker 镜像：`ghcr.io/ttyob/velin-web-ssh:${{ github.ref_name }}`，支持 `linux/amd64` 和 `linux/arm64`。
+
+            飞牛 fnOS 原生应用：下载对应架构的 `.fpk` 安装包，使用 `checksums.txt` 校验文件完整性。
           files: |
-            release/velin-web-ssh-linux-amd64.tar.gz
-            release/velin-web-ssh-linux-arm64.tar.gz
-            release/velin-web-ssh-windows-gui-amd64.zip
             release/velin-web-ssh-fnos-native-*.fpk
             release/checksums.txt

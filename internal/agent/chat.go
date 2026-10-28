@@ -16,9 +16,10 @@ import (
 )
 
 type AIConfig struct {
-	BaseURL string
-	APIKey  string
-	Model   string
+	BaseURL  string
+	APIKey   string
+	Model    string
+	ProxyURL string
 }
 
 func (c AIConfig) Configured() bool {
@@ -86,11 +87,14 @@ func (m *Manager) Backends() []BackendInfo {
 }
 
 func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext string, options ...ChatOptions) (ChatResponse, error) {
-	request, model, err := m.chatRequest(ctx, history, hostContext, false, options...)
+	config, client, err := m.aiHTTPClient(90 * time.Second)
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	client := &http.Client{Timeout: 90 * time.Second}
+	request, model, err := chatRequest(ctx, config, history, hostContext, false, options...)
+	if err != nil {
+		return ChatResponse{}, err
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("AI model request: %w", err)
@@ -107,11 +111,15 @@ func (m *Manager) Chat(ctx context.Context, history []ChatMessage, hostContext s
 }
 
 func (m *Manager) ChatStream(ctx context.Context, history []ChatMessage, hostContext string, onDelta func(string) error, options ...ChatOptions) (ChatResponse, error) {
-	request, model, err := m.chatRequest(ctx, history, hostContext, true, options...)
+	config, client, err := m.aiHTTPClient(0)
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	response, err := (&http.Client{}).Do(request)
+	request, model, err := chatRequest(ctx, config, history, hostContext, true, options...)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("AI model request: %w", err)
 	}
@@ -137,7 +145,7 @@ func (m *Manager) ChatStream(ctx context.Context, history []ChatMessage, hostCon
 	return decodeChatStream(response.Body, model, onDelta)
 }
 
-func (m *Manager) chatRequest(ctx context.Context, history []ChatMessage, hostContext string, stream bool, options ...ChatOptions) (*http.Request, string, error) {
+func chatRequest(ctx context.Context, config AIConfig, history []ChatMessage, hostContext string, stream bool, options ...ChatOptions) (*http.Request, string, error) {
 	selected := ChatOptions{}
 	if len(options) > 0 {
 		selected = options[0]
@@ -147,7 +155,6 @@ func (m *Manager) chatRequest(ctx context.Context, history []ChatMessage, hostCo
 	default:
 		return nil, "", errors.New("invalid agent backend")
 	}
-	config := m.AIConfig()
 	if !config.Configured() {
 		return nil, "", errors.New("AI model service is not configured")
 	}
@@ -407,7 +414,10 @@ func modelHTTPError(status int, responseRaw []byte) error {
 }
 
 func (m *Manager) Models(ctx context.Context) ([]ModelInfo, error) {
-	config := m.AIConfig()
+	config, client, err := m.aiHTTPClient(30 * time.Second)
+	if err != nil {
+		return nil, err
+	}
 	if !config.Configured() {
 		return nil, errors.New("AI model service is not configured")
 	}
@@ -425,7 +435,6 @@ func (m *Manager) Models(ctx context.Context) ([]ModelInfo, error) {
 	if config.APIKey != "" {
 		request.Header.Set("Authorization", "Bearer "+config.APIKey)
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("AI model list request: %w", err)

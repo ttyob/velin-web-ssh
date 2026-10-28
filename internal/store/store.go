@@ -909,6 +909,17 @@ func (s *Store) DeleteTerminal(userID, id string) error {
 	return err
 }
 
+// DeleteEndedTerminals removes the user's finished session records and returns
+// how many were removed. Only status "ended" qualifies: background, attached and
+// unreachable sessions may still be alive on the remote host, so they are kept.
+func (s *Store) DeleteEndedTerminals(userID string) (int64, error) {
+	result, err := s.DB.Exec(`DELETE FROM terminal_sessions WHERE user_id=? AND status='ended'`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) Workspace(userID string) (json.RawMessage, int, error) {
 	var raw string
 	var version int

@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   Bot,
@@ -27,6 +26,7 @@ import {
   Upload,
   UserPlus,
   Users,
+  X,
 } from "@lucide/vue";
 import { api, json } from "../api";
 import { useAuthStore } from "../stores/auth";
@@ -45,6 +45,7 @@ import type {
 import ToolsDrawer from "./ToolsDrawer.vue";
 import CredentialsPanel from "./CredentialsPanel.vue";
 import TaskPanel from "./TaskPanel.vue";
+import SecurityPanel from "./SecurityPanel.vue";
 import {
   accentPresets,
   findInterfaceTheme,
@@ -71,7 +72,21 @@ const emit = defineEmits<{
   credentialDeleted: [string];
 }>();
 const auth = useAuthStore();
-const router = useRouter();
+const tabMetaMap: Record<string, { title: string; desc: string }> = {
+  terminal: { title: "外观与终端", desc: "界面主题、强调色与终端显示效果" },
+  security: { title: "安全设置", desc: "管理登录保护和双因素认证" },
+  devices: { title: "账户与设备", desc: "管理登录设备与账户会话" },
+  credentials: { title: "凭据管理", desc: "集中保存 SSH 密码与私钥，供多台主机复用" },
+  users: { title: "用户管理", desc: "添加、停用用户并分配角色" },
+  admin: { title: "系统管理", desc: "查看运行状态，配置登录安全策略" },
+  network: { title: "组网", desc: "通过 Tailscale 接入内网主机" },
+  ai: { title: "AI 模型", desc: "配置终端助手使用的模型与密钥" },
+  snippets: { title: "命令片段", desc: "保存常用命令，一键发送到终端" },
+  forwards: { title: "端口转发", desc: "管理本地与远程端口转发" },
+  data: { title: "数据", desc: "加密备份、导出与导入" },
+  tasks: { title: "任务队列", desc: "查看后台任务与执行进度" },
+  updates: { title: "版本更新", desc: "检查并获取新版本" },
+};
 const tab = ref("terminal"),
   users = ref<User[]>([]),
   devices = ref<LoginDevice[]>([]),
@@ -135,12 +150,14 @@ const policy = ref<SecurityPolicy>({
 const aiModel = ref<AIModelConfig>({
   baseURL: "",
   model: "",
+  proxyURL: "",
   apiKeyConfigured: false,
   configured: false,
 });
 const aiModelForm = ref({
   baseURL: "",
   model: "",
+  proxyURL: "",
   apiKey: "",
   clearAPIKey: false,
 });
@@ -174,6 +191,7 @@ const terminalDefaults: Preferences = {
   autoLockMinutes: 15,
   lockOnShortcut: true,
 };
+const tabMeta = computed(() => tabMetaMap[tab.value] || tabMetaMap.terminal);
 function selectTerminalTheme(id: string) {
   const preset = findTerminalTheme(id);
   props.preferences.terminalTheme = preset.id;
@@ -227,6 +245,7 @@ async function load() {
 		aiModelForm.value = {
       baseURL: aiModel.value.baseURL,
       model: aiModel.value.model,
+      proxyURL: aiModel.value.proxyURL || "",
       apiKey: "",
       clearAPIKey: false,
 		};
@@ -413,10 +432,6 @@ async function revokeAll() {
     emit("logout");
   } catch {}
 }
-function openSecuritySettings() {
-  emit("update:modelValue", false);
-  void router.push("/settings/security");
-}
 function openCreateUser() {
   userForm.value = {
     id: "",
@@ -549,6 +564,7 @@ async function saveAIModel(showNotice = true) {
     aiModelForm.value = {
       baseURL: aiModel.value.baseURL,
       model: aiModel.value.model,
+      proxyURL: aiModel.value.proxyURL || "",
       apiKey: "",
       clearAPIKey: false,
     };
@@ -709,9 +725,11 @@ function forwardBatch(text: string, sessionIDs: string[]) {
 <template>
   <el-dialog
     :model-value="modelValue"
-    class="settings-dialog"
+    class="sp"
     title="设置"
-    width="min(900px, calc(100vw - 28px))"
+    width="min(1040px, calc(100vw - 32px))"
+    align-center
+    :show-close="false"
     append-to-body
     @open="
       tab = 'terminal';
@@ -719,770 +737,617 @@ function forwardBatch(text: string, sessionIDs: string[]) {
     "
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div class="settings-layout">
-      <nav class="settings-menu" aria-label="设置分类">
-        <button
-          :class="{ active: tab === 'terminal' }"
-          @click="tab = 'terminal'"
-        >
-          <MonitorCog :size="17" /><span>外观与终端</span>
-        </button>
-        <button :class="{ active: tab === 'devices' }" @click="tab = 'devices'">
-          <Shield :size="17" /><span>账户与设备</span>
-        </button>
-        <button @click="openSecuritySettings">
-          <ShieldCheck :size="17" /><span>安全设置</span>
-        </button>
-        <button
-          :class="{ active: tab === 'credentials' }"
-          @click="tab = 'credentials'"
-        >
-          <KeyRound :size="17" /><span>凭据管理</span>
-        </button>
-        <button
-          v-if="auth.user?.role === 'admin'"
-          :class="{ active: tab === 'users' }"
-          @click="tab = 'users'"
-        >
-          <Users :size="17" /><span>用户管理</span>
-        </button>
-        <button
-          v-if="auth.user?.role === 'admin'"
-          :class="{ active: tab === 'admin' }"
-          @click="tab = 'admin'"
-        >
-          <ServerCog :size="17" /><span>系统管理</span>
-        </button>
-        <button
-          v-if="auth.user?.role === 'admin'"
-          :class="{ active: tab === 'network' }"
-          @click="tab = 'network'"
-        >
-          <Network :size="17" /><span>组网</span>
-        </button>
-        <button
-          v-if="auth.user?.role === 'admin'"
-          :class="{ active: tab === 'ai' }"
-          @click="tab = 'ai'"
-        >
-          <Bot :size="17" /><span>AI 模型</span>
-        </button>
-        <span class="settings-menu-divider">工具</span>
-        <button
-          :class="{ active: tab === 'snippets' }"
-          @click="tab = 'snippets'"
-        >
-          <Code2 :size="17" /><span>命令片段</span>
-        </button>
-        <button
-          :class="{ active: tab === 'forwards' }"
-          @click="tab = 'forwards'"
-        >
-          <Network :size="17" /><span>端口转发</span>
-        </button>
-        <button :class="{ active: tab === 'data' }" @click="tab = 'data'">
-          <Database :size="17" /><span>数据</span>
-        </button>
-        <button :class="{ active: tab === 'tasks' }" @click="tab = 'tasks'">
-          <ListTodo :size="17" /><span>任务队列</span>
-        </button>
-        <button :class="{ active: tab === 'updates' }" @click="tab = 'updates'">
-          <Download :size="17" /><span>版本更新</span>
-          <i v-if="updateCheck.updateAvailable" class="update-dot" aria-label="有新版本" />
-        </button>
-      </nav>
-      <section
-        class="settings-content"
-        :class="{
-          'has-detail-tabs': [
-            'terminal',
-            'devices',
-            'users',
-            'admin',
-            'network',
-            'ai',
-          ].includes(tab),
-        }"
+    <div class="sp-shell">
+
+      <button
+        class="sp-close"
+        type="button"
+        title="关闭 (Esc)"
+        aria-label="关闭设置"
+        @click="emit('update:modelValue', false)"
       >
-        <CredentialsPanel
-          v-if="tab === 'credentials'"
-          :credentials="credentials"
-          @saved="emit('credentialSaved', $event)"
-          @deleted="emit('credentialDeleted', $event)"
-        />
-        <TaskPanel v-if="tab === 'tasks'" :sessions="sessions" />
-        <div
-          v-if="tab === 'data' && auth.user?.role === 'admin'"
-          class="settings-section backup-section data-backup-section"
-        >
-          <div class="security-heading">
-            <div>
-              <h3>加密备份与恢复</h3>
-              <p>备份包含应用数据库和主密钥，使用输入的密钥整体加密。密钥不会保存到服务器。</p>
-            </div>
-            <span class="security-state">AES-GCM</span>
+        <X :size="18" />
+      </button>
+      <div class="sp-body">
+        <nav class="sp-nav" aria-label="设置分类">
+          <h2 class="sp-nav-title">设置</h2>
+          <div class="sp-nav-scroll">
+            <span class="sp-nav-group">个人</span>
+            <button :class="{ active: tab === 'terminal' }" @click="tab = 'terminal'">
+              <MonitorCog :size="15" /><span>外观与终端</span>
+            </button>
+            <button :class="{ active: tab === 'devices' }" @click="tab = 'devices'">
+              <Shield :size="15" /><span>账户与设备</span>
+            </button>
+            <button :class="{ active: tab === 'security' }" @click="tab = 'security'">
+              <ShieldCheck :size="15" /><span>安全设置</span>
+            </button>
+            <button :class="{ active: tab === 'credentials' }" @click="tab = 'credentials'">
+              <KeyRound :size="15" /><span>凭据管理</span>
+            </button>
+            <template v-if="auth.user?.role === 'admin'">
+              <span class="sp-nav-group">管理</span>
+              <button :class="{ active: tab === 'users' }" @click="tab = 'users'">
+                <Users :size="15" /><span>用户管理</span>
+              </button>
+              <button :class="{ active: tab === 'admin' }" @click="tab = 'admin'">
+                <ServerCog :size="15" /><span>系统管理</span>
+              </button>
+              <button :class="{ active: tab === 'network' }" @click="tab = 'network'">
+                <Network :size="15" /><span>组网</span>
+              </button>
+              <button :class="{ active: tab === 'ai' }" @click="tab = 'ai'">
+                <Bot :size="15" /><span>AI 模型</span>
+              </button>
+            </template>
+            <span class="sp-nav-group">工具</span>
+            <button :class="{ active: tab === 'snippets' }" @click="tab = 'snippets'">
+              <Code2 :size="15" /><span>命令片段</span>
+            </button>
+            <button :class="{ active: tab === 'forwards' }" @click="tab = 'forwards'">
+              <Network :size="15" /><span>端口转发</span>
+            </button>
+            <button :class="{ active: tab === 'data' }" @click="tab = 'data'">
+              <Database :size="15" /><span>数据</span>
+            </button>
+            <button :class="{ active: tab === 'tasks' }" @click="tab = 'tasks'">
+              <ListTodo :size="15" /><span>任务队列</span>
+            </button>
+            <button :class="{ active: tab === 'updates' }" @click="tab = 'updates'">
+              <Download :size="15" /><span>版本更新</span>
+              <i v-if="updateCheck.updateAvailable" class="update-dot" aria-label="有新版本" />
+            </button>
           </div>
-          <div class="backup-key-form">
-            <el-input
-              v-model="backupKey"
-              type="password"
-              show-password
-              autocomplete="new-password"
-              placeholder="备份密钥，至少 12 个字符"
-            />
-            <el-button
-              :icon="HardDriveDownload"
-              type="primary"
-              :loading="backupBusy === 'backup'"
-              :disabled="backupBusy === 'restore'"
-              @click="backup"
-            >创建加密备份</el-button>
-            <input
-              ref="backupFileInput"
-              class="visually-hidden"
-              type="file"
-              accept=".enc,application/octet-stream"
-              @change="uploadBackup"
-            />
-            <el-button
-              :icon="Upload"
-              :loading="backupBusy === 'restore'"
-              :disabled="backupBusy === 'backup'"
-              @click="chooseBackupFile"
-            >上传备份文件</el-button>
-          </div>
-          <p class="setting-note">
-            上传时会先使用备份密钥解密并校验完整性，校验通过后才会加入下方列表。忘记密钥无法恢复备份。
-          </p>
-          <div v-for="item in backups" :key="item.file" class="data-row backup-row">
-            <div>
-              <strong>{{ item.file }}</strong>
-              <small>{{ formatBytes(item.size) }} · {{ new Date(item.createdAt).toLocaleString() }} · {{ item.sha256?.slice(0, 12) }}</small>
-            </div>
-            <div class="row-actions">
-              <el-button text :icon="Download" @click="downloadBackup(item.file)">下载</el-button>
-              <el-button
-                text
-                type="warning"
-                :icon="RefreshCw"
-                :loading="backupBusy === 'restore'"
-                :disabled="backupBusy === 'backup'"
-                @click="restoreBackup(item.file)"
-              >恢复</el-button>
-            </div>
-          </div>
-          <div v-if="!backups.length" class="empty-small backup-empty">
-            <Database :size="24" /><span>暂无加密备份</span>
-          </div>
-        </div>
-        <div v-if="tab === 'updates'" class="update-panel">
-          <div class="settings-section">
-            <div class="security-heading">
-              <div>
-                <h3>版本更新</h3>
-                <p>检查 GitHub 上的最新稳定 Release。</p>
-              </div>
-              <span
-                class="security-state"
-                :class="{
-                  enabled: updateCheck.versionKnown && !updateCheck.updateAvailable,
-                  warning: updateCheck.updateAvailable,
-                }"
-              >
-                {{
-                  updateCheckBusy
-                    ? "检查中"
-                    : updateCheckError
-                      ? "检查失败"
-                      : !updateCheck.versionKnown
-                        ? "开发版本"
-                        : updateCheck.updateAvailable
-                          ? "发现新版本"
-                          : "已是最新"
-                }}
-              </span>
-            </div>
-            <div class="update-version-grid">
-              <div>
-                <small>当前版本</small>
-                <strong>{{ updateCheck.currentVersion }}</strong>
-              </div>
-              <div>
-                <small>最新版本</small>
-                <strong>{{ updateCheck.latestVersion || "--" }}</strong>
-              </div>
-            </div>
-            <p v-if="updateCheckError" class="setting-note update-error">
-              {{ updateCheckError }}
-            </p>
-            <p v-else-if="updateCheck.releaseName" class="setting-note">
-              {{ updateCheck.releaseName }}
-              <span v-if="updateCheck.publishedAt">
-                · {{ new Date(updateCheck.publishedAt).toLocaleDateString() }}
-              </span>
-            </p>
-            <div class="row-actions update-actions">
-              <el-button
-                :icon="RefreshCw"
-                :loading="updateCheckBusy"
-                @click="checkForUpdate(true)"
-              >检查更新</el-button>
-              <a
-                v-if="updateCheck.releaseURL"
-                class="el-button el-button--primary update-release-link"
-                :href="updateCheck.releaseURL"
-                target="_blank"
-                rel="noreferrer"
-              >查看 Release</a>
-            </div>
-          </div>
-        </div>
-        <el-tabs
-          v-if="
-            ['terminal', 'devices', 'users', 'admin', 'network', 'ai'].includes(tab)
-          "
-          v-model="tab"
-          class="settings-tabs settings-detail-tabs"
-        >
-          <el-tab-pane label="终端" name="terminal">
-            <div class="settings-section">
-              <h3>界面外观</h3>
-              <div
-                class="interface-theme-grid"
-                role="radiogroup"
-                aria-label="界面主题"
-              >
-                <button
-                  v-for="preset in interfaceThemePresets"
-                  :key="preset.id"
-                  class="interface-theme-card"
-                  :class="{ active: preferences.theme === preset.id }"
-                  :aria-checked="preferences.theme === preset.id"
-                  role="radio"
-                  @click="selectInterfaceTheme(preset.id)"
-                >
-                  <span
-                    class="interface-theme-preview"
-                    :style="{
-                      backgroundColor: preset.colors.bg,
-                      borderColor: preset.colors.lineStrong,
-                    }"
-                  >
-                    <i :style="{ backgroundColor: preset.colors.sidebar }"></i>
-                    <b :style="{ backgroundColor: preset.colors.tabbar }"></b>
-                    <em
-                      :style="{ backgroundColor: preset.colors.surface2 }"
-                    ></em>
-                    <small :style="{ backgroundColor: preset.accent }"></small>
-                  </span>
-                  <span>
-                    <strong>{{ preset.name }}</strong>
-                    <small>{{ preset.description }}</small>
-                  </span>
-                  <Check v-if="preferences.theme === preset.id" :size="15" />
-                </button>
-              </div>
-              <div class="setting-row palette-setting">
-                <span>强调色</span>
-                <div
-                  class="accent-palette"
-                  role="radiogroup"
-                  aria-label="强调色"
-                >
-                  <el-tooltip
-                    v-for="preset in accentPresets"
+        </nav>
+
+        <main class="sp-main">
+          <div class="sp-col" :key="tab">
+            <header class="sp-title">
+              <h1>{{ tabMeta.title }}</h1>
+              <p>{{ tabMeta.desc }}</p>
+            </header>
+
+            <!-- ============ 外观与终端 ============ -->
+            <template v-if="tab === 'terminal'">
+              <section class="sx">
+                <h3 class="sx-h">界面主题</h3>
+                <div class="theme-grid" role="radiogroup" aria-label="界面主题">
+                  <button
+                    v-for="preset in interfaceThemePresets"
                     :key="preset.id"
-                    :content="preset.name"
+                    class="theme-card"
+                    :class="{ active: preferences.theme === preset.id }"
+                    :aria-checked="preferences.theme === preset.id"
+                    role="radio"
+                    @click="selectInterfaceTheme(preset.id)"
                   >
-                    <button
-                      class="accent-swatch"
-                      :class="{
-                        active: preferences.accentColor === preset.value,
+                    <span
+                      class="theme-preview"
+                      :style="{
+                        backgroundColor: preset.colors.bg,
+                        borderColor: preset.colors.lineStrong,
                       }"
-                      :style="{ backgroundColor: preset.value }"
-                      :aria-label="preset.name"
-                      :aria-checked="preferences.accentColor === preset.value"
-                      role="radio"
-                      @click="preferences.accentColor = preset.value"
                     >
-                      <Check
-                        v-if="preferences.accentColor === preset.value"
-                        :size="15"
+                      <i :style="{ backgroundColor: preset.colors.sidebar }"></i>
+                      <b :style="{ backgroundColor: preset.colors.tabbar }"></b>
+                      <em :style="{ backgroundColor: preset.colors.surface2 }"></em>
+                      <small :style="{ backgroundColor: preset.accent }"></small>
+                    </span>
+                    <span class="theme-name">
+                      <strong>{{ preset.name }}</strong>
+                      <small>{{ preset.description }}</small>
+                    </span>
+                    <Check v-if="preferences.theme === preset.id" :size="14" class="theme-check" />
+                  </button>
+                </div>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>强调色</strong><small>按钮、选中态与焦点的颜色</small></div>
+                    <div class="sx-ctl">
+                      <div class="accent-palette" role="radiogroup" aria-label="强调色">
+                        <el-tooltip v-for="preset in accentPresets" :key="preset.id" :content="preset.name">
+                          <button
+                            class="accent-swatch"
+                            :class="{ active: preferences.accentColor === preset.value }"
+                            :style="{ backgroundColor: preset.value }"
+                            :aria-label="preset.name"
+                            :aria-checked="preferences.accentColor === preset.value"
+                            role="radio"
+                            @click="preferences.accentColor = preset.value"
+                          >
+                            <Check v-if="preferences.accentColor === preset.value" :size="13" />
+                          </button>
+                        </el-tooltip>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="sx">
+                <h3 class="sx-h">终端配色</h3>
+                <div class="swatch-grid" role="radiogroup" aria-label="终端配色">
+                  <button
+                    v-for="preset in terminalThemePresets"
+                    :key="preset.id"
+                    class="swatch-card"
+                    :class="{ active: preferences.terminalTheme === preset.id }"
+                    :style="{ backgroundColor: preset.background, color: preset.foreground }"
+                    :aria-checked="preferences.terminalTheme === preset.id"
+                    role="radio"
+                    @click="selectTerminalTheme(preset.id)"
+                  >
+                    <span class="swatch-dots">
+                      <i :style="{ backgroundColor: preset.colors[1] }"></i>
+                      <i :style="{ backgroundColor: preset.colors[2] }"></i>
+                      <i :style="{ backgroundColor: preset.colors[3] }"></i>
+                      <i :style="{ backgroundColor: preset.colors[4] }"></i>
+                    </span>
+                    <span class="swatch-name">{{ preset.name }}</span>
+                    <Check v-if="preferences.terminalTheme === preset.id" :size="13" class="theme-check" />
+                  </button>
+                </div>
+              </section>
+
+              <section class="sx">
+                <h3 class="sx-h">字体</h3>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>字号</strong></div>
+                    <div class="sx-ctl wide"><el-slider v-model="preferences.fontSize" :min="10" :max="24" show-input /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>行高</strong></div>
+                    <div class="sx-ctl wide"><el-slider v-model="preferences.lineHeight" :min="1" :max="2" :step="0.05" show-input /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>字重</strong></div>
+                    <div class="sx-ctl wide"><el-slider v-model="preferences.fontWeight" :min="300" :max="700" :step="100" show-input /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>字间距</strong></div>
+                    <div class="sx-ctl wide"><el-slider v-model="preferences.letterSpacing" :min="0" :max="3" :step="0.25" show-input /></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="sx">
+                <h3 class="sx-h">光标与提示</h3>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>光标样式</strong></div>
+                    <div class="sx-ctl">
+                      <el-segmented
+                        v-model="preferences.cursorStyle"
+                        :options="[
+                          { label: '方块', value: 'block' },
+                          { label: '竖线', value: 'bar' },
+                          { label: '下划线', value: 'underline' },
+                        ]"
                       />
-                    </button>
-                  </el-tooltip>
-                </div>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h3>终端外观</h3>
-              <div
-                class="terminal-theme-grid"
-                role="radiogroup"
-                aria-label="终端配色"
-              >
-                <button
-                  v-for="preset in terminalThemePresets"
-                  :key="preset.id"
-                  class="terminal-theme-card"
-                  :class="{ active: preferences.terminalTheme === preset.id }"
-                  :style="{
-                    backgroundColor: preset.background,
-                    color: preset.foreground,
-                  }"
-                  :aria-checked="preferences.terminalTheme === preset.id"
-                  role="radio"
-                  @click="selectTerminalTheme(preset.id)"
-                >
-                  <span class="terminal-theme-preview">
-                    <i :style="{ backgroundColor: preset.colors[1] }"></i>
-                    <i :style="{ backgroundColor: preset.colors[2] }"></i>
-                    <i :style="{ backgroundColor: preset.colors[3] }"></i>
-                    <i :style="{ backgroundColor: preset.colors[4] }"></i>
-                  </span>
-                  <span>{{ preset.name }}</span>
-                  <Check
-                    v-if="preferences.terminalTheme === preset.id"
-                    :size="14"
-                  />
-                </button>
-              </div>
-              <div class="setting-row">
-                <span>字号</span
-                ><el-slider
-                  v-model="preferences.fontSize"
-                  :min="10"
-                  :max="24"
-                  show-input
-                />
-              </div>
-              <div class="setting-row">
-                <span>行高</span
-                ><el-slider
-                  v-model="preferences.lineHeight"
-                  :min="1"
-                  :max="2"
-                  :step="0.05"
-                  show-input
-                />
-              </div>
-              <div class="setting-row">
-                <span>字重</span
-                ><el-slider
-                  v-model="preferences.fontWeight"
-                  :min="300"
-                  :max="700"
-                  :step="100"
-                  show-input
-                />
-              </div>
-              <div class="setting-row">
-                <span>字间距</span
-                ><el-slider
-                  v-model="preferences.letterSpacing"
-                  :min="0"
-                  :max="3"
-                  :step="0.25"
-                  show-input
-                />
-              </div>
-              <div class="setting-row">
-                <span>光标</span
-                ><el-select v-model="preferences.cursorStyle"
-                  ><el-option label="方块" value="block" /><el-option
-                    label="竖线"
-                    value="bar" /><el-option label="下划线" value="underline"
-                /></el-select>
-              </div>
-              <div class="setting-row">
-                <span>光标闪烁</span
-                ><el-switch v-model="preferences.cursorBlink" />
-              </div>
-              <div class="setting-row">
-                <span>视觉响铃</span
-                ><el-switch v-model="preferences.visualBell" />
-              </div>
-              <div class="setting-row">
-                <span>声音响铃</span
-                ><el-switch v-model="preferences.soundBell" />
-              </div>
-              <div class="setting-row">
-                <span>多行粘贴保护</span
-                ><el-switch v-model="preferences.pasteGuard" />
-              </div>
-              <div class="row-actions settings-actions">
-                <el-button @click="resetPreferences">恢复默认</el-button
-                ><el-button type="primary" @click="savePreferences"
-                  >保存设置</el-button
-                >
-              </div>
-            </div>
-          </el-tab-pane>
-          <el-tab-pane label="登录设备" name="devices">
-            <div class="settings-section">
-              <h3>工作区锁屏</h3>
-              <div class="setting-row">
-                <span>启用锁屏</span
-                ><el-switch
-                  :model-value="preferences.lockEnabled && lockPINConfigured"
-                  @change="toggleLockFeature"
-                />
-              </div>
-              <template v-if="preferences.lockEnabled && lockPINConfigured">
-                <div class="setting-row">
-                  <span>空闲自动锁屏</span
-                  ><el-select v-model="preferences.autoLockMinutes">
-                  <el-option label="不按空闲锁屏" :value="0" />
-                  <el-option label="1 分钟" :value="1" />
-                  <el-option label="5 分钟" :value="5" />
-                  <el-option label="15 分钟" :value="15" />
-                  <el-option label="30 分钟" :value="30" />
-                  <el-option label="1 小时" :value="60" />
-                  </el-select>
-                </div>
-                <div class="setting-row">
-                  <span>Win/Meta + L</span
-                  ><el-switch v-model="preferences.lockOnShortcut" />
-                </div>
-                <div class="setting-row">
-                  <span>锁屏 PIN</span
-                  ><el-button text @click="openLockPINSetup">修改 PIN</el-button>
-                </div>
-              </template>
-              <div v-if="lockPINSetupOpen" class="lock-pin-setup">
-                <el-input
-                  :model-value="lockPINForm.pin"
-                  maxlength="6"
-                  inputmode="numeric"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  placeholder="设置 6 位数字 PIN"
-                  @update:model-value="lockPINForm.pin = normalizePIN($event)"
-                />
-                <el-input
-                  :model-value="lockPINForm.confirm"
-                  maxlength="6"
-                  inputmode="numeric"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  placeholder="再次输入 PIN"
-                  @update:model-value="lockPINForm.confirm = normalizePIN($event)"
-                />
-                <div class="row-actions">
-                  <el-button @click="lockPINSetupOpen = false">取消</el-button>
-                  <el-button type="primary" :loading="savingLockPIN" @click="saveLockPIN">
-                    保存 PIN
-                  </el-button>
-                </div>
-              </div>
-              <p class="setting-note">
-                仅在空闲超时、手动锁屏或捕获到 Win/Meta + L 时锁定；切换页面不会锁定。
-              </p>
-            </div>
-            <div class="settings-section">
-              <h3>修改登录密码</h3>
-              <div class="inline-form password-form">
-                <el-input
-                  v-model="passwordForm.currentPassword"
-                  type="password"
-                  show-password
-                  placeholder="当前密码"
-                /><el-input
-                  v-model="passwordForm.newPassword"
-                  type="password"
-                  show-password
-                  :placeholder="`新密码，至少 ${policy.passwordMinLength} 位`"
-                /><el-input
-                  v-model="passwordForm.confirmPassword"
-                  type="password"
-                  show-password
-                  placeholder="确认新密码"
-                /><el-button @click="changePassword">修改</el-button>
-              </div>
-            </div>
-            <div class="settings-section">
-              <h3>登录设备</h3>
-              <div class="list-stack">
-                <div v-for="d in devices" :key="d.id" class="data-row">
-                  <div>
-                    <strong
-                      >{{ d.userAgent || "未知设备" }}
-                      <span v-if="d.current" class="current-device"
-                        >当前设备</span
-                      ></strong
-                    ><small
-                      >{{ d.ip }} · 最后活动
-                      {{ new Date(d.lastSeenAt).toLocaleString() }} · 到期
-                      {{ new Date(d.expiresAt).toLocaleString() }}</small
-                    >
+                    </div>
                   </div>
-                  <el-button :icon="Trash2" text @click="revoke(d.id)"
-                    >撤销</el-button
-                  >
-                </div>
-              </div>
-              <el-button :icon="LogOut" type="danger" plain @click="revokeAll"
-                >退出全部设备</el-button
-              >
-            </div>
-          </el-tab-pane>
-          <el-tab-pane
-            v-if="auth.user?.role === 'admin'"
-            label="用户"
-            name="users"
-          >
-            <div class="tool-heading user-management-heading">
-              <div>
-                <strong>用户列表</strong>
-                <small>{{ users.length }} 个账户</small>
-              </div>
-              <el-button :icon="UserPlus" type="primary" @click="openCreateUser"
-                >添加用户</el-button
-              >
-            </div>
-            <div v-if="users.length" class="list-stack user-list">
-              <div v-for="u in users" :key="u.id" class="user-row">
-                <div class="user-identity">
-                  <span class="user-initial">{{
-                    u.username.slice(0, 1).toUpperCase()
-                  }}</span>
-                  <div>
-                    <strong>{{ u.username }}</strong>
-                    <small>
-                      {{ u.role === "admin" ? "管理员" : "普通用户" }}
-                      · {{ u.disabled ? "已禁用" : "正常" }}
-                      <template v-if="u.forcePasswordChange">
-                        · 登录后需改密</template
-                      >
-                    </small>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>光标闪烁</strong></div>
+                    <div class="sx-ctl"><el-switch v-model="preferences.cursorBlink" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>视觉响铃</strong><small>收到终端响铃时闪烁画面</small></div>
+                    <div class="sx-ctl"><el-switch v-model="preferences.visualBell" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>声音响铃</strong><small>收到终端响铃时播放提示音</small></div>
+                    <div class="sx-ctl"><el-switch v-model="preferences.soundBell" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>多行粘贴保护</strong><small>粘贴多行内容前先确认，避免误执行</small></div>
+                    <div class="sx-ctl"><el-switch v-model="preferences.pasteGuard" /></div>
                   </div>
                 </div>
-                <span class="user-state" :class="{ disabled: u.disabled }">{{
-                  u.disabled ? "已禁用" : "已启用"
-                }}</span>
-                <div class="row-actions user-row-actions">
-                  <el-button :icon="Pencil" text @click="openEditUser(u)"
-                    >编辑</el-button
-                  >
-                  <el-button
-                    :icon="LockKeyhole"
-                    text
-                    @click="openUserPassword(u)"
-                    >修改密码</el-button
-                  >
-                  <el-button
-                    v-if="u.id !== auth.user?.id"
-                    :icon="Trash2"
-                    text
-                    type="danger"
-                    @click="deleteUser(u)"
-                    >删除</el-button
-                  >
+              </section>
+
+              <div class="sp-savebar">
+                <el-button @click="resetPreferences">恢复默认</el-button>
+                <el-button type="primary" @click="savePreferences">保存设置</el-button>
+              </div>
+            </template>
+
+            <!-- ============ 账户与设备 ============ -->
+            <template v-else-if="tab === 'devices'">
+              <section class="sx">
+                <h3 class="sx-h">工作区锁屏</h3>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>启用锁屏</strong><small>仅在空闲超时、手动锁屏或 Win/Meta + L 时锁定，切换页面不会锁定</small></div>
+                    <div class="sx-ctl">
+                      <el-switch
+                        :model-value="preferences.lockEnabled && lockPINConfigured"
+                        @change="toggleLockFeature"
+                      />
+                    </div>
+                  </div>
+                  <template v-if="preferences.lockEnabled && lockPINConfigured">
+                    <div class="sx-row">
+                      <div class="sx-info"><strong>空闲自动锁屏</strong></div>
+                      <div class="sx-ctl">
+                        <el-select v-model="preferences.autoLockMinutes">
+                          <el-option label="不按空闲锁屏" :value="0" />
+                          <el-option label="1 分钟" :value="1" />
+                          <el-option label="5 分钟" :value="5" />
+                          <el-option label="15 分钟" :value="15" />
+                          <el-option label="30 分钟" :value="30" />
+                          <el-option label="1 小时" :value="60" />
+                        </el-select>
+                      </div>
+                    </div>
+                    <div class="sx-row">
+                      <div class="sx-info"><strong>Win/Meta + L</strong><small>捕获到该快捷键时锁定</small></div>
+                      <div class="sx-ctl"><el-switch v-model="preferences.lockOnShortcut" /></div>
+                    </div>
+                    <div class="sx-row">
+                      <div class="sx-info"><strong>锁屏 PIN</strong><small>6 位数字</small></div>
+                      <div class="sx-ctl"><el-button @click="openLockPINSetup">修改 PIN</el-button></div>
+                    </div>
+                  </template>
                 </div>
-              </div>
-            </div>
-            <div v-else class="empty-small">
-              <Users :size="28" /><span>暂无用户</span>
-            </div>
-          </el-tab-pane>
-          <el-tab-pane
-            v-if="auth.user?.role === 'admin'"
-            label="管理"
-            name="admin"
-          >
-            <div class="stats-grid admin-stats">
-              <div>
-                <strong>{{ stats.users || 0 }}</strong
-                ><span>用户 · {{ stats.activeUsers || 0 }} 活跃</span>
-              </div>
-              <div>
-                <strong>{{ stats.hosts || 0 }}</strong
-                ><span>主机</span>
-              </div>
-              <div>
-                <strong>{{ stats.sessions || 0 }}</strong
-                ><span>活动 SSH 会话</span>
-              </div>
-              <div>
-                <strong>{{ stats.websockets || 0 }}</strong
-                ><span>WebSocket</span>
-              </div>
-              <div>
-                <strong>{{ formatBytes(stats.databaseBytes || 0) }}</strong
-                ><span>数据库</span>
-              </div>
-              <div>
-                <strong>{{ stats.backups || 0 }}</strong
-                ><span>备份</span>
-              </div>
-            </div>
-            <div class="system-meta">
-              <span>运行 {{ formatDuration(stats.uptimeSeconds || 0) }}</span
-              ><span>{{ stats.goVersion }}</span
-              ><span>部署 {{ stats.deploymentID }}</span
-              ><span v-if="stats.latestBackupAt"
-                >最近备份
-                {{ new Date(stats.latestBackupAt).toLocaleString() }}</span
-              >
-            </div>
-            <div class="settings-section">
-              <h3>登录安全策略</h3>
-              <div class="setting-row">
-                <span>密码最小长度</span
-                ><el-input-number
-                  v-model="policy.passwordMinLength"
-                  :min="10"
-                  :max="128"
-                />
-              </div>
-              <div class="setting-row">
-                <span>失败锁定阈值</span
-                ><el-input-number
-                  v-model="policy.loginFailureThreshold"
-                  :min="3"
-                  :max="20"
-                />
-              </div>
-              <div class="setting-row">
-                <span>锁定分钟数</span
-                ><el-input-number
-                  v-model="policy.lockMinutes"
-                  :min="1"
-                  :max="1440"
-                />
-              </div>
-              <div class="setting-row">
-                <span>保持登录天数</span
-                ><el-input-number
-                  v-model="policy.rememberDays"
-                  :min="1"
-                  :max="90"
-                />
-              </div>
-              <div class="setting-row">
-                <span>新用户强制改密</span
-                ><el-switch v-model="policy.forceChangeOnCreate" />
-              </div>
-              <el-button :icon="ShieldCheck" type="primary" @click="savePolicy"
-                >保存安全策略</el-button
-              >
-            </div>
-          </el-tab-pane>
-          <el-tab-pane
-            v-if="auth.user?.role === 'admin'"
-            label="组网"
-            name="network"
-          >
-            <div class="settings-section">
-              <div class="security-heading">
-                <div>
-                  <h3>内嵌 Tailscale</h3>
-                  <p>服务默认关闭，仅在开启并保存后启动 Go 网络服务。</p>
-                </div>
-                <span class="security-state" :class="{ enabled: tailscale.status.state === 'Running' }">
-                  {{ tailscale.status.state === "Running" ? "运行中" : tailscale.enabled ? tailscale.status.state : "已关闭" }}
-                </span>
-              </div>
-              <div class="setting-row">
-                <span>服务状态</span>
-                <el-switch v-model="tailscaleForm.enabled" />
-              </div>
-              <el-form label-position="top" class="ai-model-form">
-                <el-form-item label="节点名称">
-                  <el-input v-model="tailscaleForm.hostname" maxlength="63" />
-                </el-form-item>
-                <el-form-item label="控制面地址">
-                  <el-input v-model="tailscaleForm.controlURL" placeholder="官方 Tailscale 留空，Headscale 填写地址" clearable />
-                </el-form-item>
-                <el-form-item label="Auth Key">
-                  <el-input v-model="tailscaleForm.authKey" type="password" show-password autocomplete="new-password" :placeholder="tailscale.authKeyConfigured ? '已配置，留空保持不变' : '输入 Auth Key'" :disabled="tailscaleForm.clearAuthKey" />
-                </el-form-item>
-                <el-checkbox v-if="tailscale.authKeyConfigured" v-model="tailscaleForm.clearAuthKey">清除已保存的 Auth Key</el-checkbox>
-              </el-form>
-              <div v-if="tailscale.status.ips?.length || tailscale.status.authUrl" class="setting-note">
-                <span v-if="tailscale.status.ips?.length">IP: {{ tailscale.status.ips.join(", ") }}</span>
-                <a v-if="tailscale.status.authUrl" :href="tailscale.status.authUrl" target="_blank" rel="noreferrer">打开登录链接</a>
-              </div>
-              <div class="row-actions settings-actions">
-                <el-button :icon="Save" type="primary" :loading="savingTailscale" @click="saveTailscale">保存并应用</el-button>
-              </div>
-            </div>
-          </el-tab-pane>
-          <el-tab-pane
-            v-if="auth.user?.role === 'admin'"
-            label="AI 模型"
-            name="ai"
-          >
-            <div class="settings-section ai-model-section">
-              <div class="security-heading">
-                <div>
-                  <h3>Agent 模型服务</h3>
-                  <p>兼容 Chat Completions 工具调用的模型接口。</p>
-                </div>
-                <span class="security-state" :class="{ enabled: aiModel.configured }">
-                  {{ aiModel.configured ? "已启用" : "未配置" }}
-                </span>
-              </div>
-              <el-form label-position="top" class="ai-model-form">
-                <el-form-item label="API 地址">
+                <div v-if="lockPINSetupOpen" class="sx-form lock-pin-setup">
                   <el-input
-                    v-model="aiModelForm.baseURL"
-                    placeholder="https://api.example.com/v1"
-                    clearable
-                  />
-                </el-form-item>
-                <el-form-item label="模型名称">
-                  <el-input
-                    v-model="aiModelForm.model"
-                    placeholder="输入模型标识"
-                    clearable
-                  />
-                </el-form-item>
-                <el-form-item label="API Key">
-                  <el-input
-                    v-model="aiModelForm.apiKey"
+                    :model-value="lockPINForm.pin"
+                    maxlength="6"
+                    inputmode="numeric"
                     type="password"
                     show-password
                     autocomplete="new-password"
-                    :disabled="aiModelForm.clearAPIKey"
-                    :placeholder="aiModel.apiKeyConfigured ? '已配置，留空保持不变' : '输入 API Key（可选）'"
+                    placeholder="设置 6 位数字 PIN"
+                    @update:model-value="lockPINForm.pin = normalizePIN($event)"
                   />
-                </el-form-item>
-                <el-checkbox
-                  v-if="aiModel.apiKeyConfigured"
-                  v-model="aiModelForm.clearAPIKey"
-                >清除已保存的 API Key</el-checkbox>
-              </el-form>
-              <div class="row-actions ai-model-actions">
-                <el-button
-                  :icon="FlaskConical"
-                  :loading="testingAIModel"
-                  :disabled="savingAIModel"
-                  @click="testAIModel"
-                >测试连接</el-button>
-                <el-button
-                  type="primary"
-                  :icon="Save"
-                  :loading="savingAIModel"
-                  :disabled="testingAIModel"
-                  @click="saveAIModel()"
-                >保存配置</el-button>
+                  <el-input
+                    :model-value="lockPINForm.confirm"
+                    maxlength="6"
+                    inputmode="numeric"
+                    type="password"
+                    show-password
+                    autocomplete="new-password"
+                    placeholder="再次输入 PIN"
+                    @update:model-value="lockPINForm.confirm = normalizePIN($event)"
+                  />
+                  <div class="sx-actions">
+                    <el-button @click="lockPINSetupOpen = false">取消</el-button>
+                    <el-button type="primary" :loading="savingLockPIN" @click="saveLockPIN">保存 PIN</el-button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="sx">
+                <h3 class="sx-h">登录密码</h3>
+                <div class="sx-form">
+                  <el-input v-model="passwordForm.currentPassword" type="password" show-password placeholder="当前密码" />
+                  <el-input
+                    v-model="passwordForm.newPassword"
+                    type="password"
+                    show-password
+                    :placeholder="`新密码，至少 ${policy.passwordMinLength} 位`"
+                  />
+                  <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="确认新密码" />
+                  <div class="sx-actions"><el-button type="primary" @click="changePassword">修改密码</el-button></div>
+                </div>
+              </section>
+
+              <section class="sx">
+                <div class="sx-h-row">
+                  <h3 class="sx-h">登录设备</h3>
+                  <el-button :icon="LogOut" type="danger" plain size="small" @click="revokeAll">退出全部设备</el-button>
+                </div>
+                <div class="sx-list">
+                  <div v-for="d in devices" :key="d.id" class="sx-row">
+                    <div class="sx-info">
+                      <strong>
+                        {{ d.userAgent || "未知设备" }}
+                        <span v-if="d.current" class="sx-badge">当前设备</span>
+                      </strong>
+                      <small>
+                        {{ d.ip }} · 最后活动 {{ new Date(d.lastSeenAt).toLocaleString() }} · 到期 {{ new Date(d.expiresAt).toLocaleString() }}
+                      </small>
+                    </div>
+                    <div class="sx-ctl"><el-button :icon="Trash2" text @click="revoke(d.id)">撤销</el-button></div>
+                  </div>
+                  <div v-if="!devices.length" class="sx-empty">暂无登录设备</div>
+                </div>
+              </section>
+            </template>
+
+            <!-- ============ 凭据 / 任务 ============ -->
+            <SecurityPanel v-else-if="tab === 'security'" />
+            <CredentialsPanel
+              v-else-if="tab === 'credentials'"
+              :credentials="credentials"
+              @saved="emit('credentialSaved', $event)"
+              @deleted="emit('credentialDeleted', $event)"
+            />
+            <TaskPanel v-else-if="tab === 'tasks'" :sessions="sessions" />
+
+            <!-- ============ 用户管理 ============ -->
+            <template v-else-if="tab === 'users' && auth.user?.role === 'admin'">
+              <section class="sx">
+                <div class="sx-h-row">
+                  <h3 class="sx-h">{{ users.length }} 个账户</h3>
+                  <el-button :icon="UserPlus" type="primary" size="small" @click="openCreateUser">添加用户</el-button>
+                </div>
+                <div v-if="users.length" class="sx-list">
+                  <div v-for="u in users" :key="u.id" class="sx-row user-row">
+                    <span class="user-initial">{{ u.username.slice(0, 1).toUpperCase() }}</span>
+                    <div class="sx-info">
+                      <strong>
+                        {{ u.username }}
+                        <span class="sx-badge" :class="{ off: u.disabled }">{{ u.disabled ? "已禁用" : "已启用" }}</span>
+                      </strong>
+                      <small>
+                        {{ u.role === "admin" ? "管理员" : "普通用户" }}
+                        <template v-if="u.forcePasswordChange"> · 登录后需改密</template>
+                      </small>
+                    </div>
+                    <div class="sx-ctl">
+                      <el-button :icon="Pencil" text @click="openEditUser(u)">编辑</el-button>
+                      <el-button :icon="LockKeyhole" text @click="openUserPassword(u)">改密</el-button>
+                      <el-button v-if="u.id !== auth.user?.id" :icon="Trash2" text type="danger" @click="deleteUser(u)">删除</el-button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="sx-empty">暂无用户</div>
+              </section>
+            </template>
+
+            <!-- ============ 系统管理 ============ -->
+            <template v-else-if="tab === 'admin' && auth.user?.role === 'admin'">
+              <section class="sx">
+                <div class="stat-strip">
+                  <div><strong>{{ stats.users || 0 }}</strong><span>用户 · {{ stats.activeUsers || 0 }} 活跃</span></div>
+                  <div><strong>{{ stats.hosts || 0 }}</strong><span>主机</span></div>
+                  <div><strong>{{ stats.sessions || 0 }}</strong><span>SSH 会话</span></div>
+                  <div><strong>{{ stats.websockets || 0 }}</strong><span>WebSocket</span></div>
+                  <div><strong>{{ formatBytes(stats.databaseBytes || 0) }}</strong><span>数据库</span></div>
+                  <div><strong>{{ stats.backups || 0 }}</strong><span>备份</span></div>
+                </div>
+                <p class="sx-meta">
+                  <span>运行 {{ formatDuration(stats.uptimeSeconds || 0) }}</span>
+                  <span v-if="stats.goVersion">{{ stats.goVersion }}</span>
+                  <span v-if="stats.deploymentID">部署 {{ stats.deploymentID }}</span>
+                  <span v-if="stats.latestBackupAt">最近备份 {{ new Date(stats.latestBackupAt).toLocaleString() }}</span>
+                </p>
+              </section>
+
+              <section class="sx">
+                <h3 class="sx-h">登录安全策略</h3>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>密码最小长度</strong></div>
+                    <div class="sx-ctl"><el-input-number v-model="policy.passwordMinLength" :min="10" :max="128" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>失败锁定阈值</strong><small>连续失败达到该次数后锁定账户</small></div>
+                    <div class="sx-ctl"><el-input-number v-model="policy.loginFailureThreshold" :min="3" :max="20" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>锁定分钟数</strong></div>
+                    <div class="sx-ctl"><el-input-number v-model="policy.lockMinutes" :min="1" :max="1440" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>保持登录天数</strong></div>
+                    <div class="sx-ctl"><el-input-number v-model="policy.rememberDays" :min="1" :max="90" /></div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>新用户强制改密</strong><small>首次登录后必须修改初始密码</small></div>
+                    <div class="sx-ctl"><el-switch v-model="policy.forceChangeOnCreate" /></div>
+                  </div>
+                </div>
+              </section>
+              <div class="sp-savebar">
+                <el-button :icon="ShieldCheck" type="primary" @click="savePolicy">保存安全策略</el-button>
               </div>
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-        <ToolsDrawer
-          v-if="['snippets', 'forwards', 'data'].includes(tab)"
-          :section="tab"
-          :hosts="hosts"
-          :sessions="sessions"
-          @insert="emit('insert', $event)"
-          @execute="emit('execute', $event)"
-          @batch-execute="forwardBatch"
-        />
-      </section>
+            </template>
+
+            <!-- ============ 组网 ============ -->
+            <template v-else-if="tab === 'network' && auth.user?.role === 'admin'">
+              <section class="sx">
+                <div class="sx-h-row">
+                  <h3 class="sx-h">内嵌 Tailscale</h3>
+                  <span class="sx-badge" :class="{ ok: tailscale.status.state === 'Running' }">
+                    {{ tailscale.status.state === "Running" ? "运行中" : tailscale.enabled ? tailscale.status.state : "已关闭" }}
+                  </span>
+                </div>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>启用服务</strong><small>默认关闭，仅在开启并保存后启动 Go 网络服务</small></div>
+                    <div class="sx-ctl"><el-switch v-model="tailscaleForm.enabled" /></div>
+                  </div>
+                </div>
+                <el-form label-position="top" class="sx-fields">
+                  <el-form-item label="节点名称">
+                    <el-input v-model="tailscaleForm.hostname" maxlength="63" />
+                  </el-form-item>
+                  <el-form-item label="控制面地址">
+                    <el-input v-model="tailscaleForm.controlURL" placeholder="官方 Tailscale 留空，Headscale 填写地址" clearable />
+                  </el-form-item>
+                  <el-form-item label="Auth Key">
+                    <el-input
+                      v-model="tailscaleForm.authKey"
+                      type="password"
+                      show-password
+                      autocomplete="new-password"
+                      :placeholder="tailscale.authKeyConfigured ? '已配置，留空保持不变' : '输入 Auth Key'"
+                      :disabled="tailscaleForm.clearAuthKey"
+                    />
+                  </el-form-item>
+                  <el-checkbox v-if="tailscale.authKeyConfigured" v-model="tailscaleForm.clearAuthKey">清除已保存的 Auth Key</el-checkbox>
+                </el-form>
+                <p v-if="tailscale.status.ips?.length || tailscale.status.authUrl" class="sx-meta">
+                  <span v-if="tailscale.status.ips?.length">IP {{ tailscale.status.ips.join(", ") }}</span>
+                  <a v-if="tailscale.status.authUrl" :href="tailscale.status.authUrl" target="_blank" rel="noreferrer">打开登录链接</a>
+                </p>
+              </section>
+              <div class="sp-savebar">
+                <el-button :icon="Save" type="primary" :loading="savingTailscale" @click="saveTailscale">保存并应用</el-button>
+              </div>
+            </template>
+
+            <!-- ============ AI 模型 ============ -->
+            <template v-else-if="tab === 'ai' && auth.user?.role === 'admin'">
+              <section class="sx">
+                <div class="sx-h-row">
+                  <h3 class="sx-h">Agent 模型服务</h3>
+                  <span class="sx-badge" :class="{ ok: aiModel.configured }">{{ aiModel.configured ? "已启用" : "未配置" }}</span>
+                </div>
+                <p class="sx-desc">兼容 Chat Completions 工具调用的模型接口。</p>
+                <el-form label-position="top" class="sx-fields">
+                  <el-form-item label="API 地址">
+                    <el-input v-model="aiModelForm.baseURL" placeholder="https://api.example.com/v1" clearable />
+                  </el-form-item>
+                  <el-form-item label="模型名称">
+                    <el-input v-model="aiModelForm.model" placeholder="输入模型标识" clearable />
+                  </el-form-item>
+                  <el-form-item label="API Key">
+                    <el-input
+                      v-model="aiModelForm.apiKey"
+                      type="password"
+                      show-password
+                      autocomplete="new-password"
+                      :disabled="aiModelForm.clearAPIKey"
+                      :placeholder="aiModel.apiKeyConfigured ? '已配置，留空保持不变' : '输入 API Key（可选）'"
+                    />
+                  </el-form-item>
+                  <el-checkbox v-if="aiModel.apiKeyConfigured" v-model="aiModelForm.clearAPIKey">清除已保存的 API Key</el-checkbox>
+                  <el-form-item label="Agent 代理地址（可选）">
+                    <el-input
+                      v-model="aiModelForm.proxyURL"
+                      type="password"
+                      show-password
+                      autocomplete="new-password"
+                      placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                      clearable
+                    />
+                    <p class="sx-hint">仅用于 AI Agent 的模型请求和连接测试，留空直连。支持 HTTP、HTTPS、SOCKS5，可在地址中填写账号密码。</p>
+                  </el-form-item>
+                </el-form>
+              </section>
+              <div class="sp-savebar">
+                <el-button :icon="FlaskConical" :loading="testingAIModel" :disabled="savingAIModel" @click="testAIModel">测试连接</el-button>
+                <el-button type="primary" :icon="Save" :loading="savingAIModel" :disabled="testingAIModel" @click="saveAIModel()">保存配置</el-button>
+              </div>
+            </template>
+
+            <!-- ============ 命令片段 / 端口转发 ============ -->
+            <ToolsDrawer
+              v-else-if="tab === 'snippets' || tab === 'forwards'"
+              :section="tab"
+              :hosts="hosts"
+              :sessions="sessions"
+              @insert="emit('insert', $event)"
+              @execute="emit('execute', $event)"
+              @batch-execute="forwardBatch"
+            />
+
+            <!-- ============ 数据 ============ -->
+            <template v-else-if="tab === 'data'">
+              <section v-if="auth.user?.role === 'admin'" class="sx">
+                <div class="sx-h-row">
+                  <h3 class="sx-h">加密备份与恢复</h3>
+                  <span class="sx-badge mono">AES-GCM</span>
+                </div>
+                <p class="sx-desc">备份包含应用数据库和主密钥，使用输入的密钥整体加密。密钥不会保存到服务器，忘记密钥无法恢复备份。</p>
+                <div class="sx-form backup-key-form">
+                  <el-input
+                    v-model="backupKey"
+                    type="password"
+                    show-password
+                    autocomplete="new-password"
+                    placeholder="备份密钥，至少 12 个字符"
+                  />
+                  <input
+                    ref="backupFileInput"
+                    class="visually-hidden"
+                    type="file"
+                    accept=".enc,application/octet-stream"
+                    @change="uploadBackup"
+                  />
+                  <div class="sx-actions left">
+                    <el-button :icon="HardDriveDownload" type="primary" :loading="backupBusy === 'backup'" :disabled="backupBusy === 'restore'" @click="backup">创建加密备份</el-button>
+                    <el-button :icon="Upload" :loading="backupBusy === 'restore'" :disabled="backupBusy === 'backup'" @click="chooseBackupFile">上传备份文件</el-button>
+                  </div>
+                </div>
+                <p class="sx-hint">上传时会先使用备份密钥解密并校验完整性，校验通过后才会加入下方列表。</p>
+                <div class="sx-list">
+                  <div v-for="item in backups" :key="item.file" class="sx-row">
+                    <div class="sx-info">
+                      <strong class="mono">{{ item.file }}</strong>
+                      <small>{{ formatBytes(item.size) }} · {{ new Date(item.createdAt).toLocaleString() }} · {{ item.sha256?.slice(0, 12) }}</small>
+                    </div>
+                    <div class="sx-ctl">
+                      <el-button text :icon="Download" @click="downloadBackup(item.file)">下载</el-button>
+                      <el-button text type="warning" :icon="RefreshCw" :loading="backupBusy === 'restore'" :disabled="backupBusy === 'backup'" @click="restoreBackup(item.file)">恢复</el-button>
+                    </div>
+                  </div>
+                  <div v-if="!backups.length" class="sx-empty">暂无加密备份</div>
+                </div>
+              </section>
+              <ToolsDrawer
+                section="data"
+                :hosts="hosts"
+                :sessions="sessions"
+                @insert="emit('insert', $event)"
+                @execute="emit('execute', $event)"
+                @batch-execute="forwardBatch"
+              />
+            </template>
+
+            <!-- ============ 版本更新 ============ -->
+            <template v-else-if="tab === 'updates'">
+              <section class="sx">
+                <div class="sx-h-row">
+                  <h3 class="sx-h">检查 GitHub 最新稳定 Release</h3>
+                  <span
+                    class="sx-badge"
+                    :class="{
+                      ok: updateCheck.versionKnown && !updateCheck.updateAvailable,
+                      warn: updateCheck.updateAvailable,
+                    }"
+                  >
+                    {{
+                      updateCheckBusy
+                        ? "检查中"
+                        : updateCheckError
+                          ? "检查失败"
+                          : !updateCheck.versionKnown
+                            ? "开发版本"
+                            : updateCheck.updateAvailable
+                              ? "发现新版本"
+                              : "已是最新"
+                    }}
+                  </span>
+                </div>
+                <div class="sx-list">
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>当前版本</strong></div>
+                    <div class="sx-ctl mono">{{ updateCheck.currentVersion }}</div>
+                  </div>
+                  <div class="sx-row">
+                    <div class="sx-info"><strong>最新版本</strong>
+                      <small v-if="updateCheckError" class="err">{{ updateCheckError }}</small>
+                      <small v-else-if="updateCheck.releaseName">
+                        {{ updateCheck.releaseName }}<template v-if="updateCheck.publishedAt"> · {{ new Date(updateCheck.publishedAt).toLocaleDateString() }}</template>
+                      </small>
+                    </div>
+                    <div class="sx-ctl mono">{{ updateCheck.latestVersion || "--" }}</div>
+                  </div>
+                </div>
+                <div class="sx-actions left">
+                  <el-button :icon="RefreshCw" :loading="updateCheckBusy" @click="checkForUpdate(true)">检查更新</el-button>
+                  <a v-if="updateCheck.releaseURL" class="el-button el-button--primary" :href="updateCheck.releaseURL" target="_blank" rel="noreferrer">查看 Release</a>
+                </div>
+              </section>
+            </template>
+          </div>
+        </main>
+      </div>
     </div>
   </el-dialog>
   <el-dialog

@@ -18,7 +18,7 @@ const emit = defineEmits<{
 <template>
   <section class="web-service-resource">
     <header class="web-service-heading">
-      <span><Globe2 :size="14" />内网 Web</span>
+      <span class="web-service-count">{{ services.length }} 个服务</span>
       <button class="icon-btn" title="添加内网 Web" @click="emit('add')">
         <Plus :size="14" />
       </button>

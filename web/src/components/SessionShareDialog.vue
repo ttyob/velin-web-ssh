@@ -134,7 +134,7 @@ function expiresLabel(value: string) {
   <el-dialog
     :model-value="modelValue"
     title="分享终端会话"
-    width="min(680px, calc(100vw - 24px))"
+    width="min(520px, calc(100vw - 24px))"
     append-to-body
     destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"

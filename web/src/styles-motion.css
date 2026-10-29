@@ -1,0 +1,84 @@
+/* ======================================================================
+ * Motion. Short, quiet, and compositor-only (opacity / transform): nothing
+ * here animates layout or paint properties, nothing loops, and nothing sets
+ * will-change, so it stays cheap even with many panes and a long host list.
+ * prefers-reduced-motion is honoured by the global rule in styles-polish.css.
+ *
+ *   enter  ≈ 200–260ms, ease-out (decelerates into place)
+ *   leave  ≈ 140–160ms, ease-in  (leaves faster than it arrived)
+ * ==================================================================== */
+:root {
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@keyframes motion-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes motion-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes motion-dialog-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.975); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes motion-dialog-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(4px) scale(0.985); }
+}
+@keyframes motion-rise {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Enter animations use `backwards` fill: their end state is the element's normal
+ * style, so nothing needs to be held once they finish (a held, finished animation
+ * keeps the element tied to the animation system). Leave animations use `both` so
+ * the element stays hidden until Vue removes it. */
+
+/* ---- Dialogs (Element Plus): fade the backdrop, lift + scale the panel ---- */
+.dialog-fade-enter-active { animation: motion-fade-in 0.2s var(--ease-out) backwards; }
+.dialog-fade-leave-active { animation: motion-fade-out 0.16s var(--ease-in) both; }
+/* Element Plus slides the wrapper in from -20px; the panel animation replaces it. */
+.dialog-fade-enter-active .el-overlay-dialog,
+.dialog-fade-leave-active .el-overlay-dialog { animation: none; }
+.dialog-fade-enter-active .el-dialog { animation: motion-dialog-in 0.26s var(--ease-out) backwards; }
+.dialog-fade-leave-active .el-dialog { animation: motion-dialog-out 0.16s var(--ease-in) both; }
+
+/* ---- Command palette ---- */
+.palette-backdrop.palette-enter-active .palette { animation: motion-dialog-in 0.22s var(--ease-out) backwards; }
+.palette-backdrop.palette-leave-active .palette { animation: motion-dialog-out 0.14s var(--ease-in) both; }
+
+/* ---- Switching the workspace tab: the incoming terminal area fades in.
+ * Opacity only — a transform here would change the box xterm fits against. */
+.terminal-workspace { animation: motion-fade-in 0.2s var(--ease-out) backwards; }
+
+/* ---- Switching the sidebar panel (hosts / internal web) or re-expanding it ---- */
+/* Small elements only: animating .resource-list would turn the whole (thousands of
+ * px tall) scroll content into a composited layer while the sidebar is also
+ * resizing and the terminals are re-fitting, which measurably dropped frames. */
+.sidebar .sidebar-search,
+.sidebar .host-list-tools,
+.sidebar .web-service-resource { animation: motion-rise 0.2s var(--ease-out) backwards; }
+.mobile-overlay { animation: motion-fade-in 0.2s var(--ease-out) backwards; }
+
+/* ---- Tab panes inside dialogs (Docker / Git / Monitor / tools) ---- */
+.el-tabs__content > .el-tab-pane { animation: motion-rise 0.2s var(--ease-out) backwards; }
+
+/* ---- Rail: buttons give press feedback ---- */
+.rail-btn { transition: background-color 0.12s var(--ease-ui), color 0.12s var(--ease-ui), transform 0.12s var(--ease-out); }
+.rail-btn:active { transform: scale(0.92); }
+/* The selection marker is intentionally NOT animated: any animation on it at the
+ * moment of selection measurably dropped frames when the sidebar toggled (marker
+ * change, width transition and terminal refit all land in the same frames). */
+
+/* ---- Tabs: the top marker already scales in from the centre (styles.css); give
+ * the background and label the same easing so selection reads as one motion. ---- */
+.terminal-tab { transition: color 0.18s var(--ease-out), background-color 0.18s var(--ease-out) !important; }
+.terminal-tab::after { transition: transform 0.24s var(--ease-out); }
+
+/* ---- Settings: switching category re-enters the content column ---- */
+.sp-col { animation: motion-rise 0.22s var(--ease-out) backwards; }
+.sp-nav button { transition: background-color 0.14s var(--ease-out), color 0.14s var(--ease-out); }

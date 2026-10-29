@@ -61,6 +61,9 @@ func TestTerminalSharePasswordAccess(t *testing.T) {
 	if err = json.NewDecoder(recorder.Body).Decode(&response); err != nil || !response.Authorized || response.SessionName != "Production" {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
+	if response.SessionMode != "tmux" {
+		t.Fatalf("share view sessionMode=%q, want tmux", response.SessionMode)
+	}
 
 	request = shareRouteRequest(http.MethodGet, "/api/public/shares/token", "token", rawToken, "")
 	request.AddCookie(recorder.Result().Cookies()[0])

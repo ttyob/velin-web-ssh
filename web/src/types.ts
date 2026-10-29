@@ -233,6 +233,7 @@ export interface TerminalShare {
   id: string;
   sessionID: string;
   sessionName: string;
+  sessionMode?: "tmux" | "normal";
   permission: "view" | "operate";
   passwordRequired: boolean;
   record: boolean;

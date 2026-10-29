@@ -202,7 +202,6 @@ body {
   backdrop-filter: none;
 }
 
-.el-dialog,
 .el-message-box,
 .el-dropdown__popper,
 .el-select__popper,
@@ -791,3 +790,24 @@ body {
   font-weight: 400;
   letter-spacing: 0;
 }
+
+/* ---- Active tab: clearly distinct from its neighbours, built only from theme
+ * tokens so every interface theme and accent colour inherits it. The tint comes
+ * from --accent over --tab-active-bg (which differs from --tabbar-bg in all
+ * themes), the label gets full contrast, and inactive labels are dimmed. ---- */
+.terminal-tab { color: color-mix(in srgb, var(--muted) 88%, transparent); }
+.terminal-tab.active {
+  transform: none;
+  color: var(--text);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 18%, transparent),
+      color-mix(in srgb, var(--accent) 6%, transparent)
+    ),
+    var(--tab-active-bg);
+}
+/* The old bottom underline sat at bottom:-1px and was clipped by the tab strip's
+ * overflow, so it never showed. A top bar cannot be clipped. */
+.terminal-tab::after { top: 0; bottom: auto; height: 2px; left: 0; right: 0; }
+.terminal-tab.active .status-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }

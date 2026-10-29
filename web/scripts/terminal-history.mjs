@@ -38,6 +38,7 @@ window.output = data => window.receive({
 })
 window.session = reactive({
   id: 'terminal-history-test', name: 'Terminal history test',
+  hostID: 'terminal-history-host',
   sessionMode: 'tmux', status: 'attached',
 })
 createApp({ render: () => h(TerminalPane, {
@@ -74,6 +75,12 @@ const server = await createServer({
 })
 
 let browser
+const uploads = []
+const mkdirs = []
+const directories = new Set()
+let uploadFailure = false
+let directoryFailure = false
+let mkdirFailure = false
 try {
   await server.listen()
   const address = server.httpServer.address()
@@ -85,9 +92,33 @@ try {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.route('**/api/**', route => route.fulfill({
-    json: route.request().url().endsWith('/csrf') ? { token: 'terminal-test' } : {},
-  }))
+  await page.route('**/api/**', async route => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname.endsWith('/directory')) {
+      return route.fulfill({ status: directoryFailure ? 502 : 200, json: directoryFailure
+        ? { code: 'directory_unavailable', message: '无法读取终端当前目录' }
+        : { path: "/project/with space's $cash" } })
+    }
+    if (url.pathname.endsWith('/mkdir')) {
+      const directory = request.postDataJSON().path
+      mkdirs.push({ path: directory, session: url.searchParams.get('session'), headers: await request.allHeaders() })
+      if (!mkdirFailure) directories.add(directory)
+      return route.fulfill({ status: mkdirFailure ? 502 : 201, json: mkdirFailure
+        ? { code: 'sftp_mkdir_failed', message: 'clipboard 目录创建失败' }
+        : { ok: true } })
+    }
+    if (url.pathname.endsWith('/upload')) {
+      const bytes = request.postDataBuffer() || Buffer.alloc(0)
+      const path = url.searchParams.get('path')
+      assert.ok(directories.has(path.slice(0, path.lastIndexOf('/'))), 'clipboard directory must exist before uploading')
+      uploads.push({ path, offset: Number(url.searchParams.get('offset')), bytes, headers: await request.allHeaders() })
+      return route.fulfill({ status: uploadFailure ? 502 : 201, json: uploadFailure
+        ? { code: 'sftp_upload_failed', message: '粘贴上传测试失败' }
+        : { offset: Number(url.searchParams.get('offset')) + bytes.length } })
+    }
+    return route.fulfill({ json: url.pathname.endsWith('/csrf') ? { token: 'terminal-test' } : {} })
+  })
   await page.goto(`http://127.0.0.1:${address.port}/__terminal_history__.html`)
   await page.waitForFunction(() => window.testTerminal && window.messages.some(m => m.type === 'resize'))
   // Wait for the pane's initial layout to settle before using fixed dimensions.
@@ -106,6 +137,119 @@ try {
       deltaY, bubbles: true, cancelable: true,
     }))
   }, deltaY)
+
+  // The browser owns Ctrl+V. Sending its control byte to Codex makes the
+  // remote CLI try to read an unavailable X11 clipboard instead.
+  await output('\x1b[?2004h')
+  await page.evaluate(async () => {
+    await navigator.clipboard.writeText('browser clipboard 中文')
+    window.messages.length = 0
+    window.testTerminal.focus()
+  })
+  await page.keyboard.press('Control+v')
+  await flush()
+  assert.equal(await page.evaluate(() => window.messages.some(m => m.type === 'input' && atob(m.data).includes('\x16'))), false,
+    'Ctrl+V must not ask the remote CLI to read its X11 clipboard')
+  await page.waitForFunction(() => window.messages.some(m => m.type === 'input' && new TextDecoder().decode(Uint8Array.from(atob(m.data), c => c.charCodeAt(0))) === '\x1b[200~browser clipboard 中文\x1b[201~'))
+
+  const input = () => page.evaluate(() => window.messages.filter(m => m.type === 'input').map(m => new TextDecoder().decode(Uint8Array.from(atob(m.data), c => c.charCodeAt(0)))).join(''))
+  const resetInput = () => page.evaluate(() => { window.messages.length = 0; window.testTerminal.focus() })
+  // A real browser clipboard image must reach SFTP, never the remote X11
+  // clipboard. Its path is quoted, bracketed and never submitted with Enter.
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 2
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    window.messages.length = 0
+    window.testTerminal.focus()
+  })
+  await page.keyboard.press('Control+v')
+  await page.waitForFunction(() => window.messages.some(m => m.type === 'input' && atob(m.data).includes('clipboard-')))
+  assert.equal(uploads.length, 1)
+  assert.deepEqual([...uploads[0].bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10])
+  assert.equal(uploads[0].headers['x-csrf-token'], 'terminal-test')
+  assert.ok(uploads[0].path.startsWith("/project/with space's $cash/clipboard/clipboard-"))
+  assert.equal(mkdirs.length, 1)
+  assert.equal(mkdirs[0].path, "/project/with space's $cash/clipboard")
+  assert.equal(mkdirs[0].session, 'terminal-history-test')
+  assert.equal(mkdirs[0].headers['x-csrf-token'], 'terminal-test')
+  assert.equal(await input(), '\x1b[200~\'' + uploads[0].path.replaceAll("'", "'\\''") + "' \x1b[201~")
+
+  // ClipboardEvent files remain available over LAN HTTP even when the
+  // asynchronous Clipboard API is unavailable. Also cover chunk boundaries
+  // and empty files; neither may insert an incomplete path.
+  const pasteFiles = (files, disableClipboard = false) => page.evaluate(({ files, disableClipboard }) => {
+    if (disableClipboard) {
+      window.clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    }
+    const data = new DataTransfer()
+    for (const { name, text, size } of files) data.items.add(new File([size ? new Uint8Array(size).fill(65) : text || ''], name))
+    // Some systems include a file name as text as well. It must not replace
+    // the uploaded remote path or be sent before the upload completes.
+    data.setData('text/plain', 'LOCAL-FILE-NAME-MUST-NOT-BE-PASTED')
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+  }, { files, disableClipboard })
+  await resetInput()
+  uploads.length = 0
+  await pasteFiles([{ name: 'report 中文.txt', text: 'clipboard file contents 中文' }, { name: 'empty.txt' }, { name: 'large.dat', size: 8 * 1024 * 1024 + 3 }], true)
+  await page.waitForFunction(() => window.messages.some(m => m.type === 'input' && atob(m.data).includes('large.dat')))
+  assert.equal(uploads.length, 4)
+  assert.equal(mkdirs.length, 2, 'subsequent pastes must reuse the existing clipboard directory')
+  assert.equal(mkdirs[1].path, mkdirs[0].path)
+  assert.ok(uploads.every(item => item.path.startsWith(mkdirs[0].path + '/')))
+  assert.equal(uploads[0].bytes.toString(), 'clipboard file contents 中文')
+  assert.equal(uploads[1].bytes.length, 0)
+  assert.equal(uploads[2].bytes.length, 8 * 1024 * 1024)
+  assert.equal(uploads[3].offset, 8 * 1024 * 1024)
+  assert.deepEqual([...uploads[3].bytes], [65, 65, 65])
+  const paths = [...new Set(uploads.map(item => item.path))]
+  const quotedPaths = paths.map(path => "'" + path.replaceAll("'", "'\\''") + "'").join(' ')
+  assert.equal(await input(), '\x1b[200~' + quotedPaths + ' \x1b[201~')
+  await page.evaluate(() => {
+    if (window.clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', window.clipboardDescriptor)
+    else delete navigator.clipboard
+  })
+
+  await resetInput()
+  uploads.length = 0
+  uploadFailure = true
+  await pasteFiles([{ name: 'failed.png', text: 'not uploaded' }])
+  await page.getByText('粘贴上传测试失败', { exact: true }).waitFor()
+  assert.equal(await input(), '', 'failed uploads must not insert paths or remote clipboard shortcuts')
+  uploadFailure = false
+  uploads.length = 0
+  mkdirFailure = true
+  await pasteFiles([{ name: 'failed-mkdir.png', text: 'not uploaded' }])
+  await page.getByText('clipboard 目录创建失败', { exact: true }).waitFor()
+  assert.equal(uploads.length, 0, 'failed clipboard directory creation must stop the upload')
+  assert.equal(await input(), '')
+  mkdirFailure = false
+  directoryFailure = true
+  await pasteFiles([{ name: 'failed-directory.png', text: 'not uploaded' }])
+  await page.getByText('无法读取终端当前目录', { exact: true }).waitFor()
+  assert.equal(uploads.length, 0, 'unknown tmux directories must not upload into the SFTP home directory')
+  assert.equal(await input(), '')
+  directoryFailure = false
+
+  // Normal SSH without OSC 7 asks for a directory. Canceling leaves the
+  // terminal untouched; OSC 7 then permits upload without guessing a path.
+  await page.evaluate(() => { window.session.sessionMode = 'normal' })
+  await pasteFiles([{ name: 'cancel.txt', text: 'cancel upload' }])
+  await page.getByRole('dialog', { name: '粘贴文件' }).getByRole('button', { name: '取消', exact: true }).click()
+  await page.waitForFunction(() => document.activeElement === window.testTerminal.textarea)
+  assert.equal(uploads.length, 0)
+  assert.equal(await input(), '')
+  await output('\x1b]7;file://localhost/project/normal\x07')
+  await pasteFiles([{ name: 'normal.txt', text: 'ordinary SSH' }])
+  await page.waitForFunction(() => window.messages.some(m => m.type === 'input' && atob(m.data).includes('normal.txt')))
+  assert.ok(uploads[0].path.startsWith('/project/normal/clipboard/'))
+  // Start the independent history/selection scenarios with a fresh platform
+  // clipboard object after testing an overridden navigator.clipboard.
+  await page.reload()
+  await page.waitForFunction(() => window.testTerminal && window.messages.some(m => m.type === 'resize'))
+  await page.waitForFunction(() => !document.querySelector('.terminal-resize-snapshot'))
 
   // A TUI scrolls its body while keeping a heading and two footer rows fixed.
   const rows = await page.evaluate(() => window.testTerminal.rows)
@@ -298,7 +442,8 @@ try {
   // Browser API rejection falls back to copying during the mouse gesture and
   // restores terminal focus. If both paths are blocked, the explicit button
   // can retry the CLI selection after the user grants clipboard access.
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    await navigator.clipboard.writeText('fallback-pending')
     window.originalClipboardWrite = navigator.clipboard.writeText
     Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: () => Promise.reject(new Error('clipboard blocked')) })
   })

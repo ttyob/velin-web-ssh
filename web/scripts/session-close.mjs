@@ -66,20 +66,20 @@ const sessions = [
   ['connecting', 'reconnecting'], ['ended', 'ended'],
   ['mixed-ended', 'ended'], ['mixed-live', 'attached'], ['mixed-failed', 'unreachable'],
   ['pane-failed', 'ownership_error'], ['pane-live', 'attached'],
-  ['background', 'attached'], ['dismiss', 'attached'],
+  ['background', 'attached'], ['dismiss', 'attached'], ['local-only', 'unreachable'],
 ].map(([id, status]) => ({
   id, status, name: id, hostID: 'test', sessionMode: 'tmux',
   updatedAt: new Date().toISOString(),
 }))
 let workspace = {
-  tabs: ['unreachable', 'auth', 'connecting', 'ended', 'mixed', 'panes', 'background', 'dismiss'],
+  tabs: ['unreachable', 'auth', 'connecting', 'ended', 'mixed', 'panes', 'background', 'dismiss', 'local-only'],
   active: 'unreachable',
   trees: {
     unreachable: leaf('unreachable'), auth: leaf('auth'), connecting: leaf('connecting'),
     ended: leaf('ended'),
     mixed: { ...split('mixed-ended', 'mixed-live'), second: split('mixed-live', 'mixed-failed') },
     panes: split('pane-failed', 'pane-live'),
-    background: leaf('background'), dismiss: leaf('dismiss'),
+    background: leaf('background'), dismiss: leaf('dismiss'), 'local-only': leaf('local-only'),
   },
 }
 const deleted = []
@@ -104,6 +104,10 @@ try {
     else if (path.startsWith('/api/sessions/') && request.method() === 'DELETE') {
       const id = path.split('/').at(-1)
       deleted.push(id)
+      if (id === 'local-only') {
+        sessions.find(session => session.id === id).status = 'ended'
+        return route.fulfill({ json: { ok: true, remoteTerminated: false, warning: '本地会话已关闭，但无法确认远程任务已终止。' } })
+      }
       if (id === 'unreachable') await new Promise(resolve => pending.set(id, resolve))
       if (['unreachable', 'auth', 'mixed-failed', 'pane-failed'].includes(id))
         return route.fulfill({ status: 502, json: { code: 'terminate_failed', message: id === 'auth' ? 'credential required' : 'SSH connection unavailable' } })
@@ -136,7 +140,13 @@ try {
   assert(pending.has('unreachable'), 'remote cleanup request was not started')
   assert(!deleted.includes('auth'))
   pending.get('unreachable')()
-  await page.getByText('已关闭，但有 1 个远程会话未能终止，可在会话管理中重试。', { exact: true }).first().waitFor()
+  await page.getByText('标签已关闭，但有 1 个会话未能保存终止状态，请检查服务连接后重试。', { exact: true }).first().waitFor()
+
+  // A reachable backend closes stale local state even when the remote host
+  // is unreachable, and reports that remote tasks could not be confirmed.
+  await confirm('local-only')
+  await page.getByText('会话已关闭，其中 1 个远程会话无法确认任务已终止。', { exact: true }).first().waitFor()
+  assert.equal(sessions.find(session => session.id === 'local-only').status, 'ended')
 
   // Missing credentials and network failures must not block closing or open
   // another authentication dialog after the pane is already gone.

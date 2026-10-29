@@ -53,6 +53,7 @@ type terminalShareView struct {
 	ID               string                `json:"id"`
 	SessionID        string                `json:"sessionID"`
 	SessionName      string                `json:"sessionName"`
+	SessionMode      string                `json:"sessionMode,omitempty"`
 	Permission       string                `json:"permission"`
 	PasswordRequired bool                  `json:"passwordRequired"`
 	Record           bool                  `json:"record"`
@@ -489,6 +490,10 @@ func (a *API) terminalShareView(share store.TerminalShare, includeViewers bool) 
 	}
 	if includeViewers {
 		view.Viewers = viewers
+	}
+	// The viewer needs to know whether tmux owns the outer screen (see ShareView).
+	if session, err := a.store.Terminal(share.UserID, share.SessionID); err == nil {
+		view.SessionMode = session.SessionMode
 	}
 	return view
 }

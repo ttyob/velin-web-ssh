@@ -12,11 +12,16 @@ import "./styles-polish.css";
 import "./styles-settings.css";
 import "./styles-dialogs.css";
 import "./styles-tools.css";
+import "./styles-perf.css";
+import "./styles-motion.css";
+import { installScrollIdle } from "./scrollIdle";
 
 try {
   applyInterfaceTheme(localStorage.getItem("velin-interface-theme") || "dark");
   const accent = localStorage.getItem("velin-accent-color");
   if (accent) applyAccent(accent);
 } catch {}
+
+installScrollIdle();
 
 createApp(App).use(createPinia()).use(router).use(ElementPlus).mount("#app");

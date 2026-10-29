@@ -1497,11 +1497,12 @@ func (a *API) terminateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := chi.URLParam(r, "id")
-	if err := a.terminals.Terminate(r.Context(), u.ID, id, in.Secret, in.Passphrase); err != nil {
+	result, err := a.terminals.Terminate(r.Context(), u.ID, id, in.Secret, in.Passphrase)
+	if err != nil {
 		writeError(w, 502, "terminate_failed", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	writeJSON(w, 200, result)
 }
 
 func (a *API) workspace(w http.ResponseWriter, r *http.Request) {

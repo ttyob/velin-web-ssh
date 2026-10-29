@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   computed,
+  h,
   nextTick,
   onBeforeUnmount,
   onMounted,
@@ -39,6 +40,7 @@ import {
   type TerminalAttentionEvent,
 } from "../terminalAttention";
 import { normalizeTerminalWheelDelta } from "../terminalWheel";
+import { allowTerminalKeyEvent, terminalClipboardFiles, terminalFileReference, terminalUploadName } from "../terminalClipboard";
 
 const props = withDefaults(
   defineProps<{
@@ -125,6 +127,8 @@ let controlRequestPending = false;
 let pendingControlInput = "";
 let pasting = false;
 let terminalTextarea: HTMLTextAreaElement | undefined;
+let currentDirectory = "";
+let filePasteAbort: AbortController | undefined;
 let terminalTitle = "";
 let conversationMode = false;
 const connectionRecoveryOpen = ref(false);
@@ -1613,11 +1617,94 @@ function bracketedPasteData(text: string) {
   return `\x1b[200~${normalized}\x1b[201~`;
 }
 function handleTerminalPaste(event: ClipboardEvent) {
+  const files = terminalClipboardFiles(event.clipboardData);
+  if (files.length) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void pasteTerminalFiles(files);
+    return;
+  }
   const text = event.clipboardData?.getData("text/plain");
   if (text == null) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   pasteThroughTerminal(text);
+}
+async function pasteTerminalFiles(files: File[]) {
+  if (!connected.value || !controller.value || !props.session.hostID) {
+    ElMessage.warning("请先连接终端并取得控制权后再粘贴文件");
+    return;
+  }
+  if (filePasteAbort) {
+    ElMessage.info("文件正在上传，请稍候再粘贴");
+    return;
+  }
+  const abort = new AbortController();
+  filePasteAbort = abort;
+  const originalSocket = socket;
+  const uploaded: string[] = [];
+  const uploadMessage = ref("正在准备上传文件…");
+  const notice = ElMessage({ message: () => h("span", uploadMessage.value), duration: 0, type: "info" });
+  try {
+    let directory = currentDirectory;
+    if (props.session.sessionMode === "tmux") {
+      const result = await api<{ path: string }>(`/api/sessions/${encodeURIComponent(props.session.id)}/directory`, { signal: abort.signal });
+      directory = result.path;
+    }
+    if (!directory.startsWith("/")) {
+      // Ordinary SSH may not emit OSC 7. Ask for a real remote directory
+      // instead of inserting a path relative to the SFTP login directory.
+      const result = await ElMessageBox.prompt("无法获取当前项目目录，请填写远程项目目录，文件会保存到其中的 clipboard 文件夹。", "粘贴文件", {
+        inputPlaceholder: "/path/to/project",
+        confirmButtonText: "上传",
+        cancelButtonText: "取消",
+        inputValidator: value => /^\/[^\x00-\x1f\x7f]*$/.test(value) || "请输入远程绝对路径",
+      });
+      directory = result.value;
+    }
+    if (/[\x00-\x1f\x7f]/.test(directory)) throw new Error("远程目录包含无效字符");
+    if (disposed || abort.signal.aborted) return;
+    directory = `${directory.replace(/\/+$/, "")}/clipboard`;
+    const sftpBase = `/api/sftp/${encodeURIComponent(props.session.hostID)}`;
+    await api(`${sftpBase}/mkdir?session=${encodeURIComponent(props.session.id)}`, {
+      method: "POST", body: json({ path: directory }), signal: abort.signal,
+    });
+    const base = `${sftpBase}/upload`;
+    const chunkSize = 8 * 1024 * 1024;
+    for (const file of files) {
+      const path = `${directory.replace(/\/+$/, "")}/${terminalUploadName(file)}`;
+      let offset = 0;
+      // Empty files still need one request to create the remote file.
+      do {
+        if (disposed || abort.signal.aborted) return;
+        uploadMessage.value = `正在上传 ${file.name}（${file.size ? Math.floor(offset / file.size * 100) : 0}%）`;
+        const end = Math.min(file.size, offset + chunkSize);
+        const query = new URLSearchParams({ path, offset: String(offset), session: props.session.id });
+        const result = await api<{ offset: number }>(`${base}?${query}`, {
+          method: "PUT", body: file.slice(offset, end), signal: abort.signal,
+        });
+        if (result.offset !== end) throw new Error("上传未完成，请重试");
+        offset = end;
+      } while (offset < file.size);
+      uploaded.push(path);
+    }
+  } catch (error) {
+    if (!disposed && !abort.signal.aborted && error !== "cancel" && error !== "close") {
+      ElMessage.error(error instanceof Error ? error.message : "文件上传失败");
+    }
+  } finally {
+    notice.close();
+    if (filePasteAbort === abort) filePasteAbort = undefined;
+    if (!disposed && !abort.signal.aborted && uploaded.length) {
+      if (socket === originalSocket && socket?.readyState === WebSocket.OPEN && controller.value) {
+        pasteThroughTerminal(uploaded.map(terminalFileReference).join(" ") + " ");
+        ElMessage.success(`已上传 ${uploaded.length} 个文件，路径已填入终端`);
+      } else {
+        ElMessage({ message: `文件已上传，终端连接已变化，请手动使用路径：${uploaded.join("、")}`, duration: 0, showClose: true, type: "warning" });
+      }
+    }
+    if (!disposed) restoreTerminalFocus();
+  }
 }
 async function copySelection() {
   const selected = terminal?.getSelection() || remoteSelectionText;
@@ -1935,6 +2022,7 @@ onMounted(() => {
   terminal.loadAddon(search);
   terminal.loadAddon(new WebLinksAddon(previewTerminalLink));
   terminal.open(container.value!);
+  terminal.attachCustomKeyEventHandler(allowTerminalKeyEvent);
   // Honor scroll regions and screen switches so TUI redraws keep their
   // cursor positions. tmux history is reached through the remote scrollbar.
   fitTerminal();
@@ -1953,7 +2041,8 @@ onMounted(() => {
     try {
       const url = new URL(value);
       if (url.protocol !== "file:") return false;
-      emit("directory", props.session.id, decodeURIComponent(url.pathname));
+      currentDirectory = decodeURIComponent(url.pathname);
+      emit("directory", props.session.id, currentDirectory);
       return true;
     } catch {
       return false;
@@ -2025,6 +2114,7 @@ watch(
 );
 onBeforeUnmount(() => {
   disposed = true;
+  filePasteAbort?.abort();
   container.value?.removeEventListener("mousedown", startSelectionCopy, true);
   container.value?.removeEventListener("mousemove", updateApplicationButtonHover);
   container.value?.removeEventListener("mouseleave", clearApplicationButtonHover);

@@ -1,0 +1,107 @@
+/* ======================================================================
+ * Rendering performance. Every rule here was measured (see commit message):
+ *  - non-inherited layout vars: resizing no longer restyles the whole subtree
+ *  - no main-thread infinite animations (box-shadow pulse repainted forever)
+ *  - opaque scrollers get composited, so scrolling stays off the main thread
+ *  - hover work is paused while a list is actually scrolling
+ * ==================================================================== */
+
+/* Custom properties inherit by default, so changing --sidebar-width on the
+ * sidebar used to invalidate styles for all ~5000 descendants on every
+ * pointermove while dragging. Declared non-inheriting it only touches itself. */
+@property --sidebar-width {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 256px;
+}
+@property --web-service-height {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 168px;
+}
+
+/* Status dots: a box-shadow animation is not compositor-friendly and kept the
+ * main thread painting at 60fps whenever any dot was visible. Online dots are
+ * static; terminal dots use a transform/opacity ring (compositor only). */
+.status-dot.online,
+.status-dot.attached {
+  animation: none;
+}
+.status-dot.attached {
+  position: relative;
+}
+.status-dot.attached::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  opacity: 0;
+  pointer-events: none;
+  animation: status-ring 2.4s ease-out infinite;
+}
+@keyframes status-ring {
+  0% {
+    opacity: 0.45;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+/* The host list re-renders on every status refresh; entry animations would
+ * replay for every row and promote each one to its own layer. */
+.resource-list > article {
+  animation: none;
+}
+
+/* Scrollers with a transparent background are painted into the parent layer
+ * and re-rastered on the main thread for every scrolled frame. An opaque
+ * background lets Chrome scroll them on the compositor. */
+.resource-list,
+.web-service-list {
+  background: var(--sidebar-bg);
+}
+.sp-main {
+  background: var(--sp-bg, var(--surface));
+}
+.session-dialog-list,
+.file-manager-list,
+.docker-list {
+  background: var(--surface);
+}
+
+/* Set by scrollIdle.ts while a list scrolls. Hit-testing and :hover updates for
+ * hundreds of rows on every scrolled frame were the dominant scroll cost. The
+ * scroller itself keeps pointer events so wheel scrolling continues. */
+.is-scrolling * {
+  pointer-events: none !important;
+}
+
+/* Dragging the sidebar changes its width, which re-lays-out the text of every
+ * host row (≈800ms across 150 hosts at 4x CPU). Rows outside the viewport can
+ * skip layout and paint for the duration of the drag. Applied to single rows
+ * only (never the group containers) so the list height, and therefore the
+ * scroll position, cannot jump. */
+body.is-resizing-sidebar .host-row,
+body.is-resizing-sidebar .host-group-heading {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
+}
+
+/* Backdrop blur re-runs whenever the pixels behind it change. The "new output"
+ * button floats over the live terminal canvas and the mobile drawer scrim covers
+ * the whole screen, so both re-blurred continuously. */
+.terminal-new-output,
+.mobile-overlay {
+  backdrop-filter: none;
+}
+.terminal-new-output {
+  background: var(--menu-bg);
+}
+.mobile-overlay {
+  background: color-mix(in srgb, #000 62%, transparent);
+}

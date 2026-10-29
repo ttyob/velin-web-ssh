@@ -617,38 +617,79 @@ func (m *Manager) Rename(userID, id, name string) error {
 	return nil
 }
 
-func (m *Manager) Terminate(ctx context.Context, userID, id string, secret, passphrase string) error {
+type TerminationResult struct {
+	OK               bool   `json:"ok"`
+	RemoteTerminated bool   `json:"remoteTerminated"`
+	Warning          string `json:"warning,omitempty"`
+}
+
+const remoteTerminationWarning = "本地会话已关闭，但无法确认远程任务已终止。"
+
+func (m *Manager) Terminate(ctx context.Context, userID, id string, secret, passphrase string) (TerminationResult, error) {
 	meta, err := m.store.Terminal(userID, id)
 	if err != nil {
-		return err
+		return TerminationResult{}, err
 	}
-	s, err := m.Get(userID, id)
-	if err == nil {
-		if err = s.killRemote(ctx); err != nil {
-			return err
+	result := TerminationResult{OK: true, RemoteTerminated: true}
+	if meta.Status == "ended" {
+		if strings.HasPrefix(meta.LastError, remoteTerminationWarning) {
+			result.RemoteTerminated = false
+			result.Warning = remoteTerminationWarning
 		}
-		s.close("ended", "Terminated by user")
-		return nil
+		return result, nil
+	}
+	// Remote cleanup is best effort. A stale host or SSH transport must not
+	// prevent the user from ending the local session, including after restart.
+	cleanupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	s, _ := m.Get(userID, id)
+	if s != nil {
+		if client := s.SSHClient(); client != nil {
+			stop := context.AfterFunc(cleanupCtx, func() { _ = client.Close() })
+			defer stop()
+		}
+	}
+	remoteErr := m.terminateRemote(cleanupCtx, meta, s, secret, passphrase)
+	message := "Terminated by user"
+	if remoteErr != nil {
+		result.RemoteTerminated = false
+		result.Warning = remoteTerminationWarning
+		message = remoteTerminationWarning + " " + remoteErr.Error()
+	}
+	if s != nil {
+		s.close("ended", message)
+	}
+	if err = m.store.UpdateTerminalStatus(userID, id, "ended", message); err != nil {
+		return TerminationResult{}, err
+	}
+	return result, nil
+}
+
+func (m *Manager) terminateRemote(ctx context.Context, meta store.TerminalSession, s *Session, secret, passphrase string) error {
+	if s != nil {
+		return s.killRemote(ctx)
 	}
 	if meta.SessionMode == "normal" {
-		return m.store.UpdateTerminalStatus(userID, id, "ended", "Terminated by user")
+		return nil
 	}
-	host, err := m.store.Host(userID, meta.HostID)
+	host, err := m.store.Host(meta.UserID, meta.HostID)
 	if err != nil {
 		return err
 	}
 	var cred store.Credential
 	if meta.CredentialID != "" {
-		cred, _ = m.store.Credential(userID, meta.CredentialID)
+		cred, _ = m.store.Credential(meta.UserID, meta.CredentialID)
 	}
-	client, err := m.dial(ctx, userID, host, cred, secret, passphrase, "")
+	client, err := m.dial(ctx, meta.UserID, host, cred, secret, passphrase, "")
 	if err != nil {
 		return err
 	}
 	defer client.Close()
+	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stop()
 	if err = validateOwnership(client, meta); err != nil {
 		if isTmuxTargetMissing(err.Error()) || isTmuxMissing(err.Error()) {
-			return m.store.UpdateTerminalStatus(userID, id, "ended", "Terminated by user")
+			return nil
 		}
 		return err
 	}
@@ -656,7 +697,7 @@ func (m *Manager) Terminate(ctx context.Context, userID, id string, secret, pass
 	if out, e := run(client, cmd); e != nil && !isTmuxTargetMissing(cleanOutput(out, e)) {
 		return fmt.Errorf("terminate tmux: %s", cleanOutput(out, e))
 	}
-	return m.store.UpdateTerminalStatus(userID, id, "ended", "Terminated by user")
+	return nil
 }
 
 func (s *Session) Meta() store.TerminalSession { s.mu.RLock(); defer s.mu.RUnlock(); return s.meta }

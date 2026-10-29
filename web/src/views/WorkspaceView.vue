@@ -1123,8 +1123,9 @@ async function terminateSession(session: TerminalSession, interactive = true) {
     removeLocal(session.id);
     return true;
   }
+  let result: { remoteTerminated?: boolean; warning?: string } = {};
   try {
-    await api(`/api/sessions/${session.id}`, {
+    result = await api(`/api/sessions/${session.id}`, {
       method: "DELETE",
       body: json({}),
       signal: interactive ? undefined : AbortSignal.timeout(10_000),
@@ -1146,7 +1147,7 @@ async function terminateSession(session: TerminalSession, interactive = true) {
             inputValidator: (v) => Boolean(v) || "请输入密码",
           },
         );
-        await api(`/api/sessions/${session.id}`, {
+        result = await api(`/api/sessions/${session.id}`, {
           method: "DELETE",
           body: json({ secret: value }),
         });
@@ -1161,7 +1162,12 @@ async function terminateSession(session: TerminalSession, interactive = true) {
     }
   }
   session.status = "ended";
+  session.lastError = result.warning || "";
   removeLocal(session.id);
+  if (result.remoteTerminated === false) {
+    if (interactive) ElMessage.warning(result.warning || "本地会话已关闭，但无法确认远程任务已终止。");
+    return "local";
+  }
   return true;
 }
 async function terminateClosedSessions(targets: TerminalSession[]) {
@@ -1169,11 +1175,14 @@ async function terminateClosedSessions(targets: TerminalSession[]) {
   const results = await Promise.all(
     targets.map((session) => terminateSession(session, false)),
   );
-  const failed = results.filter((result) => !result).length;
+  const failed = results.filter((result) => result === false).length;
+  const localOnly = results.filter((result) => result === "local").length;
   if (failed)
     ElMessage.warning(
-      `已关闭，但有 ${failed} 个远程会话未能终止，可在会话管理中重试。`,
+      `标签已关闭，但有 ${failed} 个会话未能保存终止状态，请检查服务连接后重试。`,
     );
+  else if (localOnly)
+    ElMessage.warning(`会话已关闭，其中 ${localOnly} 个远程会话无法确认任务已终止。`);
   else ElMessage.success("远程会话已终止");
 }
 async function terminatePane(leafID: string) {

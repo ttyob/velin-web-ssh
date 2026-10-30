@@ -146,18 +146,6 @@ type CommandTask struct {
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 }
 
-type TerminalRecording struct {
-	ID          string     `json:"id"`
-	UserID      string     `json:"userID"`
-	SessionID   string     `json:"sessionID"`
-	SessionName string     `json:"sessionName"`
-	Path        string     `json:"-"`
-	Status      string     `json:"status"`
-	Bytes       int64      `json:"bytes"`
-	StartedAt   time.Time  `json:"startedAt"`
-	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
-}
-
 type TerminalShare struct {
 	ID               string     `json:"id"`
 	UserID           string     `json:"-"`
@@ -168,8 +156,6 @@ type TerminalShare struct {
 	PasswordHash     string     `json:"-"`
 	PasswordRequired bool       `json:"passwordRequired"`
 	Permission       string     `json:"permission"`
-	Record           bool       `json:"record"`
-	RecordingID      string     `json:"recordingID,omitempty"`
 	ExpiresAt        time.Time  `json:"expiresAt"`
 	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
@@ -230,9 +216,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (user_id TEXT PRIMARY KEY REFERENCES
 	CREATE INDEX IF NOT EXISTS idx_monitor_policy_user ON host_monitor_policies(user_id,host_id);
 	CREATE TABLE IF NOT EXISTS command_tasks (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, command TEXT NOT NULL, session_ids TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'queued', output TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, started_at DATETIME, finished_at DATETIME);
 	CREATE INDEX IF NOT EXISTS idx_command_tasks_user ON command_tasks(user_id,created_at DESC);
-	CREATE TABLE IF NOT EXISTS terminal_recordings (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL, session_name TEXT NOT NULL DEFAULT '', path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'recording', bytes INTEGER NOT NULL DEFAULT 0, started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME);
-	CREATE INDEX IF NOT EXISTS idx_recordings_user ON terminal_recordings(user_id,started_at DESC);
-	CREATE TABLE IF NOT EXISTS terminal_shares (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, token_enc TEXT NOT NULL, password_hash TEXT NOT NULL DEFAULT '', permission TEXT NOT NULL DEFAULT 'view', record INTEGER NOT NULL DEFAULT 0, recording_id TEXT NOT NULL DEFAULT '', expires_at DATETIME NOT NULL, revoked_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+	CREATE TABLE IF NOT EXISTS terminal_shares (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, token_enc TEXT NOT NULL, password_hash TEXT NOT NULL DEFAULT '', permission TEXT NOT NULL DEFAULT 'view', expires_at DATETIME NOT NULL, revoked_at DATETIME, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
 	CREATE INDEX IF NOT EXISTS idx_terminal_shares_owner ON terminal_shares(user_id,session_id,created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_terminal_shares_expiry ON terminal_shares(expires_at,revoked_at);
 	CREATE TABLE IF NOT EXISTS terminal_share_access (token_hash TEXT PRIMARY KEY, share_id TEXT NOT NULL REFERENCES terminal_shares(id) ON DELETE CASCADE, display_name TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1143,55 +1127,14 @@ func (s *Store) UpdateCommandTask(userID, id, status, output, message string, st
 	return err
 }
 
-func (s *Store) CreateRecording(value TerminalRecording) error {
-	_, err := s.DB.Exec(`INSERT INTO terminal_recordings(id,user_id,session_id,session_name,path,status,bytes,started_at) VALUES(?,?,?,?,?,?,?,?)`, value.ID, value.UserID, value.SessionID, value.SessionName, value.Path, value.Status, value.Bytes, value.StartedAt)
-	return err
-}
-
-func (s *Store) Recording(userID, id string) (TerminalRecording, error) {
-	var value TerminalRecording
-	var finished sql.NullTime
-	err := s.DB.QueryRow(`SELECT id,user_id,session_id,session_name,path,status,bytes,started_at,finished_at FROM terminal_recordings WHERE user_id=? AND id=?`, userID, id).Scan(&value.ID, &value.UserID, &value.SessionID, &value.SessionName, &value.Path, &value.Status, &value.Bytes, &value.StartedAt, &finished)
-	if finished.Valid {
-		value.FinishedAt = &finished.Time
-	}
-	return value, err
-}
-
-func (s *Store) Recordings(userID string) ([]TerminalRecording, error) {
-	rows, err := s.DB.Query(`SELECT id,user_id,session_id,session_name,path,status,bytes,started_at,finished_at FROM terminal_recordings WHERE user_id=? ORDER BY started_at DESC LIMIT 100`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make([]TerminalRecording, 0)
-	for rows.Next() {
-		var value TerminalRecording
-		var finished sql.NullTime
-		if err := rows.Scan(&value.ID, &value.UserID, &value.SessionID, &value.SessionName, &value.Path, &value.Status, &value.Bytes, &value.StartedAt, &finished); err != nil {
-			return nil, err
-		}
-		if finished.Valid {
-			value.FinishedAt = &finished.Time
-		}
-		result = append(result, value)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) FinishRecording(userID, id, status string, bytes int64, finished time.Time) error {
-	_, err := s.DB.Exec(`UPDATE terminal_recordings SET status=?,bytes=?,finished_at=? WHERE user_id=? AND id=?`, status, bytes, finished, userID, id)
-	return err
-}
-
-const terminalShareColumns = `s.id,s.user_id,s.session_id,t.name,s.token_hash,s.token_enc,s.password_hash,s.permission,s.record,s.recording_id,s.expires_at,s.revoked_at,s.created_at,t.status,u.disabled`
+const terminalShareColumns = `s.id,s.user_id,s.session_id,t.name,s.token_hash,s.token_enc,s.password_hash,s.permission,s.expires_at,s.revoked_at,s.created_at,t.status,u.disabled`
 
 func scanTerminalShare(row interface{ Scan(...any) error }) (TerminalShare, error) {
 	var value TerminalShare
 	var revoked sql.NullTime
 	err := row.Scan(
 		&value.ID, &value.UserID, &value.SessionID, &value.SessionName, &value.TokenHash, &value.TokenEnc,
-		&value.PasswordHash, &value.Permission, &value.Record, &value.RecordingID,
+		&value.PasswordHash, &value.Permission,
 		&value.ExpiresAt, &revoked, &value.CreatedAt, &value.SessionStatus, &value.OwnerDisabled,
 	)
 	value.PasswordRequired = value.PasswordHash != ""
@@ -1203,9 +1146,9 @@ func scanTerminalShare(row interface{ Scan(...any) error }) (TerminalShare, erro
 
 func (s *Store) CreateTerminalShare(value TerminalShare) error {
 	_, err := s.DB.Exec(
-		`INSERT INTO terminal_shares(id,user_id,session_id,token_hash,token_enc,password_hash,permission,record,recording_id,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO terminal_shares(id,user_id,session_id,token_hash,token_enc,password_hash,permission,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		value.ID, value.UserID, value.SessionID, value.TokenHash, value.TokenEnc, value.PasswordHash,
-		value.Permission, value.Record, value.RecordingID, value.ExpiresAt, value.CreatedAt,
+		value.Permission, value.ExpiresAt, value.CreatedAt,
 	)
 	return err
 }

@@ -28,6 +28,9 @@ with tempfile.TemporaryDirectory(prefix="velin-history-") as directory:
     try:
         tmux("-f", "/dev/null", "new-session", "-d", "-s", "test", "-x", "80", "-y", "24", "exec cat " + fifo)
         tmux("set-option", "-t", "test", "status", "off")
+        # Simulate a private server retained from the old RGB window styling.
+        for option in ("window-style", "window-active-style"):
+            tmux("set-window-option", "-t", "test", option, "fg=#d8deea,bg=#111318")
         pid, master = pty.fork()
         if pid == 0:
             os.environ["TERM"] = "xterm-256color"
@@ -51,6 +54,9 @@ with tempfile.TemporaryDirectory(prefix="velin-history-") as directory:
             stages.append({"name": name, "data": drain()})
 
         write("shell-history", "".join(f"original-{line:03}\r\n" for line in range(80)))
+        for option in ("window-style", "window-active-style"):
+            tmux("set-window-option", "-t", "test", option, "fg=default,bg=default")
+        stages.append({"name": "theme-defaults", "data": drain()})
         write("alternate-screen", "\x1b[?1049h\x1b[2J\x1b[H")
         for frame in range(3):
             write("TUI-redraw", "\x1b[H" + "".join(f"temporary-{frame}-{line:02}\r\n" for line in range(30)))

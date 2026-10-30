@@ -23,7 +23,8 @@ class TestSocket {
   readyState = 0
   messages = []
   attached = false
-  constructor() {
+  constructor(url) {
+    this.url = url
     window.testSockets.push(this)
     queueMicrotask(() => {
       this.readyState = 1
@@ -101,7 +102,7 @@ async function scenario(options, verify) {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } })
   const page = await context.newPage()
   const errors = []
-  const probes = [], creates = [], restores = []
+  const probes = [], creates = [], restores = [], deletions = []
   const sessions = fixture.restore ? [{
     id: 'restored', hostID: host.id, name: 'Restored terminal',
     sessionMode: 'tmux', status: 'background', lastError: '',
@@ -125,6 +126,8 @@ async function scenario(options, verify) {
     if (path === '/api/hosts') return route.fulfill({ json: [host] })
     if (path === '/api/hosts/host-test/test') {
       probes.push(body)
+      if (fixture.holdProbe) await new Promise(resolve => { fixture.releaseProbe = resolve })
+      if (fixture.probeFailure) return reject(502, "connection_failed", fixture.probeFailure)
       if (fixture.secretRequired && !body.secret) return reject(502, 'connection_failed', 'SSH credential required')
       if (!fixture.trusted) {
         if (body.trustFingerprint !== fingerprint) return keyError()
@@ -136,9 +139,13 @@ async function scenario(options, verify) {
     if (path === '/api/sessions' && request.method() === 'GET') return route.fulfill({ json: sessions })
     if (path === '/api/sessions' && request.method() === 'POST') {
       creates.push(body)
-      const session = { id: 'created-' + creates.length, hostID: host.id, name: host.name, sessionMode: body.sessionMode || 'tmux', status: fixture.creating ? 'creating' : 'attached' }
+      const session = { id: 'created-' + creates.length, hostID: host.id, name: body.name || host.name, sessionMode: body.sessionMode || 'tmux', status: fixture.creating ? 'creating' : 'attached' }
       sessions.push(session)
+      if (fixture.holdCreate) await new Promise(resolve => { fixture.releaseCreate = resolve })
       return route.fulfill({ status: 201, json: session })
+    }
+    if (path.startsWith('/api/sessions/') && request.method() === 'DELETE') {
+      deletions.push(path); return route.fulfill({ json: { ok: true } })
     }
     if (path.endsWith('/restore')) {
       restores.push(body)
@@ -156,13 +163,13 @@ async function scenario(options, verify) {
   try {
     await page.goto(baseURL)
     await page.locator('.host-row').waitFor()
-    await verify({ page, fixture, probes, creates, restores })
+    await verify({ page, fixture, probes, creates, restores, deletions })
     assert.deepEqual(errors, [])
   } finally {
     await context.close()
   }
 }
-const fingerprintDialog = page => page.getByRole('dialog', { name: '确认主机指纹', exact: true })
+const fingerprintDialog = page => page.getByRole('dialog', { name: '确认主机指纹', exact: true }).or(page.getByRole('region', { name: '确认主机指纹', exact: true }))
 async function assertWaiting(page) {
   await fingerprintDialog(page).waitFor()
   await page.clock.runFor(5000)
@@ -174,7 +181,7 @@ async function assertWaiting(page) {
   }), 'fingerprint confirmation must remain clickable')
 }
 async function connected(page) {
-  await page.locator('.terminal-statusbar .status-dot.attached').waitFor()
+  await page.locator('.terminal-statusbar .status-dot.attached').last().waitFor()
   assert.equal(await page.locator('.terminal-error:visible').count(), 0)
 }
 
@@ -182,6 +189,46 @@ try {
   await server.listen()
   baseURL = `http://127.0.0.1:${server.httpServer.address().port}/__connection_onboarding__.html`
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] })
+
+  // Open and paint a closable tab before waiting on the remote SSH probe.
+  await scenario({ trusted: true, holdProbe: true }, async ({ page, fixture, creates }) => {
+    await page.locator('.host-row').dblclick()
+    await page.getByRole('region', { name: 'SSH 连接信息' }).waitFor()
+    assert.equal(await page.locator('.terminal-tab').count(), 1)
+    assert.match(await page.locator('.connection-log').innerText(), /正在连接/)
+    assert.equal(creates.length, 0)
+    const bounds = await page.locator('.connection-progress').boundingBox()
+    assert.ok(bounds.height > 700, 'the connection view fills its terminal window')
+    await page.screenshot({ path: '/tmp/velin-connection-feedback.png' })
+    fixture.holdProbe = false; fixture.releaseProbe()
+    await connected(page)
+    assert.equal(await page.locator('.terminal-tab').count(), 1, 'the pending tab becomes the connected terminal')
+  })
+
+  await scenario({ trusted: true, probeFailure: 'dial tcp 192.0.2.1:22: i/o timeout' }, async ({ page, fixture, creates }) => {
+    await page.locator('.host-row').dblclick()
+    await page.locator('.connection-failure').waitFor()
+    assert.match(await page.locator('.connection-failure').innerText(), /i\/o timeout/)
+    assert.equal(await page.locator('.el-message--error').count(), 0, 'connection failure stays inside its tab')
+    assert.equal(creates.length, 0)
+    fixture.probeFailure = ''
+    await page.getByRole('button', { name: '重试连接', exact: true }).click()
+    await connected(page)
+    assert.equal(await page.locator('.terminal-tab').count(), 1)
+  })
+
+  await scenario({ trusted: true, holdCreate: true }, async ({ page, fixture, creates, deletions }) => {
+    await page.locator('.host-row').dblclick()
+    await page.waitForFunction(() => document.querySelector('.connection-log')?.textContent.includes('正在创建终端会话'))
+    await page.locator('.terminal-tab .tab-close').click()
+    const removed = page.waitForResponse(response => response.request().method() === 'DELETE')
+    fixture.releaseCreate()
+    await removed
+    await page.clock.runFor(500)
+    assert.equal(creates.length, 1)
+    assert.equal(deletions.length, 1, 'closing during creation cleans up the returned session')
+    assert.equal(await page.locator('.terminal-tab').count(), 0)
+  })
 
   // The WebSocket opens before the real asynchronous SSH connection finishes.
   // Success must update the workspace and resend geometry without a refresh.
@@ -223,13 +270,13 @@ try {
   // flow, preserving the temporary password through every step.
   await scenario({ tmux: false, secretRequired: true }, async ({ page, probes, creates }) => {
     await page.locator('.host-row').dblclick()
-    const credentials = page.getByRole('dialog', { name: '临时凭据', exact: true })
-    await credentials.locator('input').fill('test-only-password')
+    const credentials = page.getByRole('form', { name: '临时凭据', exact: true })
+    await credentials.locator('input').first().fill('test-only-password')
     await credentials.getByRole('button', { name: '连接', exact: true }).click()
     await assertWaiting(page)
     assert.equal(creates.length, 0, 'no remote session may be created before trust')
     await fingerprintDialog(page).getByRole('button', { name: '信任并连接' }).click()
-    const tmux = page.getByRole('dialog', { name: '需要安装 tmux', exact: true })
+    const tmux = page.getByRole('region', { name: '需要安装 tmux', exact: true })
     await tmux.waitFor()
     assert.equal(creates.length, 0, 'missing tmux must reach its guide before creating a terminal')
     await tmux.getByRole('button', { name: '使用普通模式' }).click()
@@ -247,7 +294,7 @@ try {
     await page.locator('.host-row').dblclick()
     await assertWaiting(page)
     await fingerprintDialog(page).getByRole('button', { name: '信任并连接' }).click()
-    const tmux = page.getByRole('dialog', { name: '需要安装 tmux', exact: true })
+    const tmux = page.getByRole('region', { name: '需要安装 tmux', exact: true })
     await tmux.waitFor()
     fixture.tmux = true
     await tmux.getByRole('button', { name: '安装完成，重新连接' }).click()
@@ -259,7 +306,7 @@ try {
   await scenario({}, async ({ page, creates }) => {
     await page.locator('.host-row').dblclick()
     await assertWaiting(page)
-    await fingerprintDialog(page).getByRole('button', { name: '取消', exact: true }).click()
+    await fingerprintDialog(page).getByRole('button', { name: '取消连接', exact: true }).click()
     await page.clock.runFor(5000)
     assert.equal(creates.length, 0)
     assert.equal(await page.locator('.terminal-tab').count(), 0)

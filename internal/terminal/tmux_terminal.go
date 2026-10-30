@@ -73,6 +73,7 @@ func configureTmuxTerminal(meta store.TerminalSession, runCommand func(string) (
 	}
 	commands := []string{
 		prefix + " set-window-option -t " + shellQuote(meta.TmuxName) + " alternate-screen on",
+		tmuxDefaultColorsCommand(meta),
 	}
 	for _, option := range legacyTmuxOverrideOptions(string(out)) {
 		commands = append(commands, prefix+" set-option -su "+shellQuote(option))
@@ -81,6 +82,19 @@ func configureTmuxTerminal(meta store.TerminalSession, runCommand func(string) (
 		return fmt.Errorf("configure tmux terminal: %s", cleanOutput(out, err))
 	}
 	return nil
+}
+
+// The browser owns each viewer's palette. Writing its RGB values into tmux's
+// window style converts default-colored cells to explicit colors, which then
+// survive local theme changes and affect other viewers. Restore default colors
+// on attach and on legacy terminal_theme notifications, including old servers
+// that kept the previous application's window styles across upgrades.
+func tmuxDefaultColorsCommand(meta store.TerminalSession) string {
+	prefix := "tmux -L " + shellQuote(meta.TmuxSocket)
+	target := shellQuote(meta.TmuxName)
+	style := shellQuote("fg=default,bg=default")
+	return prefix + " set-window-option -t " + target + " window-style " + style +
+		" \\; set-window-option -t " + target + " window-active-style " + style
 }
 
 func legacyTmuxOverrideOptions(output string) []string {

@@ -39,7 +39,9 @@
  * the element stays hidden until Vue removes it. */
 
 /* ---- Dialogs (Element Plus): fade the backdrop, lift + scale the panel ---- */
-.dialog-fade-enter-active { animation: motion-fade-in 0.2s var(--ease-out) backwards; }
+/* Vue watches the overlay's animation end. Match the panel duration so its
+ * enter animation can finish before Vue removes both transition classes. */
+.dialog-fade-enter-active { animation: motion-fade-in 0.26s var(--ease-out) backwards; }
 .dialog-fade-leave-active { animation: motion-fade-out 0.16s var(--ease-in) both; }
 /* Element Plus slides the wrapper in from -20px; the panel animation replaces it. */
 .dialog-fade-enter-active .el-overlay-dialog,

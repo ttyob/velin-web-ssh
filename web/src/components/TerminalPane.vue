@@ -16,15 +16,12 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import QrcodeVue from "qrcode.vue";
 import {
   ArrowDown,
-  Circle,
-  CircleStop,
   Copy,
   ExternalLink,
   Search,
   Eye,
   Keyboard,
   KeyboardOff,
-  LoaderCircle,
   Unplug,
   Wifi,
   X,
@@ -40,7 +37,8 @@ import {
   type TerminalAttentionEvent,
 } from "../terminalAttention";
 import { normalizeTerminalWheelDelta } from "../terminalWheel";
-import { allowTerminalKeyEvent, terminalClipboardFiles, terminalFileReference, terminalUploadName } from "../terminalClipboard";
+import { terminalClipboardFiles, terminalFileReference, terminalUploadName } from "../terminalClipboard";
+import { handleTerminalKeyEvent, terminalNewlineInput } from "../terminalKeyboard";
 
 const props = withDefaults(
   defineProps<{
@@ -67,8 +65,6 @@ const status = ref(props.session.status);
 const statusMessage = ref(props.session.lastError || "");
 const connected = ref(false);
 const terminalLatency = ref<number>();
-const recording = ref<{ id: string; status: string; bytes?: number }>();
-const recordingBusy = ref(false);
 const controller = ref(false);
 const searchOpen = ref(false);
 const searchText = ref("");
@@ -89,9 +85,6 @@ const linkPreviewHost = computed(() => {
 let terminal: Terminal | undefined;
 let fit: FitAddon | undefined;
 let search: SearchAddon | undefined;
-let mediaRecorder: MediaRecorder | undefined;
-let recordingStream: MediaStream | undefined;
-let recordingChunks: Blob[] = [];
 let socket: WebSocket | undefined;
 let observer: ResizeObserver | undefined;
 let reconnectTimer: number | undefined;
@@ -1541,10 +1534,10 @@ function openTerminalLink() {
   popup.opener = null;
   popup.location.href = linkPreviewURL.value;
 }
-async function sendInput(data: string) {
+async function sendInput(data: string, options: { confirmPaste?: boolean } = {}) {
   if (!data) return;
   if (
-    props.preferences.pasteGuard &&
+    options.confirmPaste !== false && props.preferences.pasteGuard &&
     (data.includes("\n") || data.includes("\r")) &&
     data.length > 2
   ) {
@@ -1836,128 +1829,6 @@ function downloadText() {
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(link.href), 0);
 }
-function recordingCanvas() {
-  return terminal?.element?.querySelector<HTMLCanvasElement>(
-    ".xterm-screen canvas",
-  );
-}
-
-function recordingMimeType() {
-  if (typeof MediaRecorder === "undefined") return "";
-  const candidates = [
-    "video/mp4;codecs=avc1.42E01E",
-    "video/webm;codecs=vp9",
-    "video/webm;codecs=vp8",
-    "video/webm",
-  ];
-  return candidates.find((value) => MediaRecorder.isTypeSupported(value)) || "";
-}
-
-function recordingVideoBitsPerSecond(canvas: HTMLCanvasElement) {
-  // Terminal glyphs need more bitrate than ordinary moving video. Scale the
-  // budget with the actual device-pixel dimensions without allowing very large
-  // panes to create unexpectedly huge files.
-  const pixels = canvas.width * canvas.height;
-  return Math.min(30_000_000, Math.max(12_000_000, Math.round(pixels * 4)));
-}
-
-function stopLocalRecorder() {
-  const recorder = mediaRecorder;
-  if (!recorder) return Promise.resolve<Blob | undefined>(undefined);
-  return new Promise<Blob>((resolve, reject) => {
-    const finish = () => {
-      const blob = new Blob(recordingChunks, {
-        type: recorder.mimeType || "video/webm",
-      });
-      mediaRecorder = undefined;
-      recordingChunks = [];
-      recordingStream?.getTracks().forEach((track) => track.stop());
-      recordingStream = undefined;
-      resolve(blob);
-    };
-    recorder.addEventListener("stop", finish, { once: true });
-    recorder.addEventListener(
-      "error",
-      () => reject(new Error("浏览器录制失败")),
-      { once: true },
-    );
-    if (recorder.state === "inactive") finish();
-    else recorder.stop();
-  });
-}
-
-async function toggleRecording() {
-  if (recordingBusy.value) return;
-  try {
-    if (!recording.value) {
-      const canvas = recordingCanvas();
-      const mimeType = recordingMimeType();
-      if (!canvas?.captureStream || !mimeType)
-        throw new Error("当前浏览器不支持终端视频录制");
-      const recorder = new MediaRecorder(canvas.captureStream(30), {
-        mimeType,
-        videoBitsPerSecond: recordingVideoBitsPerSecond(canvas),
-      });
-      recordingChunks = [];
-      recorder.addEventListener("dataavailable", (event) => {
-        if (event.data.size) recordingChunks.push(event.data);
-      });
-      recordingStream = recorder.stream;
-      const value = await api<{ id: string; status: string }>(
-        `/api/sessions/${props.session.id}/recording`,
-        { method: "POST" },
-      );
-      mediaRecorder = recorder;
-      recording.value = value;
-      try {
-        recorder.start(250);
-      } catch (error) {
-        recording.value = undefined;
-        await api(`/api/sessions/${props.session.id}/recording`, {
-          method: "DELETE",
-        });
-        throw error;
-      }
-      ElMessage.success("MP4 录制已开始");
-      return;
-    }
-
-    recordingBusy.value = true;
-    const active = recording.value;
-    const blob = await stopLocalRecorder();
-    if (!blob || !blob.size) throw new Error("没有录制到终端画面");
-    const value = await api<{ id: string }>(
-      `/api/recordings/${active.id}/upload`,
-      {
-        method: "POST",
-        headers: { "Content-Type": blob.type || "video/webm" },
-        body: blob,
-      },
-    );
-    recording.value = undefined;
-    const link = document.createElement("a");
-    link.href = `/api/recordings/${value.id}/download`;
-    link.click();
-    ElMessage.success("MP4 录制已生成，正在下载");
-  } catch (error) {
-    if (mediaRecorder || recordingStream) {
-      try {
-        await stopLocalRecorder();
-      } catch {}
-    }
-    if (recording.value) {
-      try {
-        await api(`/api/sessions/${props.session.id}/recording`, {
-          method: "DELETE",
-        });
-      } catch {}
-    }
-    recording.value = undefined;
-    ElMessage.error(error instanceof Error ? error.message : "录制操作失败");
-  } finally {
-    recordingBusy.value = false;
-  }
-}
 function ringBell() {
   if (replaying) return;
   emit("attention", props.session.id, "bell");
@@ -2022,7 +1893,9 @@ onMounted(() => {
   terminal.loadAddon(search);
   terminal.loadAddon(new WebLinksAddon(previewTerminalLink));
   terminal.open(container.value!);
-  terminal.attachCustomKeyEventHandler(allowTerminalKeyEvent);
+  terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, () => {
+    void sendInput(terminalNewlineInput, { confirmPaste: false });
+  }));
   // Honor scroll regions and screen switches so TUI redraws keep their
   // cursor positions. tmux history is reached through the remote scrollbar.
   fitTerminal();
@@ -2096,21 +1969,45 @@ watch(
   },
 );
 watch(
-  () => props.preferences,
-  (value) => {
+  () => [
+    props.preferences.fontSize,
+    props.preferences.lineHeight,
+    props.preferences.fontWeight,
+    props.preferences.letterSpacing,
+  ] as const,
+  ([fontSize, lineHeight, fontWeight, letterSpacing]) => {
     if (terminal) {
-      terminal.options.fontSize = value.fontSize;
-      terminal.options.lineHeight = value.lineHeight;
-      terminal.options.fontWeight = value.fontWeight;
-      terminal.options.letterSpacing = value.letterSpacing;
-      terminal.options.cursorStyle = value.cursorStyle;
-      terminal.options.cursorBlink = value.cursorBlink;
-      terminal.options.theme = terminalXtermTheme(value.terminalTheme);
-      sendTerminalTheme();
+      terminal.options.fontSize = fontSize;
+      terminal.options.lineHeight = lineHeight;
+      terminal.options.fontWeight = fontWeight;
+      terminal.options.letterSpacing = letterSpacing;
       resize();
     }
   },
-  { deep: true },
+);
+watch(
+  () => [props.preferences.cursorStyle, props.preferences.cursorBlink] as const,
+  ([cursorStyle, cursorBlink]) => {
+    if (terminal) {
+      terminal.options.cursorStyle = cursorStyle;
+      terminal.options.cursorBlink = cursorBlink;
+    }
+  },
+);
+watch(
+  () => props.preferences.terminalTheme,
+  (id) => {
+    const theme = terminalXtermTheme(id);
+    // Repaint existing cells, including the preview shown during restoration.
+    // A color change does not change terminal geometry or need a remote resize.
+    for (const instance of [terminal, replayPreviewTerminal]) {
+      if (!instance) continue;
+      instance.options.theme = theme;
+      instance.refresh(0, instance.rows - 1);
+    }
+    if (replayPreviewHost) replayPreviewHost.style.backgroundColor = theme.background;
+    sendTerminalTheme();
+  },
 );
 onBeforeUnmount(() => {
   disposed = true;
@@ -2140,13 +2037,6 @@ onBeforeUnmount(() => {
 	observer?.disconnect();
 	disposeReplayPreview();
 	terminalTextarea?.removeEventListener("paste", handleTerminalPaste, true);
-	if (recording.value) {
-		void api(`/api/sessions/${props.session.id}/recording`, { method: "DELETE" });
-	}
-	if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-	recordingStream?.getTracks().forEach((track) => track.stop());
-	mediaRecorder = undefined;
-	recordingStream = undefined;
 	socket?.close();
   terminal?.dispose();
 });
@@ -2204,33 +2094,6 @@ defineExpose({
           ><button class="icon-btn" @click="searchOpen = !searchOpen">
             <Search :size="15" /></button
         ></el-tooltip>
-        <el-tooltip
-          :content="
-            recordingBusy
-              ? '正在生成 MP4'
-              : recording
-                ? '停止并下载录制'
-                : '开始终端录制'
-          "
-        >
-          <button
-            class="icon-btn"
-            :class="{ active: recording, busy: recordingBusy }"
-            :disabled="!connected || recordingBusy"
-            @click="toggleRecording"
-          >
-            <LoaderCircle
-              v-if="recordingBusy"
-              :size="15"
-              class="recording-spinner"
-            />
-            <component
-              v-else
-              :is="recording ? CircleStop : Circle"
-              :size="15"
-            />
-          </button>
-        </el-tooltip>
         <el-tooltip v-if="closable" content="终止并关闭"
           ><button class="icon-btn pane-close" @click="emit('close')">
             <X :size="15" /></button

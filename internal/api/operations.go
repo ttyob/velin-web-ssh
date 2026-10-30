@@ -17,7 +17,6 @@ import (
 	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
-const maxRecordingUploadBytes int64 = 1 << 30
 const maxBackupUploadBytes int64 = 1 << 30
 
 type commandTaskRequest struct {
@@ -114,83 +113,6 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	a.taskQueue <- commandTaskRequest{UserID: user.ID, TaskID: item.ID}
 	writeJSON(w, 201, item)
-}
-
-func (a *API) recordings(w http.ResponseWriter, r *http.Request) {
-	items, err := a.store.Recordings(currentUser(r).ID)
-	if err != nil {
-		writeError(w, 500, "database_error", "录制记录读取失败")
-		return
-	}
-	for i := range items {
-		items[i].Path = ""
-	}
-	writeJSON(w, 200, nonNil(items))
-}
-
-func (a *API) startRecording(w http.ResponseWriter, r *http.Request) {
-	value, err := a.terminals.StartRecording(currentUser(r).ID, chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, 409, "recording_start_failed", err.Error())
-		return
-	}
-	writeJSON(w, 201, value)
-}
-
-func (a *API) stopRecording(w http.ResponseWriter, r *http.Request) {
-	userID, sessionID := currentUser(r).ID, chi.URLParam(r, "id")
-	value, err := a.terminals.StopRecording(userID, sessionID)
-	if err != nil {
-		writeError(w, 404, "recording_not_found", "会话不存在")
-		return
-	}
-	if value.ID == "" {
-		writeError(w, 409, "recording_not_active", "当前没有进行中的录制")
-		return
-	}
-	writeJSON(w, 200, value)
-}
-
-func (a *API) uploadRecording(w http.ResponseWriter, r *http.Request) {
-	if r.ContentLength > maxRecordingUploadBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "recording_too_large", "录制文件不能超过 1 GB")
-		return
-	}
-	value, err := a.terminals.UploadRecording(
-		r.Context(),
-		currentUser(r).ID,
-		chi.URLParam(r, "id"),
-		http.MaxBytesReader(w, r.Body, maxRecordingUploadBytes+1),
-	)
-	if err != nil {
-		message := err.Error()
-		status := http.StatusConflict
-		if strings.Contains(message, "MP4 转码失败") || strings.Contains(message, "ffmpeg") {
-			status = http.StatusInternalServerError
-		}
-		writeError(w, status, "recording_upload_failed", message)
-		return
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
-func (a *API) downloadRecording(w http.ResponseWriter, r *http.Request) {
-	value, err := a.store.Recording(currentUser(r).ID, chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, 404, "recording_not_found", "录制不存在")
-		return
-	}
-	if value.Status == "recording" {
-		writeError(w, 409, "recording_active", "请先停止录制")
-		return
-	}
-	name := value.SessionName + "-" + value.ID + ".mp4"
-	contentType := "video/mp4"
-	if strings.HasSuffix(strings.ToLower(value.Path), ".cast") {
-		name = value.SessionName + "-" + value.ID + ".cast"
-		contentType = "application/octet-stream"
-	}
-	servePrivateFile(w, r, value.Path, name, contentType)
 }
 
 func safeBackupFile(dataDir, name string) (string, error) {

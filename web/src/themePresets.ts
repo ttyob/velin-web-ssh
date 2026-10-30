@@ -487,6 +487,34 @@ export function applyAccent(value: string) {
   } catch {}
 }
 
+function rgbHex(channels: number[]) {
+  return `#${channels.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
+const ansiCubeLevels = [0, 95, 135, 175, 215, 255];
+const terminalAnsiColorCube = ansiCubeLevels.flatMap((red) =>
+  ansiCubeLevels.flatMap((green) =>
+    ansiCubeLevels.map((blue) => rgbHex([red, green, blue])),
+  ),
+);
+
+function terminalExtendedAnsi(preset: TerminalThemePreset) {
+  const channels = (hex: string) =>
+    [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+  const background = channels(preset.background);
+  const foreground = channels(preset.foreground);
+  // xterm's 232–255 ramp runs from 8 to 238 between black and white. Use
+  // the same shades between this theme's background and foreground so TUI
+  // surfaces and dividers follow it. Keep the 16–231 color cube intact.
+  const grayscale = Array.from({ length: 24 }, (_, index) => {
+    const shade = (8 + index * 10) / 255;
+    return rgbHex(background.map((value, channel) =>
+      Math.round(value + (foreground[channel] - value) * shade),
+    ));
+  });
+  return [...terminalAnsiColorCube, ...grayscale];
+}
+
 export function terminalXtermTheme(id: string) {
   const preset = findTerminalTheme(id);
   const [
@@ -529,5 +557,6 @@ export function terminalXtermTheme(id: string) {
     brightMagenta,
     brightCyan,
     brightWhite,
+    extendedAnsi: terminalExtendedAnsi(preset),
   };
 }

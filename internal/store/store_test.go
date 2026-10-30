@@ -394,6 +394,38 @@ func TestHostMigrationAndConnectionMetadata(t *testing.T) {
 	}
 }
 
+func TestTerminalShareWithLegacyRecordingColumns(t *testing.T) {
+	s := testStore(t)
+	// Existing installations keep these historical columns. Sharing must work
+	// without reading or writing them after the recording feature is removed.
+	for _, statement := range []string{
+		`ALTER TABLE terminal_shares ADD COLUMN record INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE terminal_shares ADD COLUMN recording_id TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CreateUser("u1", "user", "hash", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveTerminal(TerminalSession{ID: "session-1", UserID: "u1", Name: "shell", Status: "attached"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	share := TerminalShare{ID: "share-1", UserID: "u1", SessionID: "session-1", TokenHash: "legacy-share", TokenEnc: "encrypted", Permission: "view", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+	if err := s.CreateTerminalShare(share); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`UPDATE terminal_shares SET record=1,recording_id='historical-recording' WHERE id='share-1'`); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.TerminalShareByTokenHash(share.TokenHash)
+	if err != nil || loaded.ID != share.ID || loaded.Permission != "view" || loaded.SessionName != "shell" {
+		t.Fatalf("legacy share=%+v err=%v", loaded, err)
+	}
+}
+
 func TestTerminalShareLifecycle(t *testing.T) {
 	s := testStore(t)
 	if err := s.CreateUser("u1", "user", "hash", "user"); err != nil {
@@ -403,7 +435,7 @@ func TestTerminalShareLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	share := TerminalShare{ID: "share-1", UserID: "u1", SessionID: "session-1", TokenHash: "token-hash", TokenEnc: "encrypted", PasswordHash: "password-hash", Permission: "view", Record: true, RecordingID: "recording-1", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+	share := TerminalShare{ID: "share-1", UserID: "u1", SessionID: "session-1", TokenHash: "token-hash", TokenEnc: "encrypted", PasswordHash: "password-hash", Permission: "view", ExpiresAt: now.Add(time.Hour), CreatedAt: now}
 	if err := s.CreateTerminalShare(share); err != nil {
 		t.Fatal(err)
 	}

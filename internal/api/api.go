@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -235,11 +236,6 @@ func (a *API) Router() http.Handler {
 		r.Handle("/web-proxy/{token}/*", http.HandlerFunc(a.serveWebProxy))
 		r.Handle("/web-service-proxy/{serviceID}", http.HandlerFunc(a.serveStableWebProxy))
 		r.Handle("/web-service-proxy/{serviceID}/*", http.HandlerFunc(a.serveStableWebProxy))
-		r.Get("/api/recordings", a.recordings)
-		r.Post("/api/sessions/{id}/recording", a.startRecording)
-		r.Delete("/api/sessions/{id}/recording", a.stopRecording)
-		r.Post("/api/recordings/{id}/upload", a.uploadRecording)
-		r.Get("/api/recordings/{id}/download", a.downloadRecording)
 		r.Group(func(r chi.Router) {
 			r.Use(a.adminOnly)
 			r.Get("/api/admin/users", a.users)
@@ -313,7 +309,7 @@ func (a *API) csrfProtection(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "cross_site_rejected", "不允许跨站写请求")
 			return
 		}
-		cookie, cookieErr := r.Cookie(csrfCookieName)
+		cookie, cookieErr := a.csrfCookie(r)
 		header := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
 		if cookieErr != nil || header == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
 			writeError(w, http.StatusForbidden, "csrf_rejected", "安全令牌无效，请刷新页面重试")
@@ -455,7 +451,7 @@ func (a *API) currentUser(r *http.Request) (store.User, error) {
 	return u, err
 }
 func (a *API) currentAuthSession(r *http.Request) (store.User, string, error) {
-	cookie, err := r.Cookie(cookieName)
+	cookie, err := a.sessionCookie(r)
 	if err != nil {
 		return store.User{}, "", err
 	}
@@ -606,14 +602,14 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	if captchaRequired {
 		a.deleteLoginCaptcha(in.CaptchaID)
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: int(ttl.Seconds())})
+	a.revokeBrowserSessions(r)
+	a.clearSessionCookies(w)
+	http.SetCookie(w, &http.Cookie{Name: a.sessionCookieName(), Value: token, Path: "/", HttpOnly: true, Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: int(ttl.Seconds())})
 	writeJSON(w, 200, map[string]any{"user": u})
 }
 func (a *API) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		_ = a.store.DeleteAuthSession(security.TokenHash(c.Value))
-	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
+	a.revokeBrowserSessions(r)
+	a.clearSessionCookies(w)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (a *API) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, currentUser(r)) }
@@ -724,7 +720,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "weak_password", fmt.Sprintf("新密码至少 %d 位", minLength))
 		return
 	}
-	cookie, _ := r.Cookie(cookieName)
+	cookie, _ := a.sessionCookie(r)
 	currentTokenHash := ""
 	if cookie != nil {
 		currentTokenHash = security.TokenHash(cookie.Value)
@@ -847,7 +843,7 @@ func verifySecondFactor(secret string, recoveryHashes []string, code string) (va
 }
 func (a *API) devices(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	cookie, _ := r.Cookie(cookieName)
+	cookie, _ := a.sessionCookie(r)
 	currentHash := ""
 	if cookie != nil {
 		currentHash = security.TokenHash(cookie.Value)
@@ -874,7 +870,7 @@ func (a *API) revokeAllDevices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "database_error", "撤销设备失败")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/", MaxAge: -1, HttpOnly: true, Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
+	a.clearSessionCookies(w)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (a *API) deleteDevice(w http.ResponseWriter, r *http.Request) {
@@ -2071,8 +2067,10 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) csrfToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Add("Vary", "Cookie")
 	token := ""
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && len(cookie.Value) >= 32 {
+	if cookie, err := a.csrfCookie(r); err == nil && len(cookie.Value) >= 32 {
 		token = cookie.Value
 	}
 	if token == "" {
@@ -2082,7 +2080,9 @@ func (a *API) csrfToken(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "csrf_failed", "无法建立安全会话")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: token, Path: "/", Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
+	}
+	if cookie, err := r.Cookie(a.csrfCookieName()); err != nil || cookie.Value != token {
+		http.SetCookie(w, &http.Cookie{Name: a.csrfCookieName(), Value: token, Path: "/", Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
@@ -2320,20 +2320,22 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) staticHandler() http.Handler {
-	dist := a.cfg.WebDist
+	dist := a.cfg.WebFS
+	if dist == nil {
+		dist = os.DirFS(a.cfg.WebDist)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") {
 			http.NotFound(w, r)
 			return
 		}
-		path := filepath.Join(dist, filepath.Clean("/"+r.URL.Path))
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			http.ServeFile(w, r, path)
+		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if info, err := fs.Stat(dist, name); err == nil && !info.IsDir() {
+			http.ServeFileFS(w, r, dist, name)
 			return
 		}
-		index := filepath.Join(dist, "index.html")
-		if _, err := os.Stat(index); err == nil {
-			http.ServeFile(w, r, index)
+		if _, err := fs.Stat(dist, "index.html"); err == nil {
+			http.ServeFileFS(w, r, dist, "index.html")
 			return
 		}
 		http.Error(w, "VelinWebSSH frontend has not been built", http.StatusServiceUnavailable)

@@ -236,8 +236,6 @@ export interface TerminalShare {
   sessionMode?: "tmux" | "normal";
   permission: "view" | "operate";
   passwordRequired: boolean;
-  record: boolean;
-  recordingID?: string;
   expiresAt: string;
   revokedAt?: string;
   createdAt: string;

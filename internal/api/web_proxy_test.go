@@ -636,7 +636,7 @@ func TestRootProxyCannotOverwriteVelinSession(t *testing.T) {
 	session := &webProxySession{rootProxy: true, target: target}
 	request, _ := http.NewRequest(http.MethodGet, "http://velin.example:18080/", nil)
 	response := &http.Response{
-		Header:  http.Header{"Set-Cookie": {cookieName + "=attacker; Path=/", "upstream=value; Path=/"}},
+		Header:  http.Header{"Set-Cookie": {cookieName + "=attacker; Path=/", httpCookieName + "=attacker; Path=/", httpCSRFCookieName + "=attacker; Path=/", "upstream=value; Path=/"}},
 		Body:    io.NopCloser(bytes.NewReader(nil)),
 		Request: request,
 	}
@@ -654,7 +654,7 @@ func TestPathProxyCannotOverwriteVelinSecurityCookies(t *testing.T) {
 	session := &webProxySession{routePrefix: "/web-service-proxy/id", target: target}
 	request, _ := http.NewRequest(http.MethodGet, "https://velin.example/web-service-proxy/id/", nil)
 	response := &http.Response{
-		Header: http.Header{"Set-Cookie": {cookieName + "=attacker; Path=/", csrfCookieName + "=attacker; Path=/", pathAccessCookie + "abcd=attacker; Path=/", "upstream=value; Path=/"}},
+		Header: http.Header{"Set-Cookie": {cookieName + "=attacker; Path=/", csrfCookieName + "=attacker; Path=/", httpCookieName + "=attacker; Path=/", httpCSRFCookieName + "=attacker; Path=/", pathAccessCookie + "abcd=attacker; Path=/", "upstream=value; Path=/"}},
 		Body:   io.NopCloser(bytes.NewReader(nil)), Request: request,
 	}
 	if err := session.modifyResponse(response); err != nil {
@@ -755,7 +755,7 @@ func TestPathAccessIsReusableAndServiceScoped(t *testing.T) {
 }
 
 func TestUpstreamCookiesRemoveVelinSecurityCookies(t *testing.T) {
-	request := &http.Request{Header: http.Header{"Cookie": {"velin_session=secret; velin_csrf=token; velin_host_port_abcd=ticket; velin_web_service_abcd=ticket; upstream=value"}}}
+	request := &http.Request{Header: http.Header{"Cookie": {"velin_session=secret; velin_csrf=token; velin_session_http=secret; velin_csrf_http=token; velin_host_port_abcd=ticket; velin_web_service_abcd=ticket; upstream=value"}}}
 	if actual := upstreamCookies(request); actual != "upstream=value" {
 		t.Fatalf("upstream cookies=%q", actual)
 	}

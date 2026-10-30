@@ -30,7 +30,7 @@ func TestTerminateSessionReportsLocalCloseAfterRemoteFailure(t *testing.T) {
 	if err = database.SaveTerminal(meta); err != nil {
 		t.Fatal(err)
 	}
-	a := &API{store: database, terminals: terminal.NewManager(database, nil, "test", t.TempDir())}
+	a := &API{store: database, terminals: terminal.NewManager(database, nil, "test")}
 	// No credentials exist: remote cleanup fails before any outbound dial.
 	request := shareRouteRequest(http.MethodDelete, "/api/sessions/session", "id", meta.ID, `{}`)
 	request = request.WithContext(context.WithValue(request.Context(), userKey, store.User{ID: "owner"}))

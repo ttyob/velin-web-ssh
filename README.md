@@ -19,15 +19,16 @@
 - 主机分组、搜索、拖动排序、跳板机和 OpenSSH 配置导入
 - 多标签与分屏终端，支持普通 SSH、tmux 持久会话和断线恢复
 - 页面内 VNC（noVNC）和 RDP（Guacamole）远程桌面，RDP 也支持调用 Windows 本地远程桌面客户端
-- 连接过程直接显示在终端中，并显示连接状态与网络延迟
+- 连接时立即打开标签，在窗口内展示进度、指纹确认和失败原因，支持取消与重试
+- Ctrl+Enter 插入换行，Enter 提交（远端 shell / CLI 需支持 bracketed paste）
 - SFTP 文件管理、文本编辑、上传和下载
 - 本地、远程与 SOCKS5 端口转发
 - 通过 SSH 访问内网 HTTP/HTTPS 服务
 - 独立保存的主机密码和可复用 SSH 凭据
 - TOTP、PIN 锁屏、主机指纹校验和加密备份
 - 主机资源监控、Docker/Git 工具和可选 AI Agent
-- 终端会话限时分享，支持密码、只读/可操作权限、在线预览和分享期录制
-- Docker Web 版和飞牛 fnOS 原生应用包
+- 终端会话限时分享，支持密码、只读/可操作权限和在线预览
+- Docker Web 版、飞牛 fnOS 原生应用包和 Windows 单 EXE 桌面版
 
 ## 快速安装
 
@@ -100,13 +101,14 @@ docker compose run --rm --no-deps \
 
 ### GitHub Release
 
-[Releases](https://github.com/ttyob/velin-web-ssh/releases) 提供飞牛 fnOS 安装包及校验文件：
+[Releases](https://github.com/ttyob/velin-web-ssh/releases) 提供飞牛 fnOS 安装包、Windows 单 EXE 及校验文件：
 
 - `velin-web-ssh-fnos-native-amd64-<版本号>.fpk`
 - `velin-web-ssh-fnos-native-arm64-<版本号>.fpk`
+- `velin-web-ssh-windows-gui-amd64-v<版本号>.exe`
 - `checksums.txt`
 
-Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 版本标签后，工作流会完成测试、Docker 镜像推送和飞牛安装包构建，再发布 GitHub Release；发布说明中提供对应版本的 Docker 镜像地址。
+Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 版本标签后，工作流会完成测试、Docker 镜像推送、飞牛安装包和 Windows 单 EXE 构建，再统一发布 GitHub Release。发布说明提供对应版本的 Docker 镜像地址；`latest` 跟随版本标签，`main` 分支构建发布为 `edge`。
 
 ### 飞牛 fnOS 原生应用包
 
@@ -119,8 +121,8 @@ packaging/fnos/build.sh
 构建脚本默认构建当前主机架构，也可以显式指定架构：
 
 ```bash
-VELIN_FNOS_VERSION=0.3.48 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
-VELIN_FNOS_VERSION=0.3.48 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.49 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.49 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
 ```
 
 忘记 fnOS 原生应用的管理员密码时，通过 SSH 登录 NAS 后执行：
@@ -149,7 +151,7 @@ VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优�
 | `VELIN_ADDR` | `0.0.0.0:8377` | Web 服务监听地址 |
 | `VELIN_ADMIN_USER` | `admin` | 首次启动创建的管理员账号 |
 | `VELIN_ADMIN_PASSWORD` | 空 | 首次启动管理员密码 |
-| `VELIN_DATA_DIR` | `data` | 数据库、主密钥和录制目录 |
+| `VELIN_DATA_DIR` | `data` | 数据库、主密钥及备份的存储目录 |
 | `VELIN_COOKIE_SECURE` | `true` | 会话 Cookie 仅通过 HTTPS 发送；纯 HTTP 内网部署必须显式设置为 `false` |
 | `VELIN_EMBED_ORIGINS` | 空 | 允许嵌入 VelinWebSSH 的可信来源，多个来源用逗号分隔，例如 `https://nas.example.com` |
 | `VELIN_TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理网段，只有来自这些网段的请求才会读取 `X-Real-IP` |
@@ -162,7 +164,6 @@ VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优�
 | `VELIN_AI_BASE_URL` | 空 | OpenAI 兼容 API 地址 |
 | `VELIN_AI_MODEL` | 空 | AI Agent 模型名称 |
 | `VELIN_AI_API_KEY` | 空 | AI API Key |
-| `VELIN_FFMPEG_BINARY` | `ffmpeg` | 终端录制使用的 FFmpeg 路径 |
 
 公网部署请使用 Caddy、Nginx 等反向代理提供 HTTPS；同时通过防火墙限制外部直接访问 `8377` 端口。配置内嵌页面时只填写明确的 `VELIN_EMBED_ORIGINS`，不要使用通配来源。反向代理必须覆盖而不是追加 `X-Real-IP`，并将代理网段写入 `VELIN_TRUSTED_PROXY_CIDRS`。guacd 没有认证能力，Compose 已将其限制在 `127.0.0.1:4822`，不要将该端口暴露到公网。Compose 会自动为 VelinWebSSH 和 guacd 共享 RDP 磁盘映射目录。
 
@@ -178,9 +179,8 @@ VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优�
 
 - `velin.db`：用户、主机、会话和设置
 - `master.key`：SSH 敏感数据的加密主密钥
-- `recordings/`：终端录制
 
-管理员可以在设置中创建密钥加密备份。备份包含数据库和 `master.key`，不包含 `.env` 和终端录制。恢复时必须使用创建备份时输入的同一密钥。
+管理员可以在设置中创建密钥加密备份。备份包含数据库和 `master.key`，不包含 `.env`。恢复时必须使用创建备份时输入的同一密钥。
 
 ## 开发
 
@@ -209,20 +209,23 @@ npm run build
 cd web
 npm run test:terminal
 npm run test:desktop
+npm run test:dialogs
 npm run test:sessions
 npm run test:connections
 ```
 
-Windows GUI 使用 Wails 构建：
+Windows GUI 使用 Wails 构建，先构建要内嵌的网页资源：
 
 ```powershell
+npm --prefix web ci
+npm --prefix web run build
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
 wails build -platform windows/amd64 -clean -m -s -skipbindings
 ```
 
-Windows GUI 默认为便携模式。数据库、主密钥、终端录制和 `velin-web-ssh.log` 均保存在 `velin-web-ssh.exe` 所在目录。首次启动会显示管理员凭据对话框，密码可通过按钮复制并同时写入 `velin-web-ssh.log`。
+Windows GUI 为单 EXE 便携版，网页资源直接内嵌在 `build/bin/velin-web-ssh.exe` 中，复制 EXE 即可运行。运行需要 WebView2 Runtime，缺少时程序会提示安装。数据库、主密钥和 `velin-web-ssh.log` 均保存在 EXE 所在目录，请选择可写目录。首次启动会显示管理员凭据对话框，密码可通过按钮复制。需要使用外部网页资源时，可在 `.env` 中指定 `VELIN_WEB_DIST`。
 
-如果初始密码已经丢失，在 PowerShell 中执行以下命令。程序会保留现有数据、重置管理员密码、清除旧登录会话，并通过弹窗和日志显示新密码：
+如果初始密码已经丢失，在 PowerShell 中执行以下命令。程序会保留现有数据、重置管理员密码、清除旧登录会话，并通过弹窗显示新密码：
 
 ```powershell
 .\velin-web-ssh.exe --reset-admin-password

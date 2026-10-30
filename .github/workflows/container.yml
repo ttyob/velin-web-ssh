@@ -1,4 +1,4 @@
-name: Build and publish Docker and fnOS
+name: Build and publish Docker, fnOS and Windows
 
 on:
   push:
@@ -61,7 +61,8 @@ jobs:
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=edge,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
           labels: |
             org.opencontainers.image.title=VelinWebSSH
@@ -77,6 +78,47 @@ jobs:
             VELIN_VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  windows-desktop:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.13"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.20.4"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded frontend
+        working-directory: web
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+      - name: Install Wails CLI
+        shell: pwsh
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+      - name: Build Windows desktop application
+        env:
+          VELIN_VERSION: ${{ github.ref_name }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:Path = "$(go env GOPATH)\bin;$env:Path"
+          wails.exe build -platform windows/amd64 -clean -m -s -skipbindings -ldflags "-X github.com/ttyob/velin-web-ssh/internal/version.Current=$env:VELIN_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item build/bin/velin-web-ssh.exe "release/velin-web-ssh-windows-gui-amd64-${env:VELIN_VERSION}.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: velin-web-ssh-windows-desktop-release
+          path: release/velin-web-ssh-windows-gui-amd64-*.exe
+          if-no-files-found: error
 
   fnos-package:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -115,22 +157,26 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, publish, fnos-package]
+    needs: [test, publish, fnos-package, windows-desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: velin-web-ssh-windows-desktop-release
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
           pattern: velin-web-ssh-fnos-package-*
           path: release
           merge-multiple: true
-      - name: Generate fnOS package checksums
+      - name: Generate release checksums
         shell: bash
         run: |
           set -euo pipefail
           cd release
-          sha256sum velin-web-ssh-fnos-native-*.fpk > checksums.txt
+          sha256sum velin-web-ssh-fnos-native-*.fpk velin-web-ssh-windows-gui-amd64-*.exe > checksums.txt
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -140,6 +186,9 @@ jobs:
             Docker 镜像：`ghcr.io/ttyob/velin-web-ssh:${{ github.ref_name }}`，支持 `linux/amd64` 和 `linux/arm64`。
 
             飞牛 fnOS 原生应用：下载对应架构的 `.fpk` 安装包，使用 `checksums.txt` 校验文件完整性。
+
+            Windows x64 桌面版：下载 `.exe` 即可运行，网页资源已内嵌。需要 WebView2 Runtime。
           files: |
             release/velin-web-ssh-fnos-native-*.fpk
+            release/velin-web-ssh-windows-gui-amd64-*.exe
             release/checksums.txt

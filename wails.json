@@ -4,6 +4,10 @@
   "outputfilename": "velin-web-ssh",
   "frontend:dir": "desktop",
   "build:dir": "build",
+  "info": {
+    "productName": "VelinWebSSH",
+    "productVersion": "0.3.49"
+  },
   "author": {
     "name": "VelinWebSSH"
   }

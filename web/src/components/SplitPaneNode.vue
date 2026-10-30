@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import TerminalPane from "./TerminalPane.vue";
 import type { PaneNode, Preferences, TerminalSession } from "../types";
 import type { TerminalAttentionEvent } from "../terminalAttention";
+import { findTerminalTheme } from "../themePresets";
 
 defineOptions({ name: "SplitPaneNode" });
 const props = defineProps<{
@@ -45,6 +46,14 @@ const hiddenByMaximize = computed(() =>
     props.maximizedLeafId && !leafIDs.value.includes(props.maximizedLeafId),
   ),
 );
+const paneColors = computed(() => {
+  const theme = findTerminalTheme(props.preferences.terminalTheme);
+  return {
+    "--pane-background": theme.background,
+    "--pane-foreground": theme.foreground,
+    "--pane-focus": theme.cursor,
+  };
+});
 const splitStyle = computed(() => {
   if (props.node.type !== "split") return {};
   const firstHasMax = Boolean(
@@ -147,13 +156,13 @@ function sendModifiedKey(key: string) {
   firstRef.value?.sendModifiedKey?.(key);
   secondRef.value?.sendModifiedKey?.(key);
 }
-function sendText(leafID: string, text: string) {
+function sendText(leafID: string, text: string, options?: { confirmPaste?: boolean }) {
   if (props.node.type === "leaf") {
-    if (props.node.id === leafID) terminalRef.value?.sendInput?.(text);
+    if (props.node.id === leafID) terminalRef.value?.sendInput?.(text, options);
     return;
   }
-  firstRef.value?.sendText?.(leafID, text);
-  secondRef.value?.sendText?.(leafID, text);
+  firstRef.value?.sendText?.(leafID, text, options);
+  secondRef.value?.sendText?.(leafID, text, options);
 }
 function focusLeaf(leafID?: string) {
   if (!leafID) return;
@@ -226,7 +235,7 @@ defineExpose({
       `split-${node.direction}`,
       { 'pane-maximized-away': hiddenByMaximize },
     ]"
-    :style="splitStyle"
+    :style="[paneColors, splitStyle]"
   >
     <SplitPaneNode
       ref="firstRef"
@@ -315,3 +324,34 @@ defineExpose({
     <div v-else class="empty-pane"><span>终端会话已不可用</span></div>
   </div>
 </template>
+
+<style scoped>
+/* Keep the divider with the terminal palette even when the surrounding app
+   uses a different theme. The full 9 px strip remains a drag target. */
+.split-node {
+  background: var(--pane-background);
+}
+.split-resizer {
+  background: color-mix(in srgb, var(--pane-background) 92%, var(--pane-foreground));
+}
+.split-resizer span {
+  background: color-mix(in srgb, var(--pane-background) 20%, var(--pane-foreground));
+  opacity: 1;
+}
+.split-resizer:hover,
+.split-resizer:focus-visible,
+.split-resizer:active {
+  background: color-mix(in srgb, var(--pane-background) 84%, var(--pane-foreground));
+  box-shadow: none;
+}
+.split-resizer:hover span,
+.split-resizer:focus-visible span,
+.split-resizer:active span {
+  background: var(--pane-foreground);
+  opacity: 1;
+}
+.split-resizer:focus-visible {
+  outline: 2px solid var(--pane-focus);
+  outline-offset: -2px;
+}
+</style>

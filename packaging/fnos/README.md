@@ -13,14 +13,13 @@ packaging/fnos/build.sh
 Build a package for the current host architecture:
 
 ```sh
-VELIN_FNOS_VERSION=0.3.48 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.49 packaging/fnos/build.sh
 ```
 
 The release workflow builds separate `amd64` and `arm64` packages. The build
 machine needs Docker to extract the matching guacd runtime files, but Docker is
 not needed after installation. Install the matching `.fpk` through fnOS App
-Center. ffmpeg is optional and uses the NAS `ffmpeg` command when recordings
-are enabled.
+Center.
 
 Reset a forgotten administrator password over SSH:
 

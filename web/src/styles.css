@@ -612,14 +612,6 @@ button {
 .connection-icon.disconnected {
   color: #e47f76;
 }
-.recording-spinner {
-  animation: recording-spin 0.9s linear infinite;
-}
-@keyframes recording-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 .terminal-tools .icon-btn {
   width: 25px;
   height: 25px;
@@ -1269,6 +1261,11 @@ button {
 }
 .tabs-scroll {
   scrollbar-width: thin;
+}
+/* Canvas pixels retain their ANSI colors in Windows contrast themes. Keep
+   the terminal's DOM background and replay renderer on that same palette. */
+.xterm {
+  forced-color-adjust: none;
 }
 .xterm .xterm-viewport {
   overflow-y: auto !important;

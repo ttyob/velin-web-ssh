@@ -173,6 +173,10 @@ func TestTmuxTerminalRestorationKeepsRedrawsOutOfHistory(t *testing.T) {
 	tmux("-f", "/dev/null", "new-session", "-d", "-s", "test", "-x", "80", "-y", "24", command)
 	t.Cleanup(func() { _ = exec.Command("tmux", "-L", socket, "kill-server").Run() })
 	tmux("set-window-option", "-t", "test", "alternate-screen", "off")
+	// A private tmux server can outlive the Web service and retain the old
+	// implementation's fixed colors. Restoration must migrate those as well.
+	tmux("set-window-option", "-t", "test", "window-style", "fg=#d8deea,bg=#111318")
+	tmux("set-window-option", "-t", "test", "window-active-style", "fg=#f8f8f2,bg=#282a36")
 	for _, override := range []string{legacyTmuxTerminalOverride, "xterm*:Tc", legacyTmuxTerminalOverride, "screen*:colors=256"} {
 		tmux("set-option", "-as", "terminal-overrides", ","+override)
 	}
@@ -192,6 +196,11 @@ func TestTmuxTerminalRestorationKeepsRedrawsOutOfHistory(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(tmux("show-window-options", "-v", "-t", "test", "alternate-screen"))); got != "on" {
 		t.Fatalf("alternate-screen = %q, want on", got)
+	}
+	for _, option := range []string{"window-style", "window-active-style"} {
+		if got := strings.TrimSpace(string(tmux("show-window-options", "-v", "-t", "test", option))); got != "fg=default,bg=default" {
+			t.Fatalf("%s = %q, want terminal default colors", option, got)
+		}
 	}
 	if err := os.WriteFile(start, nil, 0600); err != nil {
 		t.Fatal(err)

@@ -10,7 +10,6 @@ const emit = defineEmits<{ "update:modelValue": [boolean] }>();
 const password = ref("");
 const permission = ref<"view" | "operate">("view");
 const expiresInMinutes = ref(60);
-const record = ref(false);
 const shares = ref<TerminalShare[]>([]);
 const loading = ref(false);
 const creating = ref(false);
@@ -65,7 +64,6 @@ async function createShare() {
           password: password.value,
           permission: permission.value,
           expiresInMinutes: expiresInMinutes.value,
-          record: record.value,
         }),
       },
     );
@@ -177,7 +175,6 @@ function expiresLabel(value: string) {
         />
       </el-form-item>
       <div class="share-create-actions">
-        <label><el-switch v-model="record" /><span>分享期间录制终端输出</span></label>
         <el-button type="primary" native-type="submit" :loading="creating">创建并复制链接</el-button>
       </div>
     </el-form>
@@ -193,7 +190,7 @@ function expiresLabel(value: string) {
             {{ item.permission === "operate" ? "可操作" : "仅观看" }}
           </span>
           <strong>{{ item.viewerCount }} 人在线</strong>
-          <small>有效至 {{ expiresLabel(item.expiresAt) }} · {{ item.passwordRequired ? "有密码" : "无密码" }}<template v-if="item.record"> · 正在录屏</template></small>
+          <small>有效至 {{ expiresLabel(item.expiresAt) }} · {{ item.passwordRequired ? "有密码" : "无密码" }}</small>
           <div v-if="item.viewers?.length" class="share-viewers">
             <span v-for="viewer in item.viewers" :key="viewer.id">{{ viewer.name }} · {{ viewer.ip }}</span>
           </div>
@@ -222,8 +219,7 @@ function expiresLabel(value: string) {
 .share-session-heading small, .share-row small, .share-list-title small { color: var(--muted); }
 .share-create-form { padding: 16px 0 18px; border-bottom: 1px solid var(--line); }
 .share-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.share-create-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.share-create-actions label { display: flex; align-items: center; gap: 8px; }
+.share-create-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .share-list-title { display: flex; justify-content: space-between; margin: 18px 0 10px; }
 .share-list { display: grid; gap: 8px; }
 .share-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }

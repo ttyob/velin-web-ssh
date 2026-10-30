@@ -19,7 +19,7 @@ ARG VELIN_VERSION=dev
 RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w -X github.com/ttyob/velin-web-ssh/internal/version.Current=${VELIN_VERSION}" -o /velin ./cmd/velin
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates ffmpeg && addgroup -S velin && adduser -S -G velin velin
+RUN apk add --no-cache ca-certificates && addgroup -S velin && adduser -S -G velin velin
 WORKDIR /app
 COPY --from=go-build /velin /app/velin
 COPY --from=web-build /src/web/dist /app/web/dist

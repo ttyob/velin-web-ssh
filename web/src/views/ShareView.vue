@@ -11,7 +11,8 @@ import { api, json } from "../api";
 import type { TerminalShare } from "../types";
 import { terminalFontFamily } from "../types";
 import { terminalXtermTheme } from "../themePresets";
-import { allowTerminalKeyEvent, terminalClipboardFiles } from "../terminalClipboard";
+import { terminalClipboardFiles } from "../terminalClipboard";
+import { handleTerminalKeyEvent, terminalNewlineInput } from "../terminalKeyboard";
 import { normalizeTerminalWheelDelta } from "../terminalWheel";
 
 const route = useRoute();
@@ -101,7 +102,10 @@ function initializeTerminal() {
       if (rest.length) queueMicrotask(() => terminal?.write(`\x1b[?${rest.join(";")}${final}`));
       return true;
     });
-  terminal.attachCustomKeyEventHandler(allowTerminalKeyEvent);
+  terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, () => {
+    if (!controller.value || socket?.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ type: "input", data: bytesToBase64(terminalNewlineInput) }));
+  }));
   terminal.attachCustomWheelEventHandler(handleTerminalWheel);
   terminal.textarea?.addEventListener("paste", handleTerminalPaste, true);
   terminal.onData((data) => {
@@ -476,7 +480,7 @@ function dispose() {
     </section>
 
     <footer class="share-footer">
-      <div class="share-footer-left"><TerminalSquare :size="13" /><span>{{ controller ? "可输入命令" : "实时共享终端" }}</span><span v-if="share?.record" class="share-recording"><i />正在录屏</span></div>
+      <div class="share-footer-left"><TerminalSquare :size="13" /><span>{{ controller ? "可输入命令" : "实时共享终端" }}</span></div>
       <div class="share-footer-right"><span v-if="connected" class="share-dimensions">{{ dimensions }}</span><span v-if="share" class="share-expiry" :title="`分享有效至 ${expiresText}`"><Clock3 :size="12" /><span>有效至 {{ expiresText }}</span></span></div>
     </footer>
   </main>
@@ -558,8 +562,7 @@ function dispose() {
 .share-footer-left, .share-footer-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .share-footer-left > svg { margin-right: -6px; }
 .share-footer-left > span { white-space: nowrap; }
-.share-recording, .share-expiry { display: inline-flex; align-items: center; gap: 5px; }
-.share-recording i { width: 5px; height: 5px; border-radius: 50%; background: var(--danger); }
+.share-expiry { display: inline-flex; align-items: center; gap: 5px; }
 .share-dimensions { white-space: nowrap; font-family: var(--font-mono); }
 .share-expiry { min-width: 0; }
 .share-expiry svg { flex-shrink: 0; }
@@ -593,7 +596,6 @@ function dispose() {
 }
 @media (max-width: 380px) {
   .share-mode > span { max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
-  .share-recording { display: none; }
 }
 @media (max-height: 560px) {
   .share-overlay { place-items: start center; }

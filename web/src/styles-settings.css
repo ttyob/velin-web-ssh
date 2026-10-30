@@ -309,6 +309,8 @@
 }
 .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 8px; }
 .swatch-card {
+  /* These colors are the terminal palette being selected. */
+  forced-color-adjust: none;
   position: relative;
   display: flex;
   align-items: center;

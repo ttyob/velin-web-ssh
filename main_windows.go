@@ -4,10 +4,11 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"log/slog"
 	"net"
@@ -41,6 +42,9 @@ import (
 
 //go:embed desktop/dist/index.html
 var desktopIndexHTML string
+
+//go:embed all:web/dist
+var desktopWebAssets embed.FS
 
 type desktopServer struct {
 	server *http.Server
@@ -156,9 +160,6 @@ func runDesktop() (runErr error) {
 	if os.Getenv("VELIN_DATA_DIR") == "" {
 		_ = os.Setenv("VELIN_DATA_DIR", executableDir)
 	}
-	if os.Getenv("VELIN_WEB_DIST") == "" {
-		_ = os.Setenv("VELIN_WEB_DIST", filepath.Join(executableDir, "web", "dist"))
-	}
 	if os.Getenv("VELIN_ADDR") == "" {
 		_ = os.Setenv("VELIN_ADDR", defaultDesktopAddr)
 	}
@@ -170,6 +171,12 @@ func runDesktop() (runErr error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(os.Getenv("VELIN_WEB_DIST")) == "" {
+		cfg.WebFS, err = fs.Sub(desktopWebAssets, "web/dist")
+		if err != nil {
+			return fmt.Errorf("load embedded desktop frontend: %w", err)
+		}
 	}
 	slog.Info("desktop configuration loaded", "data_dir", cfg.DataDir, "database", cfg.DatabasePath, "log_file", logPath)
 	s, err := store.Open(cfg.DatabasePath)
@@ -237,7 +244,7 @@ func runDesktop() (runErr error) {
 		return err
 	}
 	defer tailscaleManager.Close()
-	manager := terminal.NewManagerWithFFmpeg(s, vault, cfg.DeploymentID, filepath.Join(cfg.DataDir, "recordings"), cfg.FFmpegBinary, tailscaleManager)
+	manager := terminal.NewManager(s, vault, cfg.DeploymentID, tailscaleManager)
 	forwardManager := forward.NewManager(s, manager)
 	agentManager := agent.NewManager(manager, agent.AIConfig{BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey, Model: cfg.AIModel})
 	appServer := &desktopServer{store: s, agent: agentManager}

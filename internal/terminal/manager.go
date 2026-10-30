@@ -5,14 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -61,19 +57,10 @@ type Manager struct {
 	store        *store.Store
 	vault        *security.Vault
 	deploymentID string
-	recordingDir string
-	ffmpegBinary string
 	dialer       netdial.Dialer
 	mu           sync.RWMutex
 	tmuxLocks    sync.Map
 	sessions     map[string]*Session
-}
-
-type activeRecording struct {
-	meta      store.TerminalRecording
-	bytes     int64
-	startedAt time.Time
-	file      *os.File
 }
 
 func (m *Manager) DialSaved(ctx context.Context, userID, hostID string) (*ssh.Client, store.Host, error) {
@@ -102,8 +89,6 @@ type Session struct {
 	sshClient             *ssh.Client
 	sshSession            *ssh.Session
 	commandRunner         *commandRunner
-	recordingMu           sync.Mutex
-	recording             *activeRecording
 	stdin                 io.WriteCloser
 	subs                  map[string]*terminalSubscriber
 	controller            string
@@ -174,20 +159,9 @@ type Replay struct {
 	Truncated bool
 }
 
-func NewManager(s *store.Store, vault *security.Vault, deploymentID string, recordingDirs ...string) *Manager {
+func NewManager(s *store.Store, vault *security.Vault, deploymentID string, dialers ...netdial.Dialer) *Manager {
 	_ = s.EndStaleNormalSessions(ErrNormalSessionEnded.Error())
-	recordingDir := "data/recordings"
-	if len(recordingDirs) > 0 && recordingDirs[0] != "" {
-		recordingDir = recordingDirs[0]
-	}
-	return &Manager{store: s, vault: vault, deploymentID: deploymentID, recordingDir: recordingDir, ffmpegBinary: "ffmpeg", dialer: netdial.Direct{}, sessions: make(map[string]*Session)}
-}
-
-func NewManagerWithFFmpeg(s *store.Store, vault *security.Vault, deploymentID, recordingDir, ffmpegBinary string, dialers ...netdial.Dialer) *Manager {
-	manager := NewManager(s, vault, deploymentID, recordingDir)
-	if strings.TrimSpace(ffmpegBinary) != "" {
-		manager.ffmpegBinary = ffmpegBinary
-	}
+	manager := &Manager{store: s, vault: vault, deploymentID: deploymentID, dialer: netdial.Direct{}, sessions: make(map[string]*Session)}
 	if len(dialers) > 0 && dialers[0] != nil {
 		manager.dialer = dialers[0]
 	}
@@ -373,222 +347,6 @@ func (m *Manager) Get(userID, id string) (*Session, error) {
 		return nil, sql.ErrNoRows
 	}
 	return s, nil
-}
-
-func (m *Manager) StartRecording(userID, id string) (store.TerminalRecording, error) {
-	s, err := m.Get(userID, id)
-	if err != nil {
-		return store.TerminalRecording{}, err
-	}
-	s.recordingMu.Lock()
-	defer s.recordingMu.Unlock()
-	if s.recording != nil {
-		if s.recording.file != nil {
-			return store.TerminalRecording{}, errors.New("分享录屏正在进行")
-		}
-		return s.recording.meta, nil
-	}
-	if err = os.MkdirAll(m.recordingDir, 0o700); err != nil {
-		return store.TerminalRecording{}, err
-	}
-	recordingID := uuid.NewString()
-	path := filepath.Join(m.recordingDir, recordingID+".mp4")
-	meta := store.TerminalRecording{ID: recordingID, UserID: userID, SessionID: id, SessionName: s.Meta().Name, Path: path, Status: "recording", StartedAt: time.Now().UTC()}
-	if err = m.store.CreateRecording(meta); err != nil {
-		return store.TerminalRecording{}, err
-	}
-	s.recording = &activeRecording{meta: meta}
-	return meta, nil
-}
-
-func (m *Manager) StopRecording(userID, id string) (store.TerminalRecording, error) {
-	s, err := m.Get(userID, id)
-	if err != nil {
-		return store.TerminalRecording{}, err
-	}
-	return s.stopRecording("stopped"), nil
-}
-
-func (m *Manager) StartShareRecording(userID, id string) (store.TerminalRecording, error) {
-	s, err := m.Get(userID, id)
-	if err != nil {
-		return store.TerminalRecording{}, err
-	}
-	s.recordingMu.Lock()
-	defer s.recordingMu.Unlock()
-	if s.recording != nil {
-		return store.TerminalRecording{}, errors.New("当前会话已有进行中的录制")
-	}
-	if err = os.MkdirAll(m.recordingDir, 0o700); err != nil {
-		return store.TerminalRecording{}, err
-	}
-	recordingID := uuid.NewString()
-	path := filepath.Join(m.recordingDir, recordingID+".cast")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		return store.TerminalRecording{}, err
-	}
-	startedAt := time.Now().UTC()
-	header, _ := json.Marshal(map[string]any{
-		"version": 2, "width": 120, "height": 30, "timestamp": startedAt.Unix(),
-		"env": map[string]string{"TERM": "xterm-256color", "SHELL": "shell"},
-	})
-	header = append(header, '\n')
-	if _, err = file.Write(header); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return store.TerminalRecording{}, err
-	}
-	meta := store.TerminalRecording{ID: recordingID, UserID: userID, SessionID: id, SessionName: s.Meta().Name, Path: path, Status: "recording", Bytes: int64(len(header)), StartedAt: startedAt}
-	if err = m.store.CreateRecording(meta); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return store.TerminalRecording{}, err
-	}
-	s.recording = &activeRecording{meta: meta, bytes: int64(len(header)), startedAt: startedAt, file: file}
-	return meta, nil
-}
-
-func (m *Manager) StopRecordingIfID(userID, id, recordingID string) store.TerminalRecording {
-	s, err := m.Get(userID, id)
-	if err != nil {
-		return store.TerminalRecording{}
-	}
-	s.recordingMu.Lock()
-	matches := s.recording != nil && s.recording.meta.ID == recordingID
-	s.recordingMu.Unlock()
-	if !matches {
-		return store.TerminalRecording{}
-	}
-	return s.stopRecording("stopped")
-}
-
-func (s *Session) stopRecording(status string) store.TerminalRecording {
-	s.recordingMu.Lock()
-	defer s.recordingMu.Unlock()
-	if s.recording == nil {
-		return store.TerminalRecording{}
-	}
-	active := s.recording
-	s.recording = nil
-	if active.file != nil {
-		_ = active.file.Sync()
-		_ = active.file.Close()
-	}
-	finished := time.Now().UTC()
-	active.meta.Status = status
-	active.meta.Bytes = active.bytes
-	active.meta.FinishedAt = &finished
-	_ = s.manager.store.FinishRecording(active.meta.UserID, active.meta.ID, status, active.bytes, finished)
-	return active.meta
-}
-
-func (s *Session) recordOutput(raw []byte) {
-	if len(raw) == 0 {
-		return
-	}
-	s.recordingMu.Lock()
-	defer s.recordingMu.Unlock()
-	active := s.recording
-	if active == nil || active.file == nil {
-		return
-	}
-	event, err := json.Marshal([]any{time.Since(active.startedAt).Seconds(), "o", string(raw)})
-	if err != nil {
-		return
-	}
-	event = append(event, '\n')
-	n, writeErr := active.file.Write(event)
-	active.bytes += int64(n)
-	active.meta.Bytes = active.bytes
-	if writeErr != nil {
-		_ = active.file.Close()
-		active.file = nil
-	}
-}
-
-const maxRecordingUploadBytes int64 = 1 << 30
-
-func (m *Manager) UploadRecording(ctx context.Context, userID, recordingID string, source io.Reader) (store.TerminalRecording, error) {
-	value, err := m.store.Recording(userID, recordingID)
-	if err != nil {
-		return store.TerminalRecording{}, err
-	}
-	if value.Status != "recording" {
-		return store.TerminalRecording{}, errors.New("录制已经结束")
-	}
-	s, err := m.Get(userID, value.SessionID)
-	if err != nil {
-		return store.TerminalRecording{}, err
-	}
-	s.recordingMu.Lock()
-	active := s.recording
-	if active == nil || active.meta.ID != recordingID {
-		s.recordingMu.Unlock()
-		return store.TerminalRecording{}, errors.New("当前录制已失效")
-	}
-	s.recording = nil
-	s.recordingMu.Unlock()
-
-	tempInput := value.Path + ".upload"
-	tempOutput := value.Path + ".transcode"
-	defer os.Remove(tempInput)
-	defer os.Remove(tempOutput)
-	file, err := os.OpenFile(tempInput, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		return m.finishUploadedRecording(value, "error", 0, err)
-	}
-	written, copyErr := io.Copy(file, io.LimitReader(source, maxRecordingUploadBytes+1))
-	closeErr := file.Close()
-	if copyErr != nil {
-		return m.finishUploadedRecording(value, "error", 0, copyErr)
-	}
-	if closeErr != nil {
-		return m.finishUploadedRecording(value, "error", 0, closeErr)
-	}
-	if written == 0 || written > maxRecordingUploadBytes {
-		return m.finishUploadedRecording(value, "error", written, errors.New("录制文件大小无效"))
-	}
-
-	command := exec.CommandContext(ctx, m.ffmpegBinary,
-		"-hide_banner", "-loglevel", "error", "-y",
-		"-i", tempInput,
-		"-an", "-c:v", "libx264", "-preset", "slow", "-crf", "16",
-		"-pix_fmt", "yuv420p", "-movflags", "+faststart",
-		"-f", "mp4",
-		tempOutput,
-	)
-	if output, commandErr := command.CombinedOutput(); commandErr != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = commandErr.Error()
-		}
-		return m.finishUploadedRecording(value, "error", written, fmt.Errorf("MP4 转码失败: %s", message))
-	}
-	if err = os.Rename(tempOutput, value.Path); err != nil {
-		return m.finishUploadedRecording(value, "error", written, err)
-	}
-	if err = os.Chmod(value.Path, 0o600); err != nil {
-		return m.finishUploadedRecording(value, "error", written, err)
-	}
-	info, err := os.Stat(value.Path)
-	if err != nil {
-		return m.finishUploadedRecording(value, "error", written, err)
-	}
-	finished := time.Now().UTC()
-	value.Status = "stopped"
-	value.Bytes = info.Size()
-	value.FinishedAt = &finished
-	if err = m.store.FinishRecording(userID, recordingID, value.Status, value.Bytes, finished); err != nil {
-		return store.TerminalRecording{}, err
-	}
-	return value, nil
-}
-
-func (m *Manager) finishUploadedRecording(value store.TerminalRecording, status string, bytes int64, cause error) (store.TerminalRecording, error) {
-	finished := time.Now().UTC()
-	_ = m.store.FinishRecording(value.UserID, value.ID, status, bytes, finished)
-	return store.TerminalRecording{}, cause
 }
 
 func (s *Session) WriteTask(data []byte) error {
@@ -1321,7 +1079,6 @@ func (s *Session) broadcastEvent(ev Event, raw []byte) {
 		subs = append(subs, sub)
 	}
 	s.mu.Unlock()
-	s.recordOutput(raw)
 	for _, sub := range subs {
 		select {
 		case sub.events <- ev:
@@ -1879,11 +1636,7 @@ func (s *Session) SetTerminalColors(clientID, foreground, background string) err
 	if meta.SessionMode == "normal" {
 		return nil
 	}
-	style := shellQuote("fg=" + foreground + ",bg=" + background)
-	cmd := fmt.Sprintf(
-		"tmux -L %s set-option -t %s window-style %s \\; set-option -t %s window-active-style %s",
-		meta.TmuxSocket, meta.TmuxName, style, meta.TmuxName, style,
-	)
+	cmd := tmuxDefaultColorsCommand(meta)
 	lock := s.manager.tmuxLock(meta)
 	lock.Lock()
 	out, err := s.runCommand(client, cmd)
@@ -1997,7 +1750,6 @@ func (s *Session) closeWithDetails(status, msg string, hostKeyErr *HostKeyError)
 		delete(s.subs, id)
 	}
 	s.mu.Unlock()
-	s.stopRecording(status)
 	_ = s.manager.store.UpdateTerminalStatus(s.meta.UserID, s.meta.ID, status, msg)
 	s.manager.mu.Lock()
 	delete(s.manager.sessions, s.meta.ID)

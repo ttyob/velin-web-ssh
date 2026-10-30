@@ -88,7 +88,7 @@ func TestInitialConnectionPublishesAttachedBeforeOutput(t *testing.T) {
 	if err = database.SaveHost(host); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(database, nil, "test", t.TempDir())
+	manager := NewManager(database, nil, "test")
 	defer manager.CloseAll()
 	meta, err := manager.Create(context.Background(), "user", CreateRequest{Host: host, Secret: "test-only", TrustFingerprint: ssh.FingerprintSHA256(signer.PublicKey())})
 	if err != nil {

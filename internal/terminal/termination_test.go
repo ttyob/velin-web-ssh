@@ -41,7 +41,7 @@ func TestTerminateUnreachableSessionEndsLocalState(t *testing.T) {
 			if err = database.CreateUser("owner", "owner", "hash", "user"); err != nil {
 				t.Fatal(err)
 			}
-			manager := NewManager(database, nil, "test", t.TempDir())
+			manager := NewManager(database, nil, "test")
 			dialer := &terminationDialer{wait: scenario == "canceled-dial"}
 			manager.dialer = dialer
 			host := store.Host{ID: "host", UserID: "owner", Name: "unreachable", Address: "192.0.2.1", Port: 22, Username: "test"}
@@ -125,7 +125,7 @@ func TestTerminateDoesNotAffectAnotherUsersSession(t *testing.T) {
 	if err = database.SaveTerminal(meta); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(database, nil, "test", t.TempDir())
+	manager := NewManager(database, nil, "test")
 	if _, err = manager.Terminate(context.Background(), "another-user", meta.ID, "", ""); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("another user termination error=%v", err)
 	}
@@ -186,7 +186,7 @@ func TestTerminateClosesStalledSSHTransport(t *testing.T) {
 	if err = database.SaveTerminal(meta); err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(database, nil, "test", t.TempDir())
+	manager := NewManager(database, nil, "test")
 	manager.sessions[meta.ID] = &Session{meta: meta, manager: manager, sshClient: client, subs: make(map[string]*terminalSubscriber)}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

@@ -69,7 +69,6 @@ start() {
       VELIN_RDP_DRIVE_DIR="$RDP_DRIVE_ROOT" \
       VELIN_RDP_RESIZE_METHOD="${VELIN_RDP_RESIZE_METHOD:-none}" \
       VELIN_RDP_DISABLE_GFX="${VELIN_RDP_DISABLE_GFX:-true}" \
-      VELIN_FFMPEG_BINARY="${VELIN_FFMPEG_BINARY:-ffmpeg}" \
       "$APP_ROOT/bin/velin"
   ) > "$LOG_ROOT/velin.log" 2>&1 &
   echo "$!" > "$VELIN_PID"

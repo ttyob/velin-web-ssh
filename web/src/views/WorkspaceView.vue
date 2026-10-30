@@ -65,6 +65,8 @@ import CommandPalette, {
 import HostResourceList from "../components/HostResourceList.vue";
 import type { HostDropTarget } from "../components/HostGroupNode.vue";
 import TmuxInstallDialog from "../components/TmuxInstallDialog.vue";
+import ConnectionProgressPane from "../features/connections/ConnectionProgressPane.vue";
+import type { PendingConnection } from "../features/connections/types";
 import WebServiceList from "../components/WebServiceList.vue";
 import { useWorkspaceLock } from "../composables/useWorkspaceLock";
 import { launchNativeRDP, nativeRDPAvailable } from "../rdp";
@@ -117,6 +119,8 @@ const hosts = ref<Host[]>([]),
   credentials = ref<Credential[]>([]),
   sessions = ref<TerminalSession[]>([]),
   webServices = ref<WebService[]>([]);
+const pendingConnections = reactive<Record<string, PendingConnection>>({});
+const connectionControllers = new Map<string, AbortController>();
 const desktopTabs = reactive<
   Record<
     string,
@@ -389,10 +393,10 @@ function tabSession(tabID: string) {
     : undefined;
 }
 function tabTitle(tabID: string) {
-  return desktopTabs[tabID]?.host.name || tabSession(tabID)?.name || "已结束会话";
+  return pendingConnections[tabID]?.name || desktopTabs[tabID]?.host.name || tabSession(tabID)?.name || "已结束会话";
 }
 function tabStatus(tabID: string) {
-  return desktopTabs[tabID]?.status || tabSession(tabID)?.status || "ended";
+  return pendingConnections[tabID] ? (pendingConnections[tabID].stage === "failed" ? "unreachable" : "creating") : desktopTabs[tabID]?.status || tabSession(tabID)?.status || "ended";
 }
 function cleanTree(
   node: unknown,
@@ -485,7 +489,7 @@ function copyLayout(value: WorkspaceLayout): WorkspaceLayout {
   return JSON.parse(JSON.stringify(value));
 }
 function captureLayout(): WorkspaceLayout {
-  const tabs = layout.tabs.filter((id) => !desktopTabs[id]);
+  const tabs = layout.tabs.filter((id) => !desktopTabs[id] && !pendingConnections[id]);
   const trees = Object.fromEntries(
     tabs.flatMap((id) => (layout.trees?.[id] ? [[id, layout.trees[id]]] : [])),
   );
@@ -770,103 +774,87 @@ async function connect(
   host: Host,
   trustFingerprint = "",
   temporary?: { secret: string; passphrase: string },
-  placement?: {
-    tabID: string;
-    leafID: string;
-    direction: "horizontal" | "vertical";
-  },
+  placement?: { tabID: string; leafID: string; direction: "horizontal" | "vertical" },
   sessionMode?: Host["sessionMode"],
   initialCommand = "",
   sessionName = "",
+  attemptID = "",
 ) {
   if ((host.protocol || "ssh") !== "ssh") {
-    if (placement) {
-      ElMessage.warning("远程桌面只能在独立标签中打开，不能加入分屏");
-      return;
-    }
-    if (host.protocol === "rdp" && host.rdpMode === "native") {
-      await openNativeRDP(host);
-      return;
-    }
-    openDesktop(host);
-    return;
+    if (placement) { ElMessage.warning("远程桌面只能在独立标签中打开，不能加入分屏"); return; }
+    if (host.protocol === "rdp" && host.rdpMode === "native") { await openNativeRDP(host); return; }
+    openDesktop(host); return;
   }
+  if (!attemptID) {
+    attemptID = `connecting-${nodeID()}`;
+    pendingConnections[attemptID] = { host, name: sessionName || host.name, stage: "connecting", messages: [], error: "", retry: () => {} };
+    layout.tabs.push(attemptID);
+    activate(attemptID);
+  }
+  const attempt = pendingConnections[attemptID];
+  if (!attempt) return;
+  const controller = new AbortController();
+  connectionControllers.get(attemptID)?.abort();
+  connectionControllers.set(attemptID, controller);
+  const active = () => Boolean(pendingConnections[attemptID]) && connectionControllers.get(attemptID) === controller && !controller.signal.aborted;
+  const resume = (trust = trustFingerprint, credentials = temporary, mode = sessionMode) => {
+    if (active()) void connect(host, trust, credentials, placement, mode, initialCommand, sessionName, attemptID);
+  };
+  attempt.stage = "connecting"; attempt.error = "";
+  attempt.messages.push(`正在连接 ${host.address}:${host.port}，验证 SSH 认证与主机指纹…`);
+  attempt.retry = () => resume();
   connecting.value = host.id;
+  await nextTick();
   try {
-    const body = {
-      hostID: host.id,
-      credentialID: host.credentialID,
-      secret: temporary?.secret || "",
-      passphrase: temporary?.passphrase || "",
-      trustFingerprint,
-      name: sessionName || host.name,
-      sessionMode: sessionMode || "",
-    };
-    // Validate SSH trust and tmux before starting asynchronous session creation.
-    // Otherwise its first failure is handled as restoration of a remote session
-    // which has never been created.
+    const body = { hostID: host.id, credentialID: host.credentialID, secret: temporary?.secret || "", passphrase: temporary?.passphrase || "", trustFingerprint, name: sessionName || host.name, sessionMode: sessionMode || "" };
     try {
-      await api(`/api/hosts/${host.id}/test`, {
-        method: "POST",
-        body: json(body),
-      });
+      await api(`/api/hosts/${host.id}/test`, { method: "POST", body: json(body), signal: controller.signal });
     } catch (error) {
-      // A tmux probe also verifies SSH for the explicit normal-mode fallback.
-      if ((sessionMode || host.sessionMode) !== "normal" || !isTmuxMissing(error))
-        throw error;
+      if ((sessionMode || host.sessionMode) !== "normal" || !isTmuxMissing(error)) throw error;
     }
-    const session = await api<TerminalSession>("/api/sessions", {
-      method: "POST",
-      body: json(body),
-    });
+    if (!active()) return;
+    attempt.messages.push("SSH 验证成功，正在创建终端会话…");
+    // Do not abort creation after the server may have committed it. A tab closed
+    // during this request is handled by explicitly terminating the returned ID.
+    const session = await api<TerminalSession>("/api/sessions", { method: "POST", body: json(body) });
+    if (!active()) {
+      void api(`/api/sessions/${session.id}`, { method: "DELETE", body: json({}), signal: AbortSignal.timeout(10_000) }).catch(() => {});
+      return;
+    }
     if (initialCommand) pendingTerminalCommands[session.id] = initialCommand;
     sessions.value.unshift(session);
     void refreshHosts();
-    if (placement)
-      addSplitSession(
-        placement.tabID,
-        placement.leafID,
-        placement.direction,
-        session.id,
-      );
-    else openSession(session);
-  } catch (e) {
-    if (
-      e instanceof ApiError &&
-      (e.body.code === "unknown_host_key" || e.body.code === "host_key_changed")
-    ) {
-      try {
-        await ElMessageBox.confirm(
-          `${e.body.code === "host_key_changed" ? "主机指纹发生变化" : "首次连接需要信任主机指纹"}${e.body.hostName ? `\n主机：${e.body.hostName}${e.body.hostAddress ? `（${e.body.hostAddress}）` : ""}` : ""}\n指纹：${e.body.fingerprint}`,
-          "确认主机指纹",
-          {
-            confirmButtonText: "信任并连接",
-            cancelButtonText: "取消",
-            type: "warning",
-          },
-        );
-        await connect(
-          host,
-          e.body.fingerprint || "",
-          temporary,
-          placement,
-          sessionMode,
-          initialCommand,
-          sessionName,
-        );
-      } catch {}
-    } else if (isTmuxMissing(e)) {
-      await showTmuxInstallGuide(
-        host,
-        () => connect(host, trustFingerprint, temporary, placement, "tmux", initialCommand, sessionName),
-        () => connect(host, trustFingerprint, temporary, placement, "normal", initialCommand, sessionName),
-      );
-    } else if (e instanceof Error && e.message.includes("credential required"))
-      await promptTemporary(host, placement, initialCommand, sessionName, sessionMode, trustFingerprint);
-    else ElMessage.error(e instanceof Error ? e.message : "连接失败");
-  } finally {
-    connecting.value = undefined;
-  }
+    delete pendingConnections[attemptID]; connectionControllers.delete(attemptID);
+    if (placement && layout.trees?.[placement.tabID]) {
+      moveBackground(attemptID);
+      addSplitSession(placement.tabID, placement.leafID, placement.direction, session.id);
+      activate(placement.tabID);
+    } else {
+      const tree = leaf(session.id);
+      layout.trees![attemptID] = tree;
+      layout.focused![attemptID] = tree.id;
+      scheduleSave();
+    }
+  } catch (error) {
+    if (!active()) return;
+    if (error instanceof ApiError && (error.body.code === "unknown_host_key" || error.body.code === "host_key_changed")) {
+      attempt.stage = "trust"; attempt.fingerprint = error.body.fingerprint || "";
+      attempt.changedKey = error.body.code === "host_key_changed";
+      attempt.messages.push(attempt.changedKey ? "主机指纹发生变化，等待确认。" : "已获取主机指纹，等待首次信任确认。");
+      attempt.trust = () => resume(error.body.fingerprint || "");
+    } else if (isTmuxMissing(error)) {
+      attempt.stage = "tmux"; attempt.messages.push("SSH 验证成功，远端未安装 tmux。");
+      attempt.retry = () => resume(trustFingerprint, temporary, "tmux");
+      attempt.normal = () => resume(trustFingerprint, temporary, "normal");
+      void refreshHosts();
+    } else if (error instanceof Error && error.message.toLowerCase().includes("credential required")) {
+      attempt.stage = "credentials"; attempt.messages.push("需要输入 SSH 临时凭据。");
+      attempt.credentials = (secret, passphrase) => resume(trustFingerprint, { secret, passphrase });
+    } else {
+      attempt.stage = "failed"; attempt.error = error instanceof Error ? error.message : "连接失败";
+      attempt.messages.push("连接未成功，请查看以下原因并重试。");
+    }
+  } finally { if (connecting.value === host.id) connecting.value = undefined; }
 }
 async function openNativeRDP(host: Host) {
   if (host.jumpHostID) {
@@ -928,32 +916,7 @@ function updateDesktopStatus(
 ) {
   if (desktopTabs[tabID]) desktopTabs[tabID].status = status;
 }
-async function promptTemporary(
-  host: Host,
-  placement?: {
-    tabID: string;
-    leafID: string;
-    direction: "horizontal" | "vertical";
-  },
-  initialCommand = "",
-  sessionName = "",
-  sessionMode?: Host["sessionMode"],
-  trustFingerprint = "",
-) {
-  try {
-    const { value } = await ElMessageBox.prompt(
-      `输入 ${host.username}@${host.address} 的 SSH 密码`,
-      "临时凭据",
-      {
-        confirmButtonText: "连接",
-        cancelButtonText: "取消",
-        inputType: "password",
-        inputValidator: (v) => Boolean(v) || "请输入密码",
-      },
-    );
-    await connect(host, trustFingerprint, { secret: value, passphrase: "" }, placement, sessionMode, initialCommand, sessionName);
-  } catch {}
-}
+
 function openSession(session: TerminalSession) {
   const existing = tabForSession(session.id);
   if (existing) return activate(existing);
@@ -1389,6 +1352,9 @@ function updateRatio(nodeIDValue: string, ratio: number) {
   scheduleSave();
 }
 function moveBackground(id: string) {
+  connectionControllers.get(id)?.abort();
+  connectionControllers.delete(id);
+  delete pendingConnections[id];
   delete desktopTabs[id];
   if (agentTabID.value === id) {
     agentOpen.value = false;
@@ -1445,6 +1411,7 @@ function removeLocal(id: string) {
   delete sessionAttention[id];
   delete conversationSessions[id];
   for (const tab of [...layout.tabs]) {
+    if (!layout.trees?.[tab]) continue;
     const next = removeSession(layout.trees![tab], id);
     if (next) {
       layout.trees![tab] = next;
@@ -1504,7 +1471,7 @@ function updateStatus(id: string, status: string, message?: string) {
         const paneTree = leafID ? paneTreeRefs.get(tabID) : undefined;
         if (!leafID || !paneTree) continue;
         delete pendingTerminalCommands[id];
-        paneTree.sendText?.(leafID, command);
+        paneTree.sendText?.(leafID, command, { confirmPaste: false });
         paneTree.focusLeaf?.(leafID);
         return;
       }
@@ -2063,6 +2030,7 @@ async function logout() {
   }
 }
 function closeWorkspaceOverlays() {
+  for (const id of Object.keys(pendingConnections)) moveBackground(id);
   settingsOpen.value = false;
   sessionsDialog.value = false;
   newTabDialog.value = false;
@@ -2213,6 +2181,8 @@ onMounted(() => {
   window.addEventListener("keydown", handleKeyboard, true);
 });
 onBeforeUnmount(() => {
+  for (const controller of connectionControllers.values()) controller.abort();
+  connectionControllers.clear();
   sidebarResizeCleanup?.();
   webServiceResizeCleanup?.();
   clearTimeout(saveTimer.value);
@@ -2362,8 +2332,8 @@ onBeforeUnmount(() => {
           <Globe2 :size="14" />内网 Web
         </button>
       </div>
-      <template v-if="sidebarOpen || mobileSidebar"
-        ><div v-if="sidePanel === 'hosts'" class="sidebar-search host-only-search">
+      <template v-if="sidebarOpen || mobileSidebar">
+        <div v-if="sidePanel === 'hosts'" class="sidebar-search host-only-search">
           <Search :size="15" /><input
             v-model="search"
             placeholder="搜索主机、分组或标签"
@@ -2392,7 +2362,7 @@ onBeforeUnmount(() => {
           @reorder="reorderHost"
         />
         <WebServiceList
-          v-else
+          v-if="sidePanel === 'web'"
           :services="webServices"
           :hosts="hosts"
           :opening="openingWebService"
@@ -2557,8 +2527,13 @@ onBeforeUnmount(() => {
           :key="id"
           class="terminal-workspace"
         >
+          <ConnectionProgressPane
+            v-if="pendingConnections[id]"
+            :attempt="pendingConnections[id]"
+            @close="moveBackground(id)"
+          />
           <RemoteDesktopPane
-            v-if="desktopTabs[id]"
+            v-else-if="desktopTabs[id]"
             :host="desktopTabs[id].host"
             :visible="layout.active === id"
             @status="updateDesktopStatus(id, $event)"

@@ -1551,8 +1551,8 @@ body {
   border-color: var(--line);
 }
 
-/* Consistent motion that stays away from the terminal rendering path. */
-.el-dialog,
+/* Dialog motion belongs to its Vue transition. An unconditional panel animation
+ * restarts when the transition class is removed, hiding an already open dialog. */
 .el-message-box,
 .el-dropdown__popper,
 .el-select__popper,

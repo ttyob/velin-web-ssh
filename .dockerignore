@@ -1,6 +1,7 @@
 .git
 .env
 data
+clipboard
 artifacts
 web/dist
 web/node_modules

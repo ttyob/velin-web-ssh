@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -21,6 +22,7 @@ type Config struct {
 	DatabasePath      string
 	MasterKeyPath     string
 	WebDist           string
+	WebFS             fs.FS // Optional embedded frontend; nil serves WebDist from disk.
 	CookieSecure      bool
 	EmbedOrigins      []string
 	TrustedProxyCIDRs []*net.IPNet
@@ -32,7 +34,6 @@ type Config struct {
 	AIBaseURL         string
 	AIAPIKey          string
 	AIModel           string
-	FFmpegBinary      string
 	GuacdAddr         string
 	DesktopProxyAddr  string
 	RDPDriveDir       string
@@ -89,7 +90,6 @@ func Load() (Config, error) {
 		AIBaseURL:         strings.TrimRight(env("VELIN_AI_BASE_URL", ""), "/"),
 		AIAPIKey:          strings.TrimSpace(os.Getenv("VELIN_AI_API_KEY")),
 		AIModel:           strings.TrimSpace(os.Getenv("VELIN_AI_MODEL")),
-		FFmpegBinary:      env("VELIN_FFMPEG_BINARY", "ffmpeg"),
 		GuacdAddr:         env("VELIN_GUACD_ADDR", "127.0.0.1:4822"),
 		DesktopProxyAddr:  desktopProxyAddr,
 		RDPDriveDir:       env("VELIN_RDP_DRIVE_DIR", "/tmp/velin-rdp-drives"),

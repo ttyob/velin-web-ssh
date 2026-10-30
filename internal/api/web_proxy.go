@@ -788,7 +788,7 @@ func (s *webProxySession) cookieJarURL(request *http.Request) *url.URL {
 }
 
 func isWebProxyControlCookie(name string) bool {
-	return name == cookieName || name == csrfCookieName || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie)
+	return name == cookieName || name == csrfCookieName || name == httpCookieName || name == httpCSRFCookieName || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie)
 }
 
 func rewriteRequestOrigin(request *http.Request, prefix string, target *url.URL, upstreamHost string) {

@@ -12,6 +12,7 @@ const entry = `
 import { createApp, h, reactive } from 'vue'
 import ElementPlus from 'element-plus'
 import TerminalPane from '/src/components/TerminalPane.vue'
+import { terminalThemePresets } from '/src/themePresets'
 import '/src/styles.css'
 import '@xterm/xterm/css/xterm.css'
 
@@ -41,12 +42,14 @@ window.session = reactive({
   hostID: 'terminal-history-host',
   sessionMode: 'tmux', status: 'attached',
 })
+window.preferences = reactive({
+  terminalTheme: 'velin', fontSize: 14, lineHeight: 1.2, fontWeight: 400,
+  letterSpacing: 0, background: '#111318', cursorStyle: 'block', cursorBlink: false,
+})
+window.terminalThemes = terminalThemePresets
 createApp({ render: () => h(TerminalPane, {
   session: window.session, visible: true,
-  preferences: {
-    terminalTheme: 'default', fontSize: 14, lineHeight: 1.2, fontWeight: 400,
-    letterSpacing: 0, background: '#111614', cursorStyle: 'block', cursorBlink: false,
-  },
+  preferences: window.preferences,
 }) }).use(ElementPlus).mount('#app')
 `
 
@@ -138,6 +141,68 @@ try {
     }))
   }, deltaY)
 
+  // Paint a Codex-style composer and divider once. Switching local themes
+  // must recolor existing indexed cells without another remote redraw.
+  const composerColors = {
+    velin: '#3e4148', dracula: '#575961', 'one-dark': '#464a54',
+    'tokyo-night': '#404355', nord: '#555b66',
+    'solarized-dark': '#1e434c', 'github-dark': '#383d43',
+  }
+  const cubeSamples = [
+    [16, '#000000'], [21, '#0000ff'], [46, '#00ff00'], [59, '#5f5f5f'],
+    [102, '#878787'], [145, '#afafaf'], [188, '#d7d7d7'],
+    [196, '#ff0000'], [201, '#ff00ff'], [226, '#ffff00'], [231, '#ffffff'],
+  ]
+  await output('\x1b[?25l\x1b[0m\x1b[2J\x1b[H\x1b[48;5;237m\x1b[2Kcomposer\x1b[0m\r\n' +
+    '\x1b[38;5;237m████\x1b[0m\r\n' +
+    Array.from({ length: 24 }, (_, i) => `\x1b[48;5;${232 + i}m  `).join('') + '\x1b[0m\r\n' +
+    cubeSamples.map(([index]) => `\x1b[48;5;${index}m  `).join('') + '\x1b[0m\r\n' +
+    '\x1b[48;2;58;58;58m  \x1b[48;2;18;52;86m  \x1b[0m')
+  const paletteScreen = await screen()
+  for (const [id, composer] of Object.entries(composerColors)) {
+    const colors = await page.evaluate(async id => {
+      const preset = window.terminalThemes.find(theme => theme.id === id)
+      const terminal = window.testTerminal
+      const { cols, rows } = terminal
+      Object.assign(window.preferences, { terminalTheme: id, background: preset.background })
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const canvas = terminal.element.querySelector('.xterm-text-layer')
+      const ctx = canvas.getContext('2d')
+      const pixel = (column, row) => '#' + [...ctx.getImageData(
+        Math.floor((column + 0.5) * canvas.width / cols),
+        Math.floor((row + 0.5) * canvas.height / rows), 1, 1,
+      ).data].slice(0, 3).map(value => value.toString(16).padStart(2, '0')).join('')
+      const cell = terminal.buffer.active.getLine(terminal.buffer.active.baseY).getCell(20)
+      return {
+        composer: pixel(20, 0), divider: pixel(1, 1), background: pixel(60, 5),
+        grayscale: Array.from({ length: 24 }, (_, i) => pixel(i * 2, 2)),
+        cube: Array.from({ length: 11 }, (_, i) => pixel(i * 2, 3)),
+        rgbGray: pixel(0, 4), rgbColor: pixel(2, 4),
+        indexed: cell.isBgPalette() && cell.getBgColor() === 237,
+        dimensionsUnchanged: cols === terminal.cols && rows === terminal.rows,
+      }
+    }, id)
+    assert.equal(colors.composer, composer, `${id}: existing composer background must follow the theme`)
+    assert.equal(colors.divider, composer, `${id}: existing indexed foreground must follow the theme`)
+    assert.equal(colors.background, await page.evaluate(id => window.terminalThemes.find(theme => theme.id === id).background, id))
+    assert.equal(new Set(colors.grayscale).size, 24, `${id}: all gray levels must stay distinct`)
+    const brightness = hex => {
+      const [r, g, b] = hex.match(/\w\w/g).map(value => parseInt(value, 16))
+      return r * 0.2126 + g * 0.7152 + b * 0.0722
+    }
+    assert.ok(colors.grayscale.every((color, i) => i === 0 || brightness(color) > brightness(colors.grayscale[i - 1])),
+      `${id}: gray levels must retain their brightness order`)
+    assert.deepEqual(colors.cube, cubeSamples.map(([, color]) => color), `${id}: the color cube must keep its standard colors`)
+    assert.equal(colors.rgbGray, '#3a3a3a', 'explicit RGB gray must keep its specified color')
+    assert.equal(colors.rgbColor, '#123456', 'explicit RGB colors must keep their specified color')
+    assert.equal(colors.indexed, true, 'theme changes must not rewrite terminal cells')
+    assert.equal(colors.dimensionsUnchanged, true, 'theme changes must not resize the terminal')
+    assert.deepEqual(await screen(), paletteScreen, 'theme changes must retain existing text')
+  }
+  console.log('All 7 themes: indexed gray composer, divider and ramp repaint; color cube, RGB and text preserved')
+  await page.evaluate(() => Object.assign(window.preferences, { terminalTheme: 'velin', background: '#111318' }))
+  await output('\x1bc')
+
   // The browser owns Ctrl+V. Sending its control byte to Codex makes the
   // remote CLI try to read an unavailable X11 clipboard instead.
   await output('\x1b[?2004h')
@@ -154,6 +219,36 @@ try {
 
   const input = () => page.evaluate(() => window.messages.filter(m => m.type === 'input').map(m => new TextDecoder().decode(Uint8Array.from(atob(m.data), c => c.charCodeAt(0)))).join(''))
   const resetInput = () => page.evaluate(() => { window.messages.length = 0; window.testTerminal.focus() })
+  // Ctrl+Enter inserts one newline as text. Keyup must not duplicate it, and
+  // the explicit key must work with the normal multiline paste guard enabled.
+  await page.evaluate(() => { window.preferences.pasteGuard = true })
+  for (const mode of ['normal', 'tmux']) {
+    await page.evaluate(mode => { window.session.sessionMode = mode }, mode)
+    for (const bracketed of [false, true]) {
+      await output(`\x1b[?2004${bracketed ? 'h' : 'l'}`)
+      await resetInput()
+      await page.keyboard.press('Control+Enter')
+      await page.waitForFunction(() => window.messages.some(m => m.type === 'input'))
+      assert.equal(await input(), '\x1b[200~\r\x1b[201~', `${mode}: Ctrl+Enter must not become a submit key`)
+      assert.equal(await page.locator('.el-message-box').count(), 0, 'a typed newline must not open the paste confirmation')
+      await resetInput()
+      await page.keyboard.press('Enter')
+      assert.equal(await input(), '\r', `${mode}: plain Enter must retain its normal behavior`)
+      await resetInput()
+      await page.keyboard.press('Alt+Enter')
+      assert.equal(await input(), '\x1b\r', 'other Enter modifiers must retain their normal behavior')
+    }
+  }
+  await resetInput()
+  await page.evaluate(() => {
+    window.testTerminal.textarea.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', code: 'Enter', keyCode: 229, ctrlKey: true, isComposing: true, bubbles: true, cancelable: true,
+    }))
+  })
+  assert.equal(await input(), '', 'IME confirmation must not insert or submit a newline')
+  await page.evaluate(() => { window.preferences.pasteGuard = false })
+  console.log('Ctrl+Enter inserts one newline in normal SSH and tmux; Enter, Alt+Enter, IME and paste guard checks passed')
+
   // A real browser clipboard image must reach SFTP, never the remote X11
   // clipboard. Its path is quoted, bracketed and never submitted with Enter.
   await page.evaluate(async () => {
@@ -479,6 +574,46 @@ try {
     })
     for (const stage of fixture.stages) {
       await output(stage.data)
+      if (stage.name === 'shell-history') {
+        assert.equal(await page.evaluate(() => {
+          const { active } = window.testTerminal.buffer
+          return active.getLine(active.baseY + 10).getCell(0).isBgDefault()
+        }), false, 'legacy tmux window styles produce explicit background colors')
+      }
+      if (stage.name === 'theme-defaults') {
+        assert.equal(await page.evaluate(() => {
+          const { active } = window.testTerminal.buffer
+          const cell = active.getLine(active.baseY + 10).getCell(0)
+          return cell.isBgDefault() && cell.isFgDefault()
+        }), true, 'restored tmux cells must use terminal defaults')
+        const originalFirstLine = (await screen())[0]
+        await output('\x1b7\x1b[H\x1b[0m\x1b[31mANSI\x1b[0m \x1b[38;2;18;52;86mRGB\x1b[0m\x1b8')
+        // Recolor existing tmux text without receiving any more output. A
+        // viewer must get its own palette, too, without remote control.
+        await page.evaluate(() => window.receive({ type: 'controller', controller: 'someone-else' }))
+        for (const id of ['dracula', 'solarized-dark', 'velin']) {
+          const colors = await page.evaluate(async id => {
+            const theme = window.terminalThemes.find(theme => theme.id === id)
+            Object.assign(window.preferences, { terminalTheme: id, background: theme.background })
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+            const canvas = window.testTerminal.element.querySelector('.xterm-text-layer')
+            const pixel = [...canvas.getContext('2d').getImageData(canvas.width - 2, 1, 1, 1).data]
+            const { active } = window.testTerminal.buffer
+            const line = active.getLine(active.baseY)
+            return { actual: pixel.slice(0, 3), expected: theme.background.match(/\w\w/g).map(value => parseInt(value, 16)),
+              cols: window.testTerminal.cols, rows: window.testTerminal.rows,
+              ansi: line.getCell(0).isFgPalette() && line.getCell(0).getFgColor() === 1,
+              rgb: line.getCell(5).isFgRGB() && line.getCell(5).getFgColor() === 0x123456 }
+          }, id)
+          assert.deepEqual(colors.actual, colors.expected, `${id}: existing tmux cells must follow the local palette`)
+          assert.equal(colors.cols, 80, 'theme changes must not reflow the conversation')
+          assert.equal(colors.rows, 24)
+          assert.equal(colors.ansi, true, 'theme changes must preserve ANSI highlighting')
+          assert.equal(colors.rgb, true, 'application RGB colors must remain explicit')
+        }
+        await output(`\x1b7\x1b[H\x1b[0m\x1b[2K${originalFirstLine}\x1b8`)
+        await page.evaluate(() => window.receive({ type: 'controller', controller: 'test' }))
+      }
       if (stage.firstLine !== undefined) {
         const actual = await screen()
         for (let row = 0; row < 24; row++) {
@@ -601,6 +736,54 @@ try {
       }
     }
     console.log('Physical browser wheel → real tmux/application → visible rows checks passed')
+
+    // A real Bash line editor behind tmux must retain both complete commands
+    // after Ctrl+Enter. Only the final ordinary Enter may execute them.
+    const peer = spawn('python3', [fileURLToPath(new URL('./fixtures/tmux-wheel.py', import.meta.url)), 'multiline-input'])
+    const replies = createInterface({ input: peer.stdout })[Symbol.asyncIterator]()
+    let stderr = ''
+    peer.stderr.on('data', chunk => { stderr += chunk })
+    const read = async () => {
+      const reply = await replies.next()
+      assert.equal(reply.done, false, `multiline tmux peer exited: ${stderr}`)
+      const response = JSON.parse(reply.value)
+      if (response.data) {
+        await page.evaluate(data => window.receive({ type: 'output', data }), response.data)
+        await flush()
+      }
+      return response
+    }
+    const relay = async action => {
+      await resetInput()
+      await action()
+      const data = await input()
+      assert.ok(data, 'physical keyboard event did not reach the input transport')
+      peer.stdin.write(JSON.stringify({ type: 'input', data: Buffer.from(data).toString('base64') }) + '\n')
+      return read()
+    }
+    try {
+      await page.evaluate(() => {
+        window.testTerminal.reset()
+        window.testTerminal.resize(80, 24)
+        window.preferences.pasteGuard = true
+      })
+      await read()
+      assert.equal(await page.evaluate(() => window.testTerminal.modes.bracketedPasteMode), true,
+        'the real line editor must advertise bracketed paste through tmux')
+      assert.equal((await relay(() => page.keyboard.type('printf first > "$VELIN_MULTILINE_RESULT"'))).submitted, false)
+      assert.equal((await relay(() => page.keyboard.press('Control+Enter'))).submitted, false,
+        'Ctrl+Enter executed a complete command instead of inserting a newline')
+      assert.equal((await relay(() => page.keyboard.type('printf second >> "$VELIN_MULTILINE_RESULT"'))).submitted, false)
+      const result = await relay(() => page.keyboard.press('Enter'))
+      assert.equal(result.submitted, true)
+      assert.equal(result.result, 'firstsecond', 'ordinary Enter must submit the retained multiline input')
+      console.log('Physical Ctrl+Enter → real tmux/Bash inserts a newline; commands execute only after ordinary Enter')
+    } finally {
+      await page.evaluate(() => { window.preferences.pasteGuard = false })
+      peer.stdin.end()
+      await once(peer, 'exit')
+      await replies.return?.()
+    }
   } else {
     console.log('Real tmux rendering check skipped (requires tmux and Python 3)')
   }

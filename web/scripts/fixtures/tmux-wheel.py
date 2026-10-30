@@ -1,4 +1,4 @@
-"""Interactive, isolated tmux peer for browser wheel round trips (JSON lines)."""
+"""Interactive, isolated tmux peer for browser input round trips (JSON lines)."""
 
 import base64
 import fcntl
@@ -11,6 +11,7 @@ import shlex
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 import tty
@@ -18,6 +19,9 @@ import uuid
 
 
 def pane(mode):
+    if mode == "multiline-input":
+        os.environ.update(PS1="input> ", PS2="more> ", PROMPT_COMMAND="", INPUTRC="/dev/null")
+        os.execvp("bash", ["bash", "--noprofile", "--norc", "-i"])
     tty.setraw(0)
     if mode == "inline-mouse":
         os.write(1, ("".join(f"original-{line:03}\r\n" for line in range(80)) + "\x1b[?1000h\x1b[?1006h").encode())
@@ -72,6 +76,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "--pane":
 mode = sys.argv[1]
 socket = "velin-wheel-test-" + uuid.uuid4().hex[:12]
 pid = master = None
+workspace = tempfile.TemporaryDirectory(prefix="velin-input-test-")
+result_path = os.path.join(workspace.name, "result")
 
 
 def tmux(*args):
@@ -80,7 +86,7 @@ def tmux(*args):
 
 try:
     tmux("-f", "/dev/null", "new-session", "-d", "-s", "test", "-x", "80", "-y", "24",
-         f"exec python3 {os.path.abspath(__file__)} --pane {mode}")
+         "exec " + shlex.join(["env", "VELIN_MULTILINE_RESULT=" + result_path, "python3", os.path.abspath(__file__), "--pane", mode]))
     tmux("set-option", "-t", "test", "status", "off")
     pid, master = pty.fork()
     if pid == 0:
@@ -97,8 +103,14 @@ try:
                 break
             chunks.append(os.read(master, 65536))
         size, alternate = tmux("display-message", "-p", "-t", "test", "#{history_size} #{alternate_on}").split()
+        submitted = os.path.exists(result_path)
+        result = ""
+        if submitted:
+            with open(result_path) as file:
+                result = file.read()
         print(json.dumps({"data": base64.b64encode(b"".join(chunks)).decode(), "historySize": int(size),
-                          "alternateScreen": alternate == b"1", "event": event}), flush=True)
+                          "alternateScreen": alternate == b"1", "event": event,
+                          "submitted": submitted, "result": result}), flush=True)
 
     reply()
     for line in sys.stdin:
@@ -132,3 +144,4 @@ finally:
         os.close(master)
     if pid:
         os.waitpid(pid, 0)
+    workspace.cleanup()

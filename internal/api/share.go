@@ -56,8 +56,6 @@ type terminalShareView struct {
 	SessionMode      string                `json:"sessionMode,omitempty"`
 	Permission       string                `json:"permission"`
 	PasswordRequired bool                  `json:"passwordRequired"`
-	Record           bool                  `json:"record"`
-	RecordingID      string                `json:"recordingID,omitempty"`
 	ExpiresAt        time.Time             `json:"expiresAt"`
 	RevokedAt        *time.Time            `json:"revokedAt,omitempty"`
 	CreatedAt        time.Time             `json:"createdAt"`
@@ -88,7 +86,6 @@ func (a *API) createTerminalShare(w http.ResponseWriter, r *http.Request) {
 		Password         string `json:"password"`
 		Permission       string `json:"permission"`
 		ExpiresInMinutes int    `json:"expiresInMinutes"`
-		Record           bool   `json:"record"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -127,27 +124,16 @@ func (a *API) createTerminalShare(w http.ResponseWriter, r *http.Request) {
 	share := store.TerminalShare{
 		ID: uuid.NewString(), UserID: user.ID, SessionID: sessionID,
 		TokenHash: security.TokenHash(token), TokenEnc: tokenEnc, PasswordHash: passwordHash,
-		Permission: input.Permission, Record: input.Record,
-		ExpiresAt: time.Now().UTC().Add(time.Duration(input.ExpiresInMinutes) * time.Minute),
-		CreatedAt: time.Now().UTC(),
-	}
-	if input.Record {
-		recording, recordErr := a.terminals.StartShareRecording(user.ID, sessionID)
-		if recordErr != nil {
-			writeError(w, http.StatusConflict, "share_recording_failed", recordErr.Error())
-			return
-		}
-		share.RecordingID = recording.ID
+		Permission: input.Permission,
+		ExpiresAt:  time.Now().UTC().Add(time.Duration(input.ExpiresInMinutes) * time.Minute),
+		CreatedAt:  time.Now().UTC(),
 	}
 	if err = a.store.CreateTerminalShare(share); err != nil {
-		if share.RecordingID != "" {
-			a.terminals.StopRecordingIfID(user.ID, sessionID, share.RecordingID)
-		}
 		writeError(w, http.StatusInternalServerError, "share_create_failed", "创建分享失败")
 		return
 	}
 	_ = a.store.Audit(user.ID, "terminal_share_created", "terminal_session", sessionID, a.clientIP(r), map[string]any{
-		"shareID": share.ID, "permission": share.Permission, "record": share.Record, "expiresAt": share.ExpiresAt,
+		"shareID": share.ID, "permission": share.Permission, "expiresAt": share.ExpiresAt,
 	})
 	view := a.terminalShareView(share, true)
 	view.URL = "/share/" + token
@@ -484,7 +470,7 @@ func (a *API) terminalShareView(share store.TerminalShare, includeViewers bool) 
 	view := terminalShareView{
 		ID: share.ID, SessionID: share.SessionID, SessionName: share.SessionName,
 		Permission: share.Permission, PasswordRequired: share.PasswordRequired,
-		Record: share.Record, RecordingID: share.RecordingID, ExpiresAt: share.ExpiresAt,
+		ExpiresAt: share.ExpiresAt,
 		RevokedAt: share.RevokedAt, CreatedAt: share.CreatedAt,
 		Active: terminalShareActive(share, time.Now()), ViewerCount: len(viewers),
 	}
@@ -531,9 +517,6 @@ func (a *API) shareViewerList(shareID string) []terminalShareViewer {
 }
 
 func (a *API) finishTerminalShare(share store.TerminalShare, reason string) {
-	if share.RecordingID != "" && a.terminals != nil {
-		a.terminals.StopRecordingIfID(share.UserID, share.SessionID, share.RecordingID)
-	}
 	a.shareMu.Lock()
 	connections := make([]*shareViewerConnection, 0, len(a.shareViewers[share.ID]))
 	for _, viewer := range a.shareViewers[share.ID] {

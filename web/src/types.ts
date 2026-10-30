@@ -267,8 +267,6 @@ export interface Preferences {
   lockOnShortcut: boolean;
 }
 
-export const terminalFontFamily =
-  '"JetBrains Mono", "Cascadia Mono", "Cascadia Code", Menlo, Consolas, "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Source Han Mono SC", "Microsoft YaHei", monospace';
 export interface PaneLeaf {
   type: "leaf";
   id: string;

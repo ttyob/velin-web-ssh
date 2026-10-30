@@ -66,3 +66,13 @@ Windows 单文件修复版：`artifacts/windows-v0.3.48/velin-web-ssh-windows-gu
 灰阶修复已部署到 Docker Web，镜像 `sha256:f1af43599abaee818f0e4d6f0ea492cc8ac37ec7b05014aadbfa4caa4ca512bd`，容器 healthy，readiness 为 ok。逐一核对了线上 53 个 HTML/JS/CSS 文件，与本地构建完全一致。部署前唯一工作流仍为 blocked，没有运行中的任务；guacd 保持原镜像和启动时间。
 
 对应 Windows 单文件为 `artifacts/windows-v0.3.48/velin-web-ssh-windows-gui-amd64-v0.3.48-theme-grayscale-fix.exe`，版本 `v0.3.48+gray.20261030`，38.86 MiB，SHA-256 `5e82c530470687093ea0bddc9b52432c0de07092d542b6b04f679a11ec7500f3`。已验证 x64 Windows GUI 子系统和全部 53 个内嵌前端资源，包含前一修复版的 tmux 默认色、即时重绘及 forced-colors 修复；尚未进行 Win11 实机验证。
+
+## Windows 字体过细和锯齿适配
+
+主终端此前统一使用 Canvas 字形图集，Windows 上可能失去系统原生文字的 ClearType 平滑；恢复预览和分享终端则使用 DOM。`v0.3.50` 将 Windows 主终端改为 xterm 原生 DOM 渲染，使三处一致，并优先使用 Windows 自带的 Consolas 等宽字体。终端单独恢复系统字体平滑、关闭连字，用户设置的字号、字重和行距继续生效。其他平台主终端继续使用 Canvas。
+
+适配同时覆盖 Windows 浏览器和 Wails 桌面版。桌面版需要更新 EXE，更新服务器网页不会改变旧 EXE 内嵌的资源。仅凭源码与 Linux Chromium 模拟不能确认用户现场的 Win11 像素效果，仍需 Win11 实机复测。
+
+回归脚本增加 `--windows` 平台分支和 `TERMINAL_TEST_DPR` 缩放参数，挂载完整字体样式，校验原生渲染选择、主题、灰阶、滚动、选择复制、粘贴和 Ctrl+Enter，并通过真实 tmux/Bash 验证物理滚轮与键盘事件。Chromium CDP 的物理滚轮值按设备像素比换算，保证不同缩放下实际收到的 CSS 滚轮步长一致。
+
+验证通过：前端单元检查、类型检查和生产构建；Canvas 在 DPR 1、Windows DOM 在 DPR 1.25 和 1.5 下的完整终端回归。平台与缩放由 Linux Chromium 模拟，没有进行原生 Win11 实机验证。

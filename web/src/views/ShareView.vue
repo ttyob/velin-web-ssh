@@ -9,7 +9,7 @@ import type { InputInstance } from "element-plus";
 import { useRoute } from "vue-router";
 import { api, json } from "../api";
 import type { TerminalShare } from "../types";
-import { terminalFontFamily } from "../types";
+import { terminalFontFamily } from "../terminalRendering";
 import { terminalXtermTheme } from "../themePresets";
 import { terminalClipboardFiles } from "../terminalClipboard";
 import { handleTerminalKeyEvent, terminalNewlineInput } from "../terminalKeyboard";

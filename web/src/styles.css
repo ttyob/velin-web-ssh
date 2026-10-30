@@ -1266,6 +1266,12 @@ button {
    the terminal's DOM background and replay renderer on that same palette. */
 .xterm {
   forced-color-adjust: none;
+  /* Terminal text uses platform smoothing and fixed character cells instead
+     of inheriting the interface's grayscale smoothing and ligatures. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+  text-rendering: auto;
+  font-variant-ligatures: none;
 }
 .xterm .xterm-viewport {
   overflow-y: auto !important;

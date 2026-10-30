@@ -28,7 +28,7 @@ import {
 } from "@lucide/vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, api, json } from "../api";
-import { terminalFontFamily } from "../types";
+import { nativeTerminalText, terminalFontFamily } from "../terminalRendering";
 import type { Preferences, TerminalSession } from "../types";
 import { terminalXtermTheme } from "../themePresets";
 import { reconnectDelay } from "../reconnect";
@@ -1889,7 +1889,7 @@ onMounted(() => {
   fit = new FitAddon();
   search = new SearchAddon();
   terminal.loadAddon(fit);
-  terminal.loadAddon(new CanvasAddon());
+  if (!nativeTerminalText) terminal.loadAddon(new CanvasAddon());
   terminal.loadAddon(search);
   terminal.loadAddon(new WebLinksAddon(previewTerminalLink));
   terminal.open(container.value!);

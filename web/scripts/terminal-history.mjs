@@ -6,6 +6,9 @@ import { once } from 'node:events'
 import { createServer } from 'vite'
 import { chromium } from 'playwright-core'
 
+const windowsRendering = process.argv.includes('--windows')
+const deviceScaleFactor = Number(process.env.TERMINAL_TEST_DPR || 1)
+
 // Mount the real pane with an isolated transport; no SSH credentials or live
 // sessions are needed. Expose xterm only in this test server's transformed SFC.
 const entry = `
@@ -14,6 +17,8 @@ import ElementPlus from 'element-plus'
 import TerminalPane from '/src/components/TerminalPane.vue'
 import { terminalThemePresets } from '/src/themePresets'
 import '/src/styles.css'
+import '/src/styles-refresh.css'
+import '/src/styles-polish.css'
 import '@xterm/xterm/css/xterm.css'
 
 window.messages = []
@@ -91,7 +96,13 @@ try {
     executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
     headless: true, args: ['--no-sandbox'],
   })
-  const page = await browser.newPage({ viewport: { width: 1100, height: 800 } })
+  const page = await browser.newPage({
+    viewport: { width: 1100, height: 800 }, deviceScaleFactor,
+    ...(windowsRendering ? { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0' } : {}),
+  })
+  if (windowsRendering) await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' })
+  })
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
@@ -126,6 +137,17 @@ try {
   await page.waitForFunction(() => window.testTerminal && window.messages.some(m => m.type === 'resize'))
   // Wait for the pane's initial layout to settle before using fixed dimensions.
   await page.waitForFunction(() => !document.querySelector('.terminal-resize-snapshot'))
+  assert.equal(await page.locator('.terminal-canvas > .xterm .xterm-text-layer').count(), windowsRendering ? 0 : 1)
+  if (windowsRendering) {
+    assert.equal(await page.locator('.terminal-canvas > .xterm .xterm-rows').count(), 1)
+    assert.ok(await page.evaluate(() => window.testTerminal.options.fontFamily.startsWith('Consolas,')))
+    const typography = await page.locator('.terminal-canvas > .xterm').evaluate(element => ({
+      smoothing: getComputedStyle(element).webkitFontSmoothing,
+      ligatures: getComputedStyle(element).fontVariantLigatures,
+    }))
+    assert.equal(typography.smoothing, 'auto')
+    assert.equal(typography.ligatures, 'none')
+  }
 
   const flush = () => page.evaluate(() => new Promise(resolve => window.testTerminal.write('', () => {
     requestAnimationFrame(() => requestAnimationFrame(resolve))
@@ -167,14 +189,27 @@ try {
       Object.assign(window.preferences, { terminalTheme: id, background: preset.background })
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const canvas = terminal.element.querySelector('.xterm-text-layer')
-      const ctx = canvas.getContext('2d')
-      const pixel = (column, row) => '#' + [...ctx.getImageData(
-        Math.floor((column + 0.5) * canvas.width / cols),
-        Math.floor((row + 0.5) * canvas.height / rows), 1, 1,
-      ).data].slice(0, 3).map(value => value.toString(16).padStart(2, '0')).join('')
+      const ctx = canvas?.getContext('2d')
+      const hex = channels => '#' + channels.map(value => value.toString(16).padStart(2, '0')).join('')
+      const pixel = (column, row, foreground = false) => {
+        if (canvas) return hex([...ctx.getImageData(
+          Math.floor((column + 0.5) * canvas.width / cols),
+          Math.floor((row + 0.5) * canvas.height / rows), 1, 1,
+        ).data].slice(0, 3))
+        const rowElement = terminal.element.querySelector('.xterm-rows').children[row]
+        const bounds = rowElement.getBoundingClientRect()
+        const x = bounds.left + (column + 0.5) * bounds.width / cols
+        const span = [...rowElement.children].find(element => {
+          const rect = element.getBoundingClientRect()
+          return x >= rect.left && x < rect.right
+        })
+        let color = getComputedStyle(span || rowElement)[foreground ? 'color' : 'backgroundColor']
+        if (color === 'rgba(0, 0, 0, 0)') color = getComputedStyle(terminal.element.querySelector('.xterm-viewport')).backgroundColor
+        return hex(color.match(/\d+/g).slice(0, 3).map(Number))
+      }
       const cell = terminal.buffer.active.getLine(terminal.buffer.active.baseY).getCell(20)
       return {
-        composer: pixel(20, 0), divider: pixel(1, 1), background: pixel(60, 5),
+        composer: pixel(20, 0), divider: pixel(1, 1, true), background: pixel(60, 5),
         grayscale: Array.from({ length: 24 }, (_, i) => pixel(i * 2, 2)),
         cube: Array.from({ length: 11 }, (_, i) => pixel(i * 2, 3)),
         rgbGray: pixel(0, 4), rgbColor: pixel(2, 4),
@@ -597,10 +632,12 @@ try {
             Object.assign(window.preferences, { terminalTheme: id, background: theme.background })
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
             const canvas = window.testTerminal.element.querySelector('.xterm-text-layer')
-            const pixel = [...canvas.getContext('2d').getImageData(canvas.width - 2, 1, 1, 1).data]
+            const pixel = canvas
+              ? [...canvas.getContext('2d').getImageData(canvas.width - 2, 1, 1, 1).data].slice(0, 3)
+              : getComputedStyle(window.testTerminal.element.querySelector('.xterm-viewport')).backgroundColor.match(/\d+/g).slice(0, 3).map(Number)
             const { active } = window.testTerminal.buffer
             const line = active.getLine(active.baseY)
-            return { actual: pixel.slice(0, 3), expected: theme.background.match(/\w\w/g).map(value => parseInt(value, 16)),
+            return { actual: pixel, expected: theme.background.match(/\w\w/g).map(value => parseInt(value, 16)),
               cols: window.testTerminal.cols, rows: window.testTerminal.rows,
               ansi: line.getCell(0).isFgPalette() && line.getCell(0).getFgColor() === 1,
               rgb: line.getCell(5).isFgRGB() && line.getCell(5).getFgColor() === 0x123456 }
@@ -631,6 +668,9 @@ try {
     // Exercise a physical browser wheel all the way through a live tmux PTY
     // and back into xterm. Cover inline history and full-screen conversations
     // with and without native mouse capture.
+    await page.evaluate(() => window.addEventListener('wheel', event => {
+      window.lastWheel = { deltaY: event.deltaY, deltaMode: event.deltaMode, target: event.target?.className }
+    }, { capture: true }))
     for (const mode of ['inline-mouse', 'alternate-keyboard', 'alternate-mouse']) {
       const peer = spawn('python3', [fileURLToPath(new URL('./fixtures/tmux-wheel.py', import.meta.url)), mode])
       const responses = createInterface({ input: peer.stdout })[Symbol.asyncIterator]()
@@ -673,11 +713,13 @@ try {
             assert.equal(await page.evaluate(({x,y,width,height}) => Boolean(
               document.elementFromPoint(x + width / 2, y + height / 2)?.closest('.terminal-replay-preview, .terminal-resize-snapshot, .terminal-history-transition'),
             ), box), false, 'frozen transition viewports must not intercept the next physical wheel event')
-            await page.mouse.wheel(0, delta)
+            // Chromium's CDP wheel delta is divided by deviceScaleFactor;
+            // send physical pixels to retain the intended CSS wheel step.
+            await page.mouse.wheel(0, delta * deviceScaleFactor)
             await page.waitForFunction(start => window.messages.slice(start).some(m => ['input', 'scroll_history_to', 'scroll_application', 'click_application'].includes(m.type)), start, { timeout: 5000 }).catch(async error => {
               throw new Error(`${mode}, cycle ${cycle}, delta ${delta}: ${JSON.stringify(await page.evaluate(start => ({
                 messages: window.messages.slice(start), mouse: window.testTerminal.modes.mouseTrackingMode,
-                buffer: window.testTerminal.buffer.active.type,
+                buffer: window.testTerminal.buffer.active.type, wheel: window.lastWheel,
               }), start))}`, { cause: error })
             })
             const message = await page.evaluate(start => window.messages.slice(start).find(m => ['input', 'scroll_history_to', 'scroll_application', 'click_application'].includes(m.type)), start)
@@ -704,7 +746,7 @@ try {
             await apply(await read())
           }
           await page.evaluate(() => { window.messages.length = 0 })
-          await page.mouse.wheel(0, -64)
+          await page.mouse.wheel(0, -64 * deviceScaleFactor)
           await forward('scroll_application')
           assert.equal((await screen()).at(-1).trim(), 'Back to bottom')
           await page.evaluate(() => { window.messages.length = 0 })
@@ -788,7 +830,7 @@ try {
     console.log('Real tmux rendering check skipped (requires tmux and Python 3)')
   }
   assert.deepEqual(errors, [])
-  console.log('Terminal history, selection copying and CLI clipboard browser checks passed')
+  console.log(`Terminal history, selection copying and CLI clipboard browser checks passed (${windowsRendering ? 'Windows DOM' : 'Canvas'}, DPR ${deviceScaleFactor})`)
 } finally {
   await browser?.close()
   await server.close()

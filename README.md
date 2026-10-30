@@ -2,241 +2,67 @@
 
 # VelinWebSSH
 
-轻量、自托管的浏览器 SSH 工作区。
+**自托管的 SSH 与远程桌面工作区**
 
-在一个界面中管理主机、终端、文件、端口转发和内网 Web 服务。
+主机、终端、文件和内网 Web，一个界面管理。
 
 [![Build](https://github.com/ttyob/velin-web-ssh/actions/workflows/container.yml/badge.svg)](https://github.com/ttyob/velin-web-ssh/actions/workflows/container.yml)
-[![Release](https://img.shields.io/github/v/release/ttyob/velin-web-ssh?display_name=tag&sort=semver)](https://github.com/ttyob/velin-web-ssh/releases)
-[![GHCR](https://img.shields.io/badge/GHCR-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/ttyob/velin-web-ssh/pkgs/container/velin-web-ssh)
+[![Release](https://img.shields.io/github/v/release/ttyob/velin-web-ssh?display_name=tag&sort=semver)](https://github.com/ttyob/velin-web-ssh/releases/latest)
+[![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/ttyob/velin-web-ssh/pkgs/container/velin-web-ssh)
+
+[快速安装](#快速安装) · [下载安装包](https://github.com/ttyob/velin-web-ssh/releases/latest) · [使用文档](docs/deployment.md) · [开发指南](docs/development.md)
 
 </div>
 
-![VelinWebSSH 终端工作区](.github/assets/velin-workspace.png)
+![VelinWebSSH 实际运行界面：主机管理、SSH 分屏终端与项目测试](.github/assets/velin-workspace.png)
+
+<p align="center"><sub>真实运行截图 · SSH 连接与分屏终端</sub></p>
 
 ## 功能
 
-- 主机分组、搜索、拖动排序、跳板机和 OpenSSH 配置导入
-- 多标签与分屏终端，支持普通 SSH、tmux 持久会话和断线恢复
-- 页面内 VNC（noVNC）和 RDP（Guacamole）远程桌面，RDP 也支持调用 Windows 本地远程桌面客户端
-- 连接时立即打开标签，在窗口内展示进度、指纹确认和失败原因，支持取消与重试
-- Ctrl+Enter 插入换行，Enter 提交（远端 shell / CLI 需支持 bracketed paste）
-- SFTP 文件管理、文本编辑、上传和下载
-- 本地、远程与 SOCKS5 端口转发
-- 通过 SSH 访问内网 HTTP/HTTPS 服务
-- 独立保存的主机密码和可复用 SSH 凭据
-- TOTP、PIN 锁屏、主机指纹校验和加密备份
-- 主机资源监控、Docker/Git 工具和可选 AI Agent
-- 终端会话限时分享，支持密码、只读/可操作权限和在线预览
-- Docker Web 版、飞牛 fnOS 原生应用包和 Windows 单 EXE 桌面版
+| 能力 | 支持 |
+| --- | --- |
+| **终端工作区** | 多标签、分屏、主题、搜索、tmux 与断线恢复 |
+| **主机管理** | 分组、跳板机、OpenSSH 配置导入 |
+| **远程桌面** | 网页 RDP / VNC、Windows 本地 RDP |
+| **文件与内网** | SFTP、在线编辑、Web 代理、端口转发、Tailscale |
+| **会话分享** | 限时链接、密码保护、只读或可操作权限 |
+| **运维扩展** | 资源监控、Docker / Git、可选 AI Agent 与专用代理 |
+| **安全与备份** | TOTP、PIN 锁屏、主机指纹、加密备份 |
 
 ## 快速安装
 
-需要 Linux、Docker Engine 和 Docker Compose v2：
+Linux 需先安装 Docker Engine 和 Docker Compose v2：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/install.sh | sh
 ```
 
-当前用户没有 Docker 权限时：
+安装完成后会显示访问地址和初始管理员账号、密码。默认端口 **8377**，首次登录需修改密码。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/install.sh | sudo sh
-```
-
-安装脚本会拉取 `ghcr.io/ttyob/velin-web-ssh:latest`，创建数据目录和随机管理员密码。完成后会输出访问地址、管理员账号、密码和安装目录。
-
-默认端口为 `8377`，默认安装目录为：
-
-- root 用户：`/opt/velin`
-- 普通用户：`~/.local/share/velin`
-
-升级已安装实例：
+升级（默认 root 安装目录）：
 
 ```bash
 /opt/velin/update.sh
 ```
 
-## 其他运行方式
+普通用户默认安装到 `~/.local/share/velin`。HTTP 内网部署需设置 `VELIN_COOKIE_SECURE=false`；安装权限、Compose 部署与 HTTPS 配置见[安装文档](docs/deployment.md)。
 
-### Docker Compose
+## 选择版本
 
-```bash
-git clone https://github.com/ttyob/velin-web-ssh.git
-cd velin-web-ssh
-cp .env.example .env
-docker compose build
-docker compose run --rm --no-deps --user root --entrypoint sh velin \
-  -c 'chown -R velin:velin /app/data && chmod 700 /app/data'
-docker compose up -d
-```
-
-启动前请修改 `.env` 中的 `VELIN_ADMIN_PASSWORD`。数据保存在项目的 `data/` 目录中。
-
-常用命令：
-
-```bash
-docker compose ps
-docker compose logs -f velin
-docker compose restart velin
-docker compose down
-```
-
-忘记管理员密码时，可保留现有数据并重置密码。命令会撤销该管理员的旧登录会话，输出临时密码，并要求登录后修改：
-
-```bash
-docker compose run --rm --no-deps velin --reset-admin-password
-```
-
-若要指定新密码和管理员用户名：
-
-```bash
-docker compose run --rm --no-deps \
-  -e VELIN_ADMIN_USER=admin \
-  -e VELIN_ADMIN_PASSWORD='替换为新密码' \
-  velin --reset-admin-password
-```
-
-使用安装脚本部署在 `/opt/velin` 时，先进入该目录再执行上述命令。仅修改 `.env` 中的 `VELIN_ADMIN_PASSWORD` 不会重置已有账户。
-
-### GitHub Release
-
-[Releases](https://github.com/ttyob/velin-web-ssh/releases) 提供飞牛 fnOS 安装包、Windows 单 EXE 及校验文件：
-
-- `velin-web-ssh-fnos-native-amd64-<版本号>.fpk`
-- `velin-web-ssh-fnos-native-arm64-<版本号>.fpk`
-- `velin-web-ssh-windows-gui-amd64-v<版本号>.exe`
-- `checksums.txt`
-
-Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 版本标签后，工作流会完成测试、Docker 镜像推送、飞牛安装包和 Windows 单 EXE 构建，再统一发布 GitHub Release。发布说明提供对应版本的 Docker 镜像地址；`latest` 跟随版本标签，`main` 分支构建发布为 `edge`。
-
-### 飞牛 fnOS 原生应用包
-
-仓库提供不依赖 Docker 的飞牛 fnOS `.fpk` 原生应用包。包内直接运行 VelinWebSSH Go 服务和 guacd，数据保存到 fnOS 应用数据目录，不影响现有 Compose 部署：
-
-```bash
-packaging/fnos/build.sh
-```
-
-构建脚本默认构建当前主机架构，也可以显式指定架构：
-
-```bash
-VELIN_FNOS_VERSION=0.3.50 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
-VELIN_FNOS_VERSION=0.3.50 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
-```
-
-忘记 fnOS 原生应用的管理员密码时，通过 SSH 登录 NAS 后执行：
-
-```bash
-sudo -u velin env \
-  TRIM_APPDEST=/var/apps/velin-web-ssh/target \
-  TRIM_PKGVAR=/var/apps/velin-web-ssh/var \
-  /var/apps/velin-web-ssh/target/cmd/main reset-admin-password
-```
-
-命令会短暂停止 VelinWebSSH、生成并输出临时密码，然后恢复原有运行状态。指定新密码时增加 `VELIN_RESET_PASSWORD='替换为新密码'`；数据、主机和凭据不会被删除。
-
-卸载 fnOS 原生应用时可选择保留或删除应用数据，默认保留以便重新安装。选择删除会永久清除数据库、主密钥、凭据、备份和日志。
-
-将生成的 `dist/fnos/velin-web-ssh-fnos-native-*.fpk` 在飞牛应用中心手动安装。首次安装向导会设置管理员账号和密码。构建脚本需要 Docker 和 GitHub 网络来提取对应架构的 guacd 运行库；安装后的 NAS 不需要 Docker。
-
-## 配置
-
-VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优先。
-
-管理员可在「设置 → AI 模型」配置 Agent 专用代理，支持 HTTP、HTTPS、SOCKS5（例如 `http://127.0.0.1:7890`），留空时直连。代理仅用于 AI Agent 的模型列表、对话和连接测试，保存后立即生效；包含账号密码的代理地址会加密保存。Docker 部署时填写容器能够访问的代理地址。
-
-| 变量 | 默认值 | 说明 |
+| 平台 | 获取方式 | 说明 |
 | --- | --- | --- |
-| `VELIN_ADDR` | `0.0.0.0:8377` | Web 服务监听地址 |
-| `VELIN_ADMIN_USER` | `admin` | 首次启动创建的管理员账号 |
-| `VELIN_ADMIN_PASSWORD` | 空 | 首次启动管理员密码 |
-| `VELIN_DATA_DIR` | `data` | 数据库、主密钥及备份的存储目录 |
-| `VELIN_COOKIE_SECURE` | `true` | 会话 Cookie 仅通过 HTTPS 发送；纯 HTTP 内网部署必须显式设置为 `false` |
-| `VELIN_EMBED_ORIGINS` | 空 | 允许嵌入 VelinWebSSH 的可信来源，多个来源用逗号分隔，例如 `https://nas.example.com` |
-| `VELIN_TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理网段，只有来自这些网段的请求才会读取 `X-Real-IP` |
-| `VELIN_HOST_PORT_ADDR` | `127.0.0.1` | 主机端口代理监听地址 |
-| `VELIN_GUACD_ADDR` | `127.0.0.1:4822` | RDP 使用的 guacd 地址 |
-| `VELIN_DESKTOP_PROXY_ADDR` | `127.0.0.1` | RDP 跳板代理监听地址 |
-| `VELIN_RDP_DRIVE_DIR` | `/tmp/velin-rdp-drives` | RDP 磁盘映射目录；使用外部 guacd 时需与 guacd 共享此路径 |
-| `VELIN_RDP_RESIZE_METHOD` | `display-update` | RDP 分辨率调整方式；FPK 默认使用无需动态插件和二次连接的 `none` |
-| `VELIN_RDP_DISABLE_GFX` | `false` | 禁用 RDP GFX 图形管线；FPK 默认禁用以兼容原生运行目录 |
-| `VELIN_AI_BASE_URL` | 空 | OpenAI 兼容 API 地址 |
-| `VELIN_AI_MODEL` | 空 | AI Agent 模型名称 |
-| `VELIN_AI_API_KEY` | 空 | AI API Key |
+| **Docker Web** | [容器镜像](https://github.com/ttyob/velin-web-ssh/pkgs/container/velin-web-ssh) | `amd64` / `arm64`，浏览器访问 |
+| **飞牛 fnOS** | [下载 `.fpk`](https://github.com/ttyob/velin-web-ssh/releases/latest) | 原生应用，NAS 无需安装 Docker |
+| **Windows** | [下载 `.exe`](https://github.com/ttyob/velin-web-ssh/releases/latest) | 单文件桌面版，需要 WebView2 Runtime |
 
-公网部署请使用 Caddy、Nginx 等反向代理提供 HTTPS；同时通过防火墙限制外部直接访问 `8377` 端口。配置内嵌页面时只填写明确的 `VELIN_EMBED_ORIGINS`，不要使用通配来源。反向代理必须覆盖而不是追加 `X-Real-IP`，并将代理网段写入 `VELIN_TRUSTED_PROXY_CIDRS`。guacd 没有认证能力，Compose 已将其限制在 `127.0.0.1:4822`，不要将该端口暴露到公网。Compose 会自动为 VelinWebSSH 和 guacd 共享 RDP 磁盘映射目录。
+Docker 镜像：`ghcr.io/ttyob/velin-web-ssh:latest`。固定版本可使用对应版本标签，开发构建使用 `edge`。
 
-### 内嵌 Tailscale
+## 文档
 
-管理员可在“设置 -> 系统管理 -> 内嵌 Tailscale”中配置节点名称、控制面地址和 Auth Key，并通过服务状态开关启停。默认关闭；只有开启并保存后，VelinWebSSH 才会在当前进程中启动 `tsnet` 用户态网络。节点身份保存在 `data/tailscale`，升级和重启时必须保留。
+- [安装与配置](docs/deployment.md)：Docker / fnOS / Windows、环境变量、密码重置与备份
+- [开发与构建](docs/development.md)：本地开发、测试、打包与发布
+- [fnOS 打包说明](packaging/fnos/README.md)
+- [问题反馈](https://github.com/ttyob/velin-web-ssh/issues)
 
-启用后，在 VelinWebSSH 主机列表中直接填写 Tailnet IP 或 MagicDNS 名称；SSH、SFTP、RDP、Web 代理和端口转发的远端出站连接都会通过内嵌节点。VelinWebSSH 不安装 `tailscaled`、不创建系统 TUN，也不要求容器增加 `NET_ADMIN`。Auth Key 只保存在服务端加密数据中。
-
-## 数据与备份
-
-`data/` 目录包含：
-
-- `velin.db`：用户、主机、会话和设置
-- `master.key`：SSH 敏感数据的加密主密钥
-
-管理员可以在设置中创建密钥加密备份。备份包含数据库和 `master.key`，不包含 `.env`。恢复时必须使用创建备份时输入的同一密钥。
-
-## 开发
-
-需要 Go 1.25.13、Node.js 18.20.4 或更高版本，以及 npm。
-
-```bash
-cd web
-npm ci
-npm run dev
-```
-
-检查和构建：
-
-```bash
-cd web
-npm test
-npm run typecheck
-npm run build
-```
-
-终端历史、远程桌面恢复、标签关闭和首次连接的浏览器回归检查（需要 Chromium，可用 `CHROMIUM_PATH` 指定路径）：
-
-安装 `tmux` 和 Python 3 后，终端检查还会验证真实 tmux 输出在浏览器中的历史行序和反复滚动；缺少这两项时会提示跳过该部分。
-
-```bash
-cd web
-npm run test:terminal
-npm run test:terminal -- --windows
-npm run test:desktop
-npm run test:dialogs
-npm run test:sessions
-npm run test:connections
-```
-
-Windows GUI 使用 Wails 构建，先构建要内嵌的网页资源：
-
-```powershell
-npm --prefix web ci
-npm --prefix web run build
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
-wails build -platform windows/amd64 -clean -m -s -skipbindings
-```
-
-Windows GUI 为单 EXE 便携版，网页资源直接内嵌在 `build/bin/velin-web-ssh.exe` 中，复制 EXE 即可运行。运行需要 WebView2 Runtime，缺少时程序会提示安装。数据库、主密钥和 `velin-web-ssh.log` 均保存在 EXE 所在目录，请选择可写目录。首次启动会显示管理员凭据对话框，密码可通过按钮复制。需要使用外部网页资源时，可在 `.env` 中指定 `VELIN_WEB_DIST`。
-
-如果初始密码已经丢失，在 PowerShell 中执行以下命令。程序会保留现有数据、重置管理员密码、清除旧登录会话，并通过弹窗显示新密码：
-
-```powershell
-.\velin-web-ssh.exe --reset-admin-password
-```
-
-## 常见问题
-
-- `ssh: unable to authenticate`：检查用户名、密码、私钥和远端 SSH 认证策略。
-- `tmux session not found`：远端会话已经不存在；也可以把主机会话模式改为普通 SSH。
-- 无法启动：检查端口占用、数据目录权限以及 `docker compose logs -f velin`。
-- Windows GUI 异常：查看 `velin-web-ssh.exe` 同目录下的 `velin-web-ssh.log`。
-
-发布版本与校验文件见 [GitHub Releases](https://github.com/ttyob/velin-web-ssh/releases)。
+升级时请保留数据目录，尤其是 `velin.db` 和 `master.key`；Windows 版数据位于 EXE 所在目录。

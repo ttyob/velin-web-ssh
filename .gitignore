@@ -4,6 +4,8 @@ clipboard/
 !/docs/terminal-theme-windows.md
 !/docs/terminal-setup-plan.md
 !/docs/module-removal-20261030.md
+!/docs/deployment.md
+!/docs/development.md
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo

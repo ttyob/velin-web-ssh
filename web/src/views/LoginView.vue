@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { LockKeyhole, LogIn, RefreshCw, Server, ShieldCheck, UserRound } from "@lucide/vue";
+import { ArrowRight, LockKeyhole, RefreshCw, ShieldCheck, UserRound } from "@lucide/vue";
 import { ElMessage } from "element-plus";
 import { useAuthStore } from "../stores/auth";
 import { ApiError, api } from "../api";
+import AuthShell from "../components/AuthShell.vue";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -47,6 +48,7 @@ async function requireCaptcha() {
 }
 
 async function submit() {
+  if (loading.value) return;
   if (!username.value || !password.value)
     return ElMessage.warning("请输入用户名和密码");
   if (captchaRequired.value && (!captchaID.value || !captchaAnswer.value.trim()))
@@ -97,90 +99,83 @@ async function submit() {
 </script>
 
 <template>
-  <main class="login-page">
-    <section class="login-panel">
-      <div class="brand-lockup">
-        <span class="brand-mark"><Server :size="24" /></span>
-        <div>
-          <h1>VelinWebSSH</h1>
-          <p>Secure terminal workspace</p>
+  <AuthShell title="登录">
+    <form @submit.prevent="submit">
+      <label for="velin-username">用户名</label>
+      <el-input
+        id="velin-username"
+        v-model="username"
+        size="large"
+        autocomplete="username"
+        autofocus
+        :disabled="loading"
+      >
+        <template #prefix><UserRound :size="17" /></template>
+      </el-input>
+      <label for="velin-password">密码</label>
+      <el-input
+        id="velin-password"
+        v-model="password"
+        size="large"
+        type="password"
+        show-password
+        :disabled="loading"
+        autocomplete="current-password"
+      >
+        <template #prefix><LockKeyhole :size="17" /></template>
+      </el-input>
+      <div v-if="captchaRequired" class="login-captcha">
+        <label for="velin-captcha">图形验证码</label>
+        <div class="captcha-row">
+          <button
+            class="captcha-image-button"
+            type="button"
+            aria-label="刷新验证码"
+            :disabled="captchaLoading"
+            @click="loadCaptcha"
+          >
+            <img v-if="captchaImage" :src="captchaImage" alt="图形验证码" />
+            <RefreshCw v-else :size="20" :class="{ spinning: captchaLoading }" />
+          </button>
+          <el-input
+            id="velin-captcha"
+            v-model="captchaAnswer"
+            size="large"
+            maxlength="5"
+            autocomplete="off"
+            :disabled="loading"
+            placeholder="输入图片中的字符"
+          />
         </div>
       </div>
-      <form @submit.prevent="submit">
-        <label for="velin-username">用户名</label>
+      <div v-if="totpRequired" class="login-totp">
+        <label for="velin-totp">双因素验证码</label>
         <el-input
-          id="velin-username"
-          v-model="username"
+          id="velin-totp"
+          v-model="totpCode"
           size="large"
-          autocomplete="username"
-          autofocus
+          maxlength="16"
+          autocomplete="one-time-code"
+          :disabled="loading"
+          placeholder="6 位动态码或恢复码"
         >
-          <template #prefix><UserRound :size="17" /></template>
+          <template #prefix><ShieldCheck :size="17" /></template>
         </el-input>
-        <label for="velin-password">密码</label>
-        <el-input
-          id="velin-password"
-          v-model="password"
-          size="large"
-          type="password"
-          show-password
-          autocomplete="current-password"
-        >
-          <template #prefix><LockKeyhole :size="17" /></template>
-        </el-input>
-        <div v-if="captchaRequired" class="login-captcha">
-          <label for="velin-captcha">图形验证码</label>
-          <div class="captcha-row">
-            <button
-              class="captcha-image-button"
-              type="button"
-              aria-label="刷新验证码"
-              :disabled="captchaLoading"
-              @click="loadCaptcha"
-            >
-              <img v-if="captchaImage" :src="captchaImage" alt="图形验证码" />
-              <RefreshCw v-else :size="20" :class="{ spinning: captchaLoading }" />
-            </button>
-            <el-input
-              id="velin-captcha"
-              v-model="captchaAnswer"
-              size="large"
-              maxlength="5"
-              autocomplete="off"
-              placeholder="输入图片中的字符"
-            />
-          </div>
-        </div>
-        <div v-if="totpRequired" class="login-totp">
-          <label for="velin-totp">双因素验证码</label>
-          <el-input
-            id="velin-totp"
-            v-model="totpCode"
-            size="large"
-            maxlength="16"
-            autocomplete="one-time-code"
-            inputmode="numeric"
-            placeholder="6 位动态码或恢复码"
-          >
-            <template #prefix><ShieldCheck :size="17" /></template>
-          </el-input>
-        </div>
-        <div class="login-options">
-          <el-checkbox v-model="remember">保持登录</el-checkbox>
-        </div>
-        <el-button
-          native-type="submit"
-          type="primary"
-          size="large"
-          :icon="LogIn"
-          :loading="loading"
-        >
-          登录
-        </el-button>
-      </form>
-      <p class="login-foot">支持普通 SSH 与远程 tmux 持久会话</p>
-    </section>
-  </main>
+      </div>
+      <div class="auth-options">
+        <el-checkbox v-model="remember" :disabled="loading">保持登录</el-checkbox>
+      </div>
+      <el-button
+        native-type="submit"
+        type="primary"
+        size="large"
+        :icon="ArrowRight"
+        :loading="loading"
+      >
+        登录
+      </el-button>
+    </form>
+  </AuthShell>
 </template>
 
 <style scoped>
@@ -201,7 +196,7 @@ async function submit() {
   display: grid;
   place-items: center;
   min-width: 0;
-  height: 40px;
+  height: 46px;
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--line-strong);

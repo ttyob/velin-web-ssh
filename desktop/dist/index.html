@@ -7,64 +7,57 @@
     <style>
       :root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
       * { box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; margin: 0; }
+      html, body { width: 100%; min-height: 100%; margin: 0; }
       body {
         display: grid;
         place-items: center;
-        background: #101418;
-        color: #edf2f5;
+        min-height: 100vh;
+        padding: 32px 24px;
+        background: radial-gradient(ellipse at 88% 0%, #283342 0, #171d26 32%, #101216 72%);
+        color: #ececf0;
       }
       .credential-dialog {
-        width: min(440px, calc(100vw - 32px));
+        width: min(408px, 100%);
         padding: 28px;
-        border: 1px solid #343c43;
-        border-radius: 8px;
-        background: #191f24;
-        box-shadow: 0 18px 52px rgba(0, 0, 0, 0.42);
+        border: 1px solid #ffffff14;
+        border-radius: 22px;
+        background: #1a1e25d9;
+        box-shadow: 0 24px 64px -32px #0008;
       }
       .credential-dialog[hidden] { display: none; }
-      .brand { margin: 0 0 18px; color: #78d6a6; font-size: 13px; font-weight: 700; }
-      h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: 0; }
-      .description { margin: 8px 0 22px; color: #aab5bd; font-size: 14px; line-height: 1.55; }
-      .field { margin-top: 14px; }
-      label { display: block; margin-bottom: 7px; color: #aab5bd; font-size: 12px; }
+      .brand { display: flex; align-items: center; gap: 9px; margin: 0 0 28px; font-size: 25px; font-weight: 600; letter-spacing: -.8px; }
+      .brand svg { padding: 7px; width: 36px; height: 36px; border: 1px solid #ffffff1a; border-radius: 11px; background: #ffffff0d; }
+      h1 { margin: 0; font-size: 24px; font-weight: 600; }
+      .description { margin: 10px 0 24px; color: #9299a6; font-size: 13px; line-height: 1.7; }
+      .field { margin-top: 16px; }
+      label { display: block; margin-bottom: 8px; color: #b9bfca; font-size: 12px; }
       input {
-        width: 100%;
-        height: 42px;
-        padding: 0 12px;
-        border: 1px solid #3b454d;
-        border-radius: 6px;
-        outline: none;
-        background: #11161a;
-        color: #f4f7f8;
+        width: 100%; height: 46px; padding: 0 13px;
+        border: 1px solid #ffffff1c; border-radius: 11px;
+        outline: none; background: #15181e; color: #ececf0;
         font: 14px Consolas, "Courier New", monospace;
-        letter-spacing: 0;
       }
-      input:focus { border-color: #5dbb8d; box-shadow: 0 0 0 2px rgba(93, 187, 141, 0.18); }
-      .notice { min-height: 20px; margin: 12px 0 4px; color: #9aa6ae; font-size: 12px; }
-      .notice.success { color: #78d6a6; }
-      .notice.error { color: #ff8b82; }
-      .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+      input:focus { border-color: #b3c0d6; }
+      .notice { min-height: 20px; margin: 16px 0 4px; color: #9299a6; font-size: 12px; line-height: 1.6; }
+      .notice.success { color: #b3c0d6; }
+      .notice.error { color: #e2a2a8; }
+      .actions { display: flex; gap: 10px; margin-top: 20px; }
       button {
-        min-width: 104px;
-        height: 38px;
-        padding: 0 16px;
-        border: 1px solid #414b53;
-        border-radius: 6px;
-        background: #252d33;
-        color: #edf2f5;
+        flex: 1; min-width: 0; min-height: 44px; padding: 0 12px;
+        border: 1px solid #ffffff24; border-radius: 11px;
+        background: transparent; color: #ececf0;
         font: 600 13px "Segoe UI", "Microsoft YaHei", sans-serif;
-        letter-spacing: 0;
         cursor: pointer;
       }
-      button:hover { background: #303941; }
-      button.primary { border-color: #62c394; background: #62c394; color: #0d2117; }
-      button.primary:hover { background: #78d6a6; }
+      button:hover { background: #ffffff0d; }
+      button:focus-visible { outline: 2px solid #b3c0d6; outline-offset: 3px; }
+      button.primary { border-color: #ececf0; background: #ececf0; color: #141519; }
+      button.primary:hover { background: #fff; }
     </style>
   </head>
   <body>
     <section id="credential-dialog" class="credential-dialog" role="dialog" aria-modal="true" hidden>
-      <p class="brand">VelinWebSSH</p>
+      <p class="brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>velin</p>
       <h1 id="credential-title">初始管理员凭据</h1>
       <p id="credential-description" class="description"></p>
       <div class="field">

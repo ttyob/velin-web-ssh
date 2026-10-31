@@ -28,7 +28,7 @@ const form = reactive<WebService>({
   skipTLSVerify: false,
 });
 const availableHosts = computed(() =>
-  props.hosts.filter((item) => item.credentialID),
+  props.hosts.filter((item) => (!item.protocol || item.protocol === "ssh") && (item.credentialID || item.hasPassword)),
 );
 const isHTTPS = computed(() => /^https:\/\//i.test(form.targetURL.trim()));
 

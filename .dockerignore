@@ -5,5 +5,6 @@ clipboard
 artifacts
 web/dist
 web/node_modules
+mobile/
 web/*.tsbuildinfo
 *.log

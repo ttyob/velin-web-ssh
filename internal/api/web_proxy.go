@@ -788,7 +788,7 @@ func (s *webProxySession) cookieJarURL(request *http.Request) *url.URL {
 }
 
 func isWebProxyControlCookie(name string) bool {
-	return name == cookieName || name == csrfCookieName || name == httpCookieName || name == httpCSRFCookieName || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie)
+	return name == cookieName || name == csrfCookieName || name == httpCookieName || name == httpCSRFCookieName || strings.HasPrefix(name, cookieName+"_") || strings.HasPrefix(name, csrfCookieName+"_") || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie)
 }
 
 func rewriteRequestOrigin(request *http.Request, prefix string, target *url.URL, upstreamHost string) {
@@ -1501,8 +1501,8 @@ func (a *API) saveWebService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, err := a.store.Host(user.ID, value.HostID)
-	if err != nil || host.CredentialID == "" {
-		writeError(w, http.StatusBadRequest, "invalid_web_service_host", "代理主机不存在或未绑定保存凭据")
+	if err != nil || (host.Protocol != "" && host.Protocol != "ssh") || (host.CredentialID == "" && !host.HasPassword) {
+		writeError(w, http.StatusBadRequest, "invalid_web_service_host", "请选择已保存密码或凭据的 SSH 主机")
 		return
 	}
 	value.TargetURL = target.String()

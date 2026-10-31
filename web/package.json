@@ -14,6 +14,7 @@
     "test:terminal": "node scripts/terminal-history.mjs",
     "test:desktop": "node scripts/desktop-recovery.mjs",
     "test:dialogs": "node scripts/dialog-motion.mjs",
+    "test:auth": "node scripts/auth-interface.mjs",
     "test:sessions": "node scripts/session-close.mjs",
     "test:connections": "node scripts/connection-onboarding.mjs",
     "test:e2e": "node scripts/smoke.mjs",

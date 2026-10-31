@@ -1,0 +1,8 @@
+{
+  "name": "velin-mobile-terminal",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node ../scripts/build-terminal.mjs", "test": "node --test test/*.test.mjs", "test:browser": "node ../scripts/test-terminal.mjs" },
+  "dependencies": { "@xterm/xterm": "5.5.0", "@xterm/addon-fit": "0.10.0" },
+  "devDependencies": { "playwright-core": "1.55.0" }
+}

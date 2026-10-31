@@ -140,6 +140,7 @@ func (a *API) Router() http.Handler {
 		r.Use(a.authenticate)
 		r.Use(a.requirePasswordChange)
 		r.Use(a.requireUnlocked)
+		a.registerMobileRoutes(r)
 		r.Get("/api/auth/me", a.me)
 		r.Post("/api/auth/lock", a.lockSession)
 		r.Post("/api/auth/unlock", a.unlockSession)
@@ -2108,6 +2109,7 @@ func (a *API) metrics(w http.ResponseWriter, _ *http.Request) {
 
 type terminalWSMessage struct {
 	Type, Data, Requester  string
+	InputID                string `json:"inputID"`
 	Foreground, Background string
 	Rows, Cols             int
 	Position, HistorySize  int
@@ -2168,7 +2170,19 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	resumeStreamID := r.URL.Query().Get("stream")
 	resumeOffset, _ := strconv.ParseUint(r.URL.Query().Get("offset"), 10, 64)
-	events, subscriptionDone, replay := s.Subscribe(clientID, resumeStreamID, resumeOffset, reconnectKey)
+	viewAttach := r.URL.Query().Get("attach") == "view"
+	deviceID := r.URL.Query().Get("device")
+	if _, parseErr := uuid.Parse(deviceID); parseErr != nil {
+		deviceID = ""
+	}
+	var events <-chan terminal.Event
+	var subscriptionDone <-chan struct{}
+	var replay terminal.Replay
+	if viewAttach {
+		events, subscriptionDone, replay = s.SubscribeView(clientID, resumeStreamID, resumeOffset)
+	} else {
+		events, subscriptionDone, replay = s.Subscribe(clientID, resumeStreamID, resumeOffset, reconnectKey)
+	}
 	defer s.Unsubscribe(clientID)
 	controller := ""
 	if s.IsController(clientID) {
@@ -2176,7 +2190,8 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 	}
 	meta := s.Meta()
 	historySize, alternateScreen := s.CachedHistoryState()
-	if err = writeJSON(terminal.Event{Type: "hello", ClientID: clientID, Controller: controller, Status: meta.Status, Message: meta.LastError, Truncated: replay.Truncated, StreamID: replay.StreamID, Offset: replay.Offset, HistorySize: historySize, AlternateScreen: alternateScreen}); err != nil {
+	geometry := s.Geometry()
+	if err = writeJSON(terminal.Event{Type: "hello", ClientID: clientID, Controller: controller, Status: meta.Status, Message: meta.LastError, Truncated: replay.Truncated, StreamID: replay.StreamID, Offset: replay.Offset, HistorySize: historySize, AlternateScreen: alternateScreen, Rows: geometry.Rows, Cols: geometry.Cols, GeometryVersion: geometry.GeometryVersion}); err != nil {
 		return
 	}
 	go func() {
@@ -2270,6 +2285,14 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "input":
 			raw, decodeErr := base64.StdEncoding.DecodeString(msg.Data)
+			if msg.InputID != "" {
+				if decodeErr != nil || !viewAttach || deviceID == "" {
+					_ = writeJSON(terminal.InputAck{Type: "input_ack", InputID: msg.InputID, Result: "rejected", Code: "invalid_input"})
+				} else {
+					_ = writeJSON(s.WriteAcknowledged(clientID, tokenHash+":"+deviceID, msg.InputID, raw))
+				}
+				break
+			}
 			if decodeErr == nil {
 				_ = s.Write(clientID, raw)
 			}

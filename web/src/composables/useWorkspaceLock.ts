@@ -1,4 +1,4 @@
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ApiError, api, json } from "../api";
 import type { Preferences } from "../types";
@@ -23,10 +23,8 @@ export function useWorkspaceLock(options: {
   logout: () => Promise<void>;
 }) {
   const locked = ref(Boolean(options.auth.user?.sessionLocked));
-  const lockPIN = ref("");
   const unlocking = ref(false);
   const lockError = ref("");
-  const lockPINInput = ref<any>();
   let idleTimer: number | undefined;
   let locking = false;
   try {
@@ -40,8 +38,8 @@ export function useWorkspaceLock(options: {
   }
 
   function showLockScreen() {
+    if (locked.value) return;
     locked.value = true;
-    lockPIN.value = "";
     lockError.value = "";
     options.closeOverlays();
     (document.activeElement as HTMLElement | null)?.blur?.();
@@ -49,7 +47,6 @@ export function useWorkspaceLock(options: {
     try {
       sessionStorage.setItem(lockStorageKey, "1");
     } catch {}
-    nextTick(() => lockPINInput.value?.focus?.());
   }
 
   function broadcast(value: "locked" | "unlocked") {
@@ -87,23 +84,22 @@ export function useWorkspaceLock(options: {
     }
   }
 
-  async function unlockWorkspace() {
-    if (!/^\d{6}$/.test(lockPIN.value) || unlocking.value) return;
+  async function unlockWorkspace(pin: string) {
+    if (!/^\d{6}$/.test(pin) || unlocking.value) return false;
     unlocking.value = true;
     lockError.value = "";
     try {
-      await api("/api/auth/unlock", { method: "POST", body: json({ pin: lockPIN.value }) });
+      await api("/api/auth/unlock", { method: "POST", body: json({ pin }) });
       locked.value = false;
-      lockPIN.value = "";
       if (options.auth.user) options.auth.user.sessionLocked = false;
       clearStoredLock();
       broadcast("unlocked");
       await options.reload();
       resetIdleTimer();
+      return true;
     } catch (error) {
       lockError.value = error instanceof Error ? error.message : "解锁失败";
-      await nextTick();
-      lockPINInput.value?.focus?.();
+      return false;
     } finally {
       unlocking.value = false;
     }
@@ -116,7 +112,6 @@ export function useWorkspaceLock(options: {
       if (signal.value === "locked") showLockScreen();
       else if (signal.value === "unlocked") {
         locked.value = false;
-        lockPIN.value = "";
         lockError.value = "";
         if (options.auth.user) options.auth.user.sessionLocked = false;
         clearStoredLock();
@@ -142,7 +137,6 @@ export function useWorkspaceLock(options: {
     window.addEventListener("storage", handleSignal);
     window.addEventListener("velin:session-locked", showLockScreen);
     resetIdleTimer();
-    if (locked.value) nextTick(() => lockPINInput.value?.focus?.());
   });
   onBeforeUnmount(() => {
     clearTimeout(idleTimer);
@@ -154,5 +148,5 @@ export function useWorkspaceLock(options: {
   });
   watch(() => [options.preferences.lockEnabled, options.preferences.autoLockMinutes], resetIdleTimer);
 
-  return { locked, lockPIN, unlocking, lockError, lockPINInput, lockWorkspace, unlockWorkspace, clearStoredLock };
+  return { locked, unlocking, lockError, lockWorkspace, unlockWorkspace, clearStoredLock };
 }

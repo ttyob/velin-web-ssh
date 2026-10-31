@@ -1,0 +1,8 @@
+:root { color-scheme: dark; background: #101113; }
+html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+#viewport { height: 100%; overflow: auto; padding: 6px 6px; box-sizing: border-box; }
+#terminal { height: 100%; min-width: 100%; }
+.xterm { height: 100%; }
+.xterm-viewport { scrollbar-width: thin; scrollbar-color: #51545e transparent; }
+body.browse { touch-action: pan-x; }
+body.select { touch-action: none; }

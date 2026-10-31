@@ -27,7 +27,6 @@ import {
   FolderOpen,
   GitBranch,
   Globe2,
-  KeyRound,
   LockKeyhole,
   LogOut,
   Menu,
@@ -68,6 +67,7 @@ import TmuxInstallDialog from "../components/TmuxInstallDialog.vue";
 import ConnectionProgressPane from "../features/connections/ConnectionProgressPane.vue";
 import type { PendingConnection } from "../features/connections/types";
 import WebServiceList from "../components/WebServiceList.vue";
+import WorkspaceLock from "../components/WorkspaceLock.vue";
 import { useWorkspaceLock } from "../composables/useWorkspaceLock";
 import { launchNativeRDP, nativeRDPAvailable } from "../rdp";
 import {
@@ -2054,10 +2054,8 @@ function closeWorkspaceOverlays() {
 }
 const {
   locked,
-  lockPIN,
   unlocking,
   lockError,
-  lockPINInput,
   lockWorkspace,
   unlockWorkspace,
   clearStoredLock,
@@ -2068,6 +2066,10 @@ const {
   reload: load,
   logout,
 });
+const lockCover = ref<InstanceType<typeof WorkspaceLock>>();
+async function unlockFromCover(pin: string) {
+  if (!(await unlockWorkspace(pin))) lockCover.value?.resetPIN();
+}
 async function confirmLogout() {
   try {
     await ElMessageBox.confirm("退出账号不会终止正在运行的远程终端任务。", "退出登录", {
@@ -2979,42 +2981,10 @@ onBeforeUnmount(() => {
       :session-id="gitSessionID"
       :initial-path="gitPath"
     />
-    <Transition name="workspace-lock">
-      <section v-if="locked" class="workspace-lock" aria-modal="true" role="dialog">
-        <form class="workspace-lock-panel" @submit.prevent="unlockWorkspace">
-          <span class="workspace-lock-icon"><LockKeyhole :size="24" /></span>
-          <div class="workspace-lock-copy">
-            <h1>工作区已锁定</h1>
-            <p>{{ auth.user?.username }}</p>
-          </div>
-          <label for="workspace-unlock-pin">6 位锁屏 PIN</label>
-          <el-input
-            id="workspace-unlock-pin"
-            ref="lockPINInput"
-            :model-value="lockPIN"
-            type="password"
-            maxlength="6"
-            inputmode="numeric"
-            autocomplete="one-time-code"
-            show-password
-            :prefix-icon="KeyRound"
-            @input="lockError = ''"
-            @update:model-value="lockPIN = $event.replace(/\D/g, '').slice(0, 6)"
-          />
-          <p v-if="lockError" class="workspace-lock-error">{{ lockError }}</p>
-          <el-button
-            native-type="submit"
-            type="primary"
-            :loading="unlocking"
-            :disabled="lockPIN.length !== 6"
-          >
-            解锁
-          </el-button>
-          <button type="button" class="workspace-lock-logout" @click="logout">
-            切换账号
-          </button>
-        </form>
-      </section>
+    <Transition name="system-lock">
+      <WorkspaceLock v-if="locked" ref="lockCover"
+        :busy="unlocking" :error="lockError" @unlock="unlockFromCover" @logout="logout"
+        @clear-error="lockError = ''" />
     </Transition>
   </main>
 </template>

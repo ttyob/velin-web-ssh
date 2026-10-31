@@ -6,6 +6,8 @@ clipboard/
 !/docs/module-removal-20261030.md
 !/docs/deployment.md
 !/docs/development.md
+!/docs/mobile-app-requirements.md
+!/docs/mobile-app-development-plan.md
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
@@ -20,3 +22,5 @@ dist/fnos/
 .DS_Store
 velin
 .well-known/acme-challenge/
+mobile/app/assets/terminal/
+mobile/terminal/node_modules/

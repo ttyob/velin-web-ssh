@@ -2,17 +2,83 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
+func TestSaveWebServiceAcceptsOnlyOwnedSSHHostsWithSavedAuthentication(t *testing.T) {
+	for _, tc := range []struct {
+		name, protocol, password, credential, owner string
+		status                                      int
+	}{
+		{"saved password", "ssh", "encrypted", "", "user", 200},
+		{"saved credential", "ssh", "", "credential", "user", 200},
+		{"legacy SSH", "", "encrypted", "", "user", 200},
+		{"prompt authentication", "ssh", "", "", "user", 400},
+		{"RDP", "rdp", "encrypted", "", "user", 400},
+		{"VNC", "vnc", "", "credential", "user", 400},
+		{"another owner", "ssh", "encrypted", "", "other", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := store.Open(filepath.Join(t.TempDir(), "proxy.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			for _, id := range []string{"user", "other"} {
+				if err := db.CreateUser(id, id, "hash", "user"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.SaveCredential(store.Credential{ID: "credential", UserID: tc.owner, Name: "key", Kind: "key", Secret: "encrypted"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SaveHost(store.Host{ID: "host", UserID: tc.owner, Name: "server", Address: "127.0.0.1", Port: 22, Username: "dev", Protocol: tc.protocol, PasswordEnc: tc.password, CredentialID: tc.credential}); err != nil {
+				t.Fatal(err)
+			}
+			a := &API{store: db, webProxies: &webProxyManager{}}
+			r := httptest.NewRequest(http.MethodPost, "/api/web-services", strings.NewReader(`{"hostID":"host","name":"preview","targetURL":"http://127.0.0.1:5173"}`))
+			r = r.WithContext(context.WithValue(r.Context(), userKey, store.User{ID: "user"}))
+			w := httptest.NewRecorder()
+			a.saveWebService(w, r)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			services, err := db.WebServices("user")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status == 200 {
+				var saved store.WebService
+				if err := json.Unmarshal(w.Body.Bytes(), &saved); err != nil {
+					t.Fatal(err)
+				}
+				if len(services) != 1 || saved.HostID != "host" || saved.ProxyMode != "path" {
+					t.Fatalf("unexpected service: %+v", saved)
+				}
+			} else if len(services) != 0 {
+				t.Fatal("invalid proxy configuration was persisted")
+			}
+		})
+	}
+}
+
 func TestValidateWebProxyInput(t *testing.T) {
+	// Shared mobile fixture: cookie names use raw URL base64, not hexadecimal.
+	if actual := webServiceAccessCookieName("proxy"); actual != "velin_web_service_EkGTbU3TqtaP" {
+		t.Fatalf("mobile access-cookie contract changed: %q", actual)
+	}
 	valid, host, err := validateWebProxyInput(webProxyInput{HostID: "ssh-host", TargetURL: "https://192.168.1.1:8443/admin"})
 	if err != nil || valid.String() != "https://192.168.1.1:8443/admin" || host != "192.168.1.1:8443" {
 		t.Fatalf("valid target=%v host=%q err=%v", valid, host, err)
@@ -755,7 +821,7 @@ func TestPathAccessIsReusableAndServiceScoped(t *testing.T) {
 }
 
 func TestUpstreamCookiesRemoveVelinSecurityCookies(t *testing.T) {
-	request := &http.Request{Header: http.Header{"Cookie": {"velin_session=secret; velin_csrf=token; velin_session_http=secret; velin_csrf_http=token; velin_host_port_abcd=ticket; velin_web_service_abcd=ticket; upstream=value"}}}
+	request := &http.Request{Header: http.Header{"Cookie": {"velin_session=secret; velin_csrf=token; velin_session_http=secret; velin_session_abcd=secret; velin_session_http_abcd=secret; velin_csrf_http=token; velin_csrf_abcd=token; velin_csrf_http_abcd=token; velin_host_port_abcd=ticket; velin_web_service_abcd=ticket; upstream=value"}}}
 	if actual := upstreamCookies(request); actual != "upstream=value" {
 		t.Fatalf("upstream cookies=%q", actual)
 	}

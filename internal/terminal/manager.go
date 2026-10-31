@@ -86,6 +86,11 @@ type Session struct {
 	broadcastMu           sync.Mutex
 	historyScrollMu       sync.Mutex
 	commandMu             sync.Mutex
+	inputMu               sync.Mutex
+	mobileInputs          map[string]mobileInputReceipt
+	gridRows              int
+	gridCols              int
+	gridVersion           uint64
 	sshClient             *ssh.Client
 	sshSession            *ssh.Session
 	commandRunner         *commandRunner
@@ -150,6 +155,9 @@ type Event struct {
 	Fingerprint     string `json:"fingerprint,omitempty"`
 	HostName        string `json:"hostName,omitempty"`
 	HostAddress     string `json:"hostAddress,omitempty"`
+	Rows            int    `json:"rows,omitempty"`
+	Cols            int    `json:"cols,omitempty"`
+	GeometryVersion uint64 `json:"geometryVersion,omitempty"`
 }
 
 type Replay struct {
@@ -1087,14 +1095,14 @@ func (s *Session) broadcastEvent(ev Event, raw []byte) {
 	}
 }
 func (s *Session) Subscribe(clientID, resumeStreamID string, resumeOffset uint64, reconnectKeys ...string) (<-chan Event, <-chan struct{}, Replay) {
-	return s.subscribe(clientID, resumeStreamID, resumeOffset, true, reconnectKeys...)
+	return s.subscribe(clientID, resumeStreamID, resumeOffset, true, true, reconnectKeys...)
 }
 
 func (s *Session) SubscribeReadOnly(clientID, resumeStreamID string, resumeOffset uint64) (<-chan Event, <-chan struct{}, Replay) {
-	return s.subscribe(clientID, resumeStreamID, resumeOffset, false)
+	return s.subscribe(clientID, resumeStreamID, resumeOffset, false, false)
 }
 
-func (s *Session) subscribe(clientID, resumeStreamID string, resumeOffset uint64, canControl bool, reconnectKeys ...string) (<-chan Event, <-chan struct{}, Replay) {
+func (s *Session) subscribe(clientID, resumeStreamID string, resumeOffset uint64, canControl, autoControl bool, reconnectKeys ...string) (<-chan Event, <-chan struct{}, Replay) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.streamID == "" {
@@ -1107,12 +1115,12 @@ func (s *Session) subscribe(clientID, resumeStreamID string, resumeOffset uint64
 	subscriber := newTerminalSubscriber(reconnectKey, canControl)
 	s.subs[clientID] = subscriber
 	controllerSubscriber := s.subs[s.controller]
-	if canControl && reconnectKey != "" && controllerSubscriber != nil && controllerSubscriber.reconnectKey == reconnectKey {
+	if autoControl && canControl && reconnectKey != "" && controllerSubscriber != nil && controllerSubscriber.reconnectKey == reconnectKey {
 		controllerSubscriber.close()
 		s.controller = clientID
 		s.controllerSeen = time.Now()
 		s.pendingControl = ""
-	} else if canControl && (s.controller == "" || time.Since(s.controllerSeen) > 20*time.Second) {
+	} else if autoControl && canControl && (s.controller == "" || time.Since(s.controllerSeen) > 20*time.Second) {
 		s.controller = clientID
 		s.controllerSeen = time.Now()
 	}
@@ -1247,21 +1255,35 @@ func (s *Session) IsController(clientID string) bool {
 	return false
 }
 func (s *Session) Write(clientID string, data []byte) error {
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+	_, err := s.writeBytes(clientID, data)
+	return err
+}
+
+func (s *Session) writeBytes(clientID string, data []byte) (int, error) {
 	if !s.IsController(clientID) {
-		return ErrNotController
+		return 0, ErrNotController
 	}
 	if err := s.leaveTmuxHistoryMode(); err != nil {
-		return err
+		return 0, err
 	}
 	s.mu.RLock()
+	if s.controller != clientID {
+		s.mu.RUnlock()
+		return 0, ErrNotController
+	}
 	w := s.stdin
 	closed := s.closed
 	s.mu.RUnlock()
 	if closed || w == nil {
-		return errors.New("terminal not attached")
+		return 0, errors.New("terminal not attached")
 	}
-	_, err := w.Write(data)
-	return err
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }
 
 func (s *Session) SendApplicationMouse(clientID, action string, lines, row, column int) error {
@@ -1660,7 +1682,28 @@ func (s *Session) Resize(clientID string, rows, cols int) error {
 	if ss == nil {
 		return errors.New("terminal not attached")
 	}
-	return ss.WindowChange(rows, cols)
+	// Order the geometry event before output produced by the new grid.
+	s.broadcastMu.Lock()
+	defer s.broadcastMu.Unlock()
+	if err := ss.WindowChange(rows, cols); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.gridRows, s.gridCols = rows, cols
+	s.gridVersion++
+	event := s.geometryLocked()
+	subs := make([]*terminalSubscriber, 0, len(s.subs))
+	for _, sub := range s.subs {
+		subs = append(subs, sub)
+	}
+	s.mu.Unlock()
+	for _, sub := range subs {
+		select {
+		case sub.events <- event:
+		case <-sub.done:
+		}
+	}
+	return nil
 }
 func (s *Session) killRemote(ctx context.Context) error {
 	s.mu.RLock()

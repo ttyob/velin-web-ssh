@@ -2,6 +2,8 @@
 
 [返回首页](../README.md)
 
+手机 App 已有独立 Flutter 第一版与 Android 调试构建，真机验收待完成：[构建与使用](../mobile/README.md) · [需求与技术设计](mobile-app-requirements.md) · [开发任务与验收计划](mobile-app-development-plan.md)。
+
 需要 Go 1.25.13、Node.js 18.20.4 或更高版本，以及 npm。
 
 ## 本地运行
@@ -47,6 +49,7 @@ npm run test:terminal
 npm run test:terminal -- --windows
 npm run test:desktop
 npm run test:dialogs
+npm run test:auth
 npm run test:sessions
 npm run test:connections
 ```
@@ -54,6 +57,12 @@ npm run test:connections
 ## Windows 打包
 
 Windows GUI 使用 Wails 构建，在项目根目录先构建要内嵌的网页资源：
+
+登录、首次改密与锁屏在浏览器和 Windows WebView2 中共用同一套 Vue 页面。认证样式集中于 `web/src/styles-auth.css`，使用独立的黑灰配色，工作区主题偏好不覆盖认证页面。锁屏中央显示简洁指针钟表、24 小时制时间、锁定状态和点击解锁提示；时间取自当前设备，每秒更新，切回页面时立即校准，退出锁屏后清理计时器。点击提示以轻微呼吸和圆环波纹循环引导，点击屏幕或按 Enter / Space 通过上移、淡入与模糊过渡展开 PIN，Esc 反向收起并清空输入。PIN 验证成功后，遮罩向上揭开、表单淡出，露出工作区；验证失败保持锁屏。减少动态效果偏好会关闭过渡和循环动效。切换账号入口位于 PIN 界面，焦点限制在遮罩内，底层工作区使用 `inert`。验证、限流、自动锁定及跨标签页信号继续复用原服务端流程。Windows 首次启动的管理员凭据提示位于 `desktop/dist/index.html`，保持同样的表单和配色。现有项目没有开放注册接口，账户仍由管理员创建。
+
+登录会话与安全令牌 Cookie 使用部署 ID 区分同一主机上的不同服务，并隔离历史 Cookie 的 Secure 属性及路径冲突。升级时兼容可读取的旧登录会话；登录后通过 `/api/auth/me` 确认 Cookie 已生效，再进入工作区或首次改密页。改密页遇到会话失效会返回登录页。
+
+`npm --prefix web run test:auth` 使用隔离的 API 数据验证验证码、双因素认证、改密确认、手动 / 闲置 / 刷新恢复锁屏、错误 PIN、焦点限制、键盘和窄屏布局，并验证 Windows 初始账户提示、登录 Cookie 未保存及改密会话失效的处理。后端测试覆盖存在历史 Cookie 时的登录、首次改密、访问工作区和退出流程。截图写入 `artifacts/auth-redesign-20261031/`；浏览器检查不能替代 Windows 真机 WebView2 验收。
 
 ```powershell
 npm --prefix web ci

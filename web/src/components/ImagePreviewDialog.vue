@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { downloadToolFile } from "../utils/toolDownloads";
 import { computed, ref, watch } from "vue";
 import { Download, Image as ImageIcon } from "@lucide/vue";
 import type { Host } from "../types";
@@ -34,9 +35,7 @@ function download() {
   const session = props.sessionId
     ? `&session=${encodeURIComponent(props.sessionId)}`
     : "";
-  const link = document.createElement("a");
-  link.href = `/api/sftp/${props.host.id}/download?path=${encodeURIComponent(props.file.path)}${session}`;
-  link.click();
+  downloadToolFile(`/api/sftp/${props.host.id}/download?path=${encodeURIComponent(props.file.path)}${session}`);
 }
 
 function formatBytes(size?: number) {

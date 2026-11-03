@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { downloadToolBlob } from "../utils/toolDownloads";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import {
   Box,
@@ -802,14 +803,11 @@ function startLogsPolling() {
   logsTimer = window.setInterval(() => void refreshLogs(), 2000);
 }
 
-function downloadLogs() {
+async function downloadLogs() {
   const name = logsTarget.value?.name || "container";
   const blob = new Blob([logs.value], { type: "text/plain;charset=utf-8" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = `${name}-logs.txt`;
-  link.click();
-  URL.revokeObjectURL(link.href);
+  try { await downloadToolBlob(blob, `${name}-logs.txt`); }
+  catch (e) { ElMessage.error(e instanceof Error ? e.message : "下载失败"); }
 }
 
 async function pullImage() {

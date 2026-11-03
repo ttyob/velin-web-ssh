@@ -12,13 +12,22 @@ class TerminalSurface extends StatefulWidget {
 
 class _TerminalSurfaceState extends State<TerminalSurface> {
   late final WebViewController controller;
+  Color get _background {
+    final hex = widget.port.background;
+    final value = hex == null
+        ? null
+        : int.tryParse(hex.substring(1), radix: 16);
+    return value == null ? const Color(0xff101113) : Color(0xff000000 | value);
+  }
+
   Future<void> _writes = Future.value();
   @override
   void initState() {
     super.initState();
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xff101113))
+      ..setBackgroundColor(_background)
+      // Zoom is handled inside the page so every edge stays reachable.
       ..enableZoom(false)
       ..addJavaScriptChannel(
         'VelinTerminal',
@@ -51,6 +60,14 @@ class _TerminalSurfaceState extends State<TerminalSurface> {
       )
       ..setNavigationDelegate(
         NavigationDelegate(
+          onPageStarted: (_) {
+            final hex = widget.port.background;
+            if (hex != null && RegExp(r'^#[0-9a-fA-F]{6}$').hasMatch(hex)) {
+              controller.runJavaScript(
+                "document.documentElement.style.backgroundColor='$hex'",
+              );
+            }
+          },
           onWebResourceError: (error) {
             if (mounted && error.isForMainFrame != false) {
               widget.port.onMessage?.call({'type': 'bridge_error'});
@@ -73,5 +90,8 @@ class _TerminalSurfaceState extends State<TerminalSurface> {
   }
 
   @override
-  Widget build(BuildContext context) => WebViewWidget(controller: controller);
+  Widget build(BuildContext context) => ColoredBox(
+    color: _background,
+    child: WebViewWidget(controller: controller),
+  );
 }

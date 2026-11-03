@@ -158,7 +158,7 @@ class _LoginScreenState extends State<LoginScreen> {
     title: '登录工作台',
     subtitle: '连接你的服务，继续手边的工作。',
     demo: widget.demo,
-    footer: const Row(
+    footer: Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(Icons.shield_outlined, size: 14, color: V.muted),
@@ -318,7 +318,7 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 if (busy) ...[
-                  const SizedBox(
+                  SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(

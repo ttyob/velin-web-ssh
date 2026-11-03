@@ -101,6 +101,7 @@ type Session struct {
 	pendingControl        string
 	buffer                *ringBuffer
 	streamID              string
+	lastOutputAt          time.Time
 	tmuxCaptureSafe       bool
 	tmuxHistoryMode       bool
 	tmuxHistoryPos        int
@@ -165,6 +166,31 @@ type Replay struct {
 	Offset    uint64
 	Segments  [][]byte
 	Truncated bool
+}
+
+// Size is the number of replay bytes.
+func (r Replay) Size() int {
+	total := 0
+	for _, segment := range r.Segments {
+		total += len(segment)
+	}
+	return total
+}
+
+// Tail keeps only the newest whole segments that cover at least n bytes, so a
+// client that opens a long session downloads its last screens instead of the
+// whole buffer. Offset still names the end of the stream.
+func (r Replay) Tail(n int) Replay {
+	if n <= 0 {
+		return r
+	}
+	total, keep := 0, len(r.Segments)
+	for keep > 0 && total < n {
+		keep--
+		total += len(r.Segments[keep])
+	}
+	r.Segments = r.Segments[keep:]
+	return r
 }
 
 func NewManager(s *store.Store, vault *security.Vault, deploymentID string, dialers ...netdial.Dialer) *Manager {
@@ -1081,6 +1107,7 @@ func (s *Session) broadcastEvent(ev Event, raw []byte) {
 	s.mu.Lock()
 	if ev.Type == "output" {
 		ev.Offset = s.buffer.Write(raw)
+		s.lastOutputAt = time.Now().UTC()
 	}
 	subs := make([]*terminalSubscriber, 0, len(s.subs))
 	for _, sub := range s.subs {
@@ -1188,6 +1215,29 @@ func (s *Session) RequestControl(clientID string) bool {
 	s.mu.Unlock()
 	return false
 }
+
+// ForceControl hands control to clientID without waiting for the current
+// controller to approve. It is only reachable from the authenticated owner's
+// own terminal socket (never from share links) and still requires a
+// subscriber that is allowed to control, so view-only attachments cannot use it.
+func (s *Session) ForceControl(clientID string) bool {
+	s.mu.Lock()
+	subscriber := s.subs[clientID]
+	if subscriber == nil || !subscriber.canControl {
+		s.mu.Unlock()
+		return false
+	}
+	changed := s.controller != clientID
+	s.controller = clientID
+	s.controllerSeen = time.Now()
+	s.pendingControl = ""
+	s.mu.Unlock()
+	if changed {
+		s.broadcast(Event{Type: "controller", Controller: clientID})
+	}
+	return true
+}
+
 func (s *Session) RespondControl(clientID, requester string, approved bool) bool {
 	s.mu.Lock()
 	if s.controller != clientID || s.pendingControl != requester {

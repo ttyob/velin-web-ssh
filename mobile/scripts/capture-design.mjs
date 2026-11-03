@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const require = createRequire(new URL('../terminal/package.json', import.meta.url));
 const { chromium } = require('playwright-core');
 const base = process.env.VELIN_MOBILE_PREVIEW_URL || 'http://127.0.0.1:8388/';
-const target = new URL('../design/screenshots/', import.meta.url);
+const target = process.env.VELIN_MOBILE_SCREENSHOT_DIR
+  ? pathToFileURL(resolve(process.env.VELIN_MOBILE_SCREENSHOT_DIR) + '/')
+  : new URL('../design/screenshots/', import.meta.url);
 await mkdir(target, { recursive: true });
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
@@ -75,7 +79,7 @@ try {
   const fullscreenRatio = await terminalArea(.98);
   assert.equal(frame.isDetached(), false, 'Fullscreen recreated the terminal');
   assert((await frame.locator('.xterm-rows').textContent()).includes('/workspace/velin'));
-  assert.equal(await button('终端操作').count(), 0);
+  assert.equal(await button('终端操作').count(), 1);
   await capture('terminal-fullscreen');
   await button('退出全屏').tap();
   assert.equal(frame.isDetached(), false, 'Exiting fullscreen recreated the terminal');
@@ -103,6 +107,29 @@ try {
   await capture('terminal-selection');
   await button('退出选择').tap();
   await frame.waitForFunction(() => document.body.className === 'browse');
+  // Long press must expose native copy controls even while the normal dock is hidden.
+  await button('全屏终端').tap();
+  await frame.evaluate(() => {
+    const area = document.querySelector('#viewport');
+    const rect = document.querySelector('.xterm-screen').getBoundingClientRect();
+    const point = new Touch({ identifier: 1, target: area, clientX: rect.left + 20, clientY: rect.top + 8 });
+    area.dispatchEvent(new TouchEvent('touchstart', { touches: [point], bubbles: true }));
+  });
+  await button('复制').waitFor();
+  await frame.evaluate(() => {
+    const area = document.querySelector('#viewport');
+    area.dispatchEvent(new TouchEvent('touchend', { touches: [], changedTouches: [], bubbles: true }));
+  });
+  await settle();
+  assert.equal(await button('复制').isEnabled(), true, 'Long press in fullscreen must enable copy');
+  assert.equal(await frame.locator('.selection-handle:visible').count(), 2);
+  await capture('terminal-long-press');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await button('复制').tap();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '/workspace/velin');
+  await button('退出选择').tap();
+  await button('退出全屏').tap();
+  assert.equal(frame.isDetached(), false, 'Long-press selection recreated the terminal');
   await button('展开输入').tap();
   await button('输入选项').tap();
   await page.getByRole('menuitem', { name: '上传附件' }).tap();

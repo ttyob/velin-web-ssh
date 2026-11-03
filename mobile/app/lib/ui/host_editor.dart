@@ -56,7 +56,10 @@ class _HostEditorState extends State<HostEditor> {
         ? 'password'
         : 'prompt';
     jump = host?.config['jumpHostID'] as String? ?? '';
-    mode = host?.config['sessionMode'] as String? ?? 'tmux';
+    // New hosts start as plain SSH; an existing host keeps what it was saved with.
+    mode = host == null
+        ? 'normal'
+        : host.config['sessionMode'] as String? ?? 'tmux';
     _loadCredentials();
   }
 
@@ -163,153 +166,155 @@ class _HostEditorState extends State<HostEditor> {
         style: const TextStyle(fontSize: 16),
       ),
     ),
-    body: SafeArea(
-      top: false,
-      child: Form(
-        key: form,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (widget.demo)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 16),
-                child: Text(
-                  '示例预览 · 修改仅在本次预览生效',
-                  style: TextStyle(color: V.muted, fontSize: 12),
-                ),
-              ),
-            _text('name', '主机名称', hint: '例如：开发服务器', required: true),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: _text(
-                    'address',
-                    '主机地址',
-                    hint: 'IP 或域名',
-                    required: true,
+    body: Scene(
+      child: SafeArea(
+        top: false,
+        child: Form(
+          key: form,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (widget.demo)
+                Padding(
+                  padding: EdgeInsets.only(bottom: 16),
+                  child: Text(
+                    '示例预览 · 修改仅在本次预览生效',
+                    style: TextStyle(color: V.muted, fontSize: 12),
                   ),
                 ),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 92,
-                  child: TextFormField(
-                    controller: field('port'),
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: '端口'),
-                    validator: (v) {
-                      final p = int.tryParse(v ?? '');
-                      return p == null || p < 1 || p > 65535 ? '端口无效' : null;
-                    },
+              _text('name', '主机名称', hint: '例如：开发服务器', required: true),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: _text(
+                      'address',
+                      '主机地址',
+                      hint: 'IP 或域名',
+                      required: true,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            _text('username', '用户名', required: true),
-            DropdownButtonFormField<String>(
-              initialValue: auth,
-              decoration: const InputDecoration(labelText: '认证方式'),
-              items: const [
-                DropdownMenuItem(value: 'password', child: Text('保存密码')),
-                DropdownMenuItem(value: 'credential', child: Text('已存凭据')),
-                DropdownMenuItem(value: 'prompt', child: Text('连接时输入')),
-              ],
-              onChanged: (v) => setState(() => auth = v!),
-            ),
-            const SizedBox(height: 14),
-            if (auth == 'password')
-              _text(
-                'password',
-                'SSH 密码',
-                secret: true,
-                hint: widget.host?.hasPassword == true ? '留空保留当前密码' : null,
-              ),
-            if (auth == 'credential') ...[
-              DropdownButtonFormField<String>(
-                initialValue: credential,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: '选择凭据'),
-                items: [
-                  const DropdownMenuItem(value: '', child: Text('请选择')),
-                  if (credential.isNotEmpty &&
-                      !credentials.any((c) => c['id'] == credential))
-                    DropdownMenuItem(
-                      value: credential,
-                      child: const Text('当前绑定凭据'),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 92,
+                    child: TextFormField(
+                      controller: field('port'),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: '端口'),
+                      validator: (v) {
+                        final p = int.tryParse(v ?? '');
+                        return p == null || p < 1 || p > 65535 ? '端口无效' : null;
+                      },
                     ),
-                  for (final c in credentials)
-                    DropdownMenuItem(
-                      value: c['id'] as String,
-                      child: Text(
-                        '${c['name']}',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
+                  ),
                 ],
-                validator: (v) => v == null || v.isEmpty ? '请选择凭据' : null,
-                onChanged: (v) => credential = v!,
               ),
-              if (credentialError.isNotEmpty)
-                TextButton(
-                  onPressed: _loadCredentials,
-                  child: Text('凭据加载失败，点击重试：$credentialError'),
-                ),
+              _text('username', '用户名', required: true),
+              DropdownButtonFormField<String>(
+                initialValue: auth,
+                decoration: const InputDecoration(labelText: '认证方式'),
+                items: const [
+                  DropdownMenuItem(value: 'password', child: Text('保存密码')),
+                  DropdownMenuItem(value: 'credential', child: Text('已存凭据')),
+                  DropdownMenuItem(value: 'prompt', child: Text('连接时输入')),
+                ],
+                onChanged: (v) => setState(() => auth = v!),
+              ),
               const SizedBox(height: 14),
-            ],
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: const Text('更多设置', style: TextStyle(fontSize: 14)),
-              subtitle: const Text(
-                '启动目录、会话模式、跳板机、分组',
-                style: TextStyle(fontSize: 11, color: V.muted),
-              ),
-              children: [
-                _text('initialDirectory', '启动目录', hint: '/workspace/project'),
-                DropdownButtonFormField<String>(
-                  initialValue: mode,
-                  decoration: const InputDecoration(labelText: '会话模式'),
-                  items: const [
-                    DropdownMenuItem(value: 'tmux', child: Text('tmux 持久会话')),
-                    DropdownMenuItem(value: 'normal', child: Text('普通 SSH')),
-                  ],
-                  onChanged: (v) => mode = v!,
+              if (auth == 'password')
+                _text(
+                  'password',
+                  'SSH 密码',
+                  secret: true,
+                  hint: widget.host?.hasPassword == true ? '留空保留当前密码' : null,
                 ),
-                const SizedBox(height: 14),
+              if (auth == 'credential') ...[
                 DropdownButtonFormField<String>(
-                  initialValue: jump,
+                  initialValue: credential,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: '跳板机'),
+                  decoration: const InputDecoration(labelText: '选择凭据'),
                   items: [
-                    const DropdownMenuItem(value: '', child: Text('直连')),
-                    for (final h in widget.hosts.where(
-                      (h) =>
-                          h.id != widget.host?.id &&
-                          (h.savedAuth || h.id == jump),
-                    ))
+                    const DropdownMenuItem(value: '', child: Text('请选择')),
+                    if (credential.isNotEmpty &&
+                        !credentials.any((c) => c['id'] == credential))
                       DropdownMenuItem(
-                        value: h.id,
-                        child: Text(h.name, overflow: TextOverflow.ellipsis),
+                        value: credential,
+                        child: const Text('当前绑定凭据'),
+                      ),
+                    for (final c in credentials)
+                      DropdownMenuItem(
+                        value: c['id'] as String,
+                        child: Text(
+                          '${c['name']}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                   ],
-                  onChanged: (v) => jump = v!,
+                  validator: (v) => v == null || v.isEmpty ? '请选择凭据' : null,
+                  onChanged: (v) => credential = v!,
                 ),
+                if (credentialError.isNotEmpty)
+                  TextButton(
+                    onPressed: _loadCredentials,
+                    child: Text('凭据加载失败，点击重试：$credentialError'),
+                  ),
                 const SizedBox(height: 14),
-                _text('groupName', '分组'),
-                _text('notes', '备注'),
               ],
-            ),
-            if (error.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(error, style: const TextStyle(color: V.danger)),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('更多设置', style: TextStyle(fontSize: 14)),
+                subtitle: Text(
+                  '启动目录、会话模式、跳板机、分组',
+                  style: TextStyle(fontSize: 11, color: V.muted),
+                ),
+                children: [
+                  _text('initialDirectory', '启动目录', hint: '/workspace/project'),
+                  DropdownButtonFormField<String>(
+                    initialValue: mode,
+                    decoration: const InputDecoration(labelText: '会话模式'),
+                    items: const [
+                      DropdownMenuItem(value: 'tmux', child: Text('tmux 持久会话')),
+                      DropdownMenuItem(value: 'normal', child: Text('普通 SSH')),
+                    ],
+                    onChanged: (v) => mode = v!,
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: jump,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: '跳板机'),
+                    items: [
+                      const DropdownMenuItem(value: '', child: Text('直连')),
+                      for (final h in widget.hosts.where(
+                        (h) =>
+                            h.id != widget.host?.id &&
+                            (h.savedAuth || h.id == jump),
+                      ))
+                        DropdownMenuItem(
+                          value: h.id,
+                          child: Text(h.name, overflow: TextOverflow.ellipsis),
+                        ),
+                    ],
+                    onChanged: (v) => jump = v!,
+                  ),
+                  const SizedBox(height: 14),
+                  _text('groupName', '分组'),
+                  _text('notes', '备注'),
+                ],
               ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: busy ? null : _save,
-              child: Text(busy ? '正在保存…' : '保存主机'),
-            ),
-            const SizedBox(height: 24),
-          ],
+              if (error.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text(error, style: TextStyle(color: V.danger)),
+                ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: busy ? null : _save,
+                child: Text(busy ? '正在保存…' : '保存主机'),
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
         ),
       ),
     ),

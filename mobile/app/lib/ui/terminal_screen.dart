@@ -12,6 +12,8 @@ import '../core/remote_api.dart';
 import '../terminal/session_controller.dart';
 import '../terminal/palettes.dart';
 import '../terminal/terminal_surface.dart';
+import '../tools/tool_gateway.dart';
+import 'terminal_tool_screen.dart';
 import 'theme.dart';
 import 'upload_location_sheet.dart';
 
@@ -22,6 +24,9 @@ class TerminalScreen extends StatefulWidget {
   final String device;
   final bool demo;
   final SharedPreferences preferences;
+  final VoidCallback? onClosePane;
+  final Set<String> occupiedSessionIDs;
+  final String? initialDraft;
   const TerminalScreen({
     super.key,
     required this.api,
@@ -30,6 +35,9 @@ class TerminalScreen extends StatefulWidget {
     required this.device,
     required this.demo,
     required this.preferences,
+    this.onClosePane,
+    this.occupiedSessionIDs = const {},
+    this.initialDraft,
   });
   @override
   State<TerminalScreen> createState() => _TerminalScreenState();
@@ -43,6 +51,10 @@ class _TerminalScreenState extends State<TerminalScreen>
   Timer? _save;
   bool _recovering = false, uploading = false, expanded = false;
   bool inputOpen = false, immersive = false;
+  bool _menuOpen = false;
+  RemoteSession? _splitSession;
+  RemoteHost? _splitHost;
+  Axis _splitAxis = Axis.horizontal;
   double uploadProgress = 0;
   String uploadName = '';
   CancelToken? cancel;
@@ -52,39 +64,63 @@ class _TerminalScreenState extends State<TerminalScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    draft.text = widget.preferences.getString(draftKey) ?? '';
+    draft.text =
+        widget.initialDraft ?? widget.preferences.getString(draftKey) ?? '';
+    inputOpen = widget.initialDraft != null;
     draft.addListener(() {
       _save?.cancel();
       _save = Timer(const Duration(milliseconds: 350), _persist);
     });
-    terminal = SessionController(
-      widget.api,
-      widget.session,
-      widget.device,
-      demo: widget.demo,
-    )..onRecovery = _recover;
+    terminal =
+        SessionController(
+            widget.api,
+            widget.session,
+            widget.device,
+            demo: widget.demo,
+          )
+          ..onRecovery = _recover
+          ..onContextMenu = _menu;
     terminal.fontSize = widget.preferences.getDouble('mobile.fontSize') ?? 13;
+    terminal.port.background = _palette['background'];
+    terminal.addListener(_selectionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         terminal.port.push({'type': 'font', 'size': terminal.fontSize});
         terminal.port.push({
-          'type': 'theme',
-          'colors':
-              terminalPalettes[widget.preferences.getString(
-                    'mobile.terminalTheme',
-                  ) ??
-                  'graphite'],
+          'type': 'knob',
+          'enabled': widget.preferences.getBool('mobile.scrollKnob') ?? false,
         });
+        terminal.port.push({'type': 'theme', 'colors': _palette});
         terminal.connect();
       }
     });
   }
+
+  Map<String, String> get _palette =>
+      terminalPalettes[widget.preferences.getString('mobile.terminalTheme') ??
+          'graphite'] ??
+      terminalPalettes['graphite']!;
 
   Future<void> _persist() async {
     // Bound device-local drafts to 48 KiB; a long unsent draft remains in memory.
     if (utf8.encode(draft.text).length <= 48 * 1024) {
       await widget.preferences.setString(draftKey, draft.text);
     }
+  }
+
+  bool _wasSelecting = false;
+  void _selectionChanged() {
+    if (terminal.scrollHint.isNotEmpty) {
+      final hint = terminal.scrollHint;
+      terminal.scrollHint = '';
+      if (mounted) notice(context, hint);
+    }
+    if (terminal.selection && !_wasSelecting) {
+      focus.unfocus();
+      setState(() => inputOpen = false);
+      HapticFeedback.selectionClick();
+    }
+    _wasSelecting = terminal.selection;
   }
 
   @override
@@ -105,6 +141,7 @@ class _TerminalScreenState extends State<TerminalScreen>
     _save?.cancel();
     unawaited(_persist());
     cancel?.cancel();
+    terminal.removeListener(_selectionChanged);
     terminal.dispose();
     draft.dispose();
     focus.dispose();
@@ -381,94 +418,167 @@ class _TerminalScreenState extends State<TerminalScreen>
   }
 
   Future<void> _menu() async {
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      builder: (c) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                title: Text(widget.session.displayName(widget.host)),
-                subtitle: Text(
-                  '${widget.host?.name ?? ''} · ${widget.session.mode}',
-                  style: const TextStyle(color: V.muted),
+    if (_menuOpen || !mounted) return;
+    _menuOpen = true;
+    focus.unfocus();
+    String? action;
+    try {
+      action = await showModalBottomSheet<String>(
+        context: context,
+        isScrollControlled: true,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .78,
+        ),
+        builder: (c) => SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  title: Text(terminal.session.displayName(widget.host)),
+                  subtitle: Text(
+                    '${widget.host?.name ?? ''} · ${widget.session.mode}',
+                    style: TextStyle(color: V.muted),
+                  ),
                 ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.keyboard_outlined),
-                title: const Text('编辑输入'),
-                onTap: () => Navigator.pop(c, 'input'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.attach_file_rounded),
-                title: const Text('上传附件'),
-                enabled: !uploading,
-                onTap: () => Navigator.pop(c, 'attach'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.keyboard_command_key_rounded),
-                title: const Text('终端快捷键'),
-                onTap: () => Navigator.pop(c, 'keys'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.fullscreen_rounded),
-                title: const Text('全屏终端'),
-                onTap: () => Navigator.pop(c, 'fullscreen'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.info_outline_rounded),
-                title: const Text('连接状态与详情'),
-                onTap: () => Navigator.pop(c, 'info'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.select_all_rounded),
-                title: Text(terminal.selection ? '退出文本选择' : '选择终端文本'),
-                onTap: () => Navigator.pop(c, 'select'),
-              ),
-              if (terminal.selection)
+                ListTile(
+                  leading: const Icon(Icons.drive_file_rename_outline),
+                  title: const Text('重命名会话'),
+                  onTap: () => Navigator.pop(c, 'rename'),
+                ),
+                const Divider(),
                 ListTile(
                   leading: const Icon(Icons.copy_rounded),
-                  title: const Text('复制选中文本'),
+                  title: const Text('复制选中内容'),
                   enabled: terminal.selectionText.isNotEmpty,
                   onTap: () => Navigator.pop(c, 'copy'),
                 ),
-              ListTile(
-                leading: const Icon(Icons.fit_screen_rounded),
-                title: const Text('终端适配手机宽度'),
-                subtitle: const Text('接管后调整远端尺寸'),
-                onTap: () => Navigator.pop(c, 'fit'),
-              ),
-              if (terminal.controlled)
                 ListTile(
-                  leading: const Icon(Icons.visibility_outlined),
-                  title: const Text('释放控制，切换为查看'),
-                  onTap: () => Navigator.pop(c, 'release'),
+                  leading: const Icon(Icons.content_paste_rounded),
+                  title: const Text('粘贴'),
+                  subtitle: const Text('放入输入区，确认后发送'),
+                  onTap: () => Navigator.pop(c, 'paste'),
                 ),
-              ListTile(
-                leading: const Icon(Icons.refresh_rounded),
-                title: const Text('重新连接并同步'),
-                onTap: () => Navigator.pop(c, 'reconnect'),
-              ),
-              ListTile(
-                leading: const Icon(
-                  Icons.stop_circle_outlined,
-                  color: V.danger,
+                ListTile(
+                  leading: const Icon(Icons.select_all_rounded),
+                  title: const Text('全选终端内容'),
+                  onTap: () => Navigator.pop(c, 'all'),
                 ),
-                title: const Text('终止远端会话', style: TextStyle(color: V.danger)),
-                onTap: () => Navigator.pop(c, 'end'),
-              ),
-              const SizedBox(height: 16),
-            ],
+                ListTile(
+                  leading: const Icon(Icons.cleaning_services_outlined),
+                  title: const Text('清屏'),
+                  subtitle: const Text('清空本地显示，远端程序继续运行'),
+                  onTap: () => Navigator.pop(c, 'clear'),
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.grid_view_rounded),
+                  title: const Text('终端工具'),
+                  subtitle: const Text('文件 · Agent · 分享 · 监控 · Git · Docker'),
+                  onTap: () => Navigator.pop(c, 'tools'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.vertical_split_outlined),
+                  title: const Text('左右分屏'),
+                  enabled: widget.occupiedSessionIDs.isEmpty,
+                  onTap: () => Navigator.pop(c, 'splitHorizontal'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.horizontal_split_outlined),
+                  title: const Text('上下分屏'),
+                  enabled: widget.occupiedSessionIDs.isEmpty,
+                  onTap: () => Navigator.pop(c, 'splitVertical'),
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.keyboard_outlined),
+                  title: const Text('编辑输入'),
+                  onTap: () => Navigator.pop(c, 'input'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.attach_file_rounded),
+                  title: const Text('上传附件'),
+                  enabled: !uploading,
+                  onTap: () => Navigator.pop(c, 'attach'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.keyboard_command_key_rounded),
+                  title: const Text('终端快捷键'),
+                  onTap: () => Navigator.pop(c, 'keys'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.fullscreen_rounded),
+                  title: const Text('全屏终端'),
+                  onTap: () => Navigator.pop(c, 'fullscreen'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.info_outline_rounded),
+                  title: const Text('连接状态与详情'),
+                  onTap: () => Navigator.pop(c, 'info'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.select_all_rounded),
+                  title: Text(terminal.selection ? '退出文本选择' : '选择终端文本'),
+                  onTap: () => Navigator.pop(c, 'select'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.fit_screen_rounded),
+                  title: const Text('终端适配手机宽度'),
+                  subtitle: const Text('接管后调整远端尺寸'),
+                  onTap: () => Navigator.pop(c, 'fit'),
+                ),
+                if (terminal.controlled)
+                  ListTile(
+                    leading: const Icon(Icons.visibility_outlined),
+                    title: const Text('释放控制，切换为查看'),
+                    onTap: () => Navigator.pop(c, 'release'),
+                  ),
+                ListTile(
+                  leading: const Icon(Icons.refresh_rounded),
+                  title: const Text('重新连接并同步'),
+                  onTap: () => Navigator.pop(c, 'reconnect'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.close_rounded),
+                  title: Text(widget.onClosePane == null ? '关闭终端' : '关闭分屏'),
+                  subtitle: Text(
+                    widget.onClosePane == null
+                        ? '返回会话列表，保留远端任务'
+                        : '关闭当前窗格，保留远端任务',
+                  ),
+                  onTap: () => Navigator.pop(c, 'close'),
+                ),
+                ListTile(
+                  leading: Icon(Icons.stop_circle_outlined, color: V.danger),
+                  title: Text('终止远端会话', style: TextStyle(color: V.danger)),
+                  onTap: () => Navigator.pop(c, 'end'),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _menuOpen = false;
+    }
     if (!mounted) return;
+    if (action == 'tools') await _toolMenu();
+    if (action == 'splitHorizontal') await _split(Axis.horizontal);
+    if (action == 'splitVertical') await _split(Axis.vertical);
+    if (action == 'rename') await _renameSession();
+    if (action == 'paste') await _pasteClipboard();
+    if (action == 'all') terminal.selectAll();
+    if (action == 'clear') terminal.clearDisplay();
+    if (action == 'close') {
+      await _closeCurrent();
+      return;
+    }
     if (action == 'fit') {
       if (terminal.controlled) {
         terminal.port.push({'type': 'fit'});
       } else {
+        if (!mounted) return;
         notice(context, '请先接管终端');
       }
     }
@@ -505,10 +615,171 @@ class _TerminalScreenState extends State<TerminalScreen>
           '/api/sessions/${widget.session.id}',
           method: 'DELETE',
         );
-        if (mounted) Navigator.pop(context);
+        if (mounted) await _closeCurrent();
       } catch (e) {
         if (mounted) notice(context, '远端终止失败，可返回列表重试：$e');
       }
+    }
+  }
+
+  Future<void> _closeCurrent() async {
+    if (widget.onClosePane != null) {
+      widget.onClosePane!();
+      return;
+    }
+    setState(() => immersive = false);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _toolMenu() async {
+    final icons = {
+      'files': Icons.folder_open_rounded,
+      'agent': Icons.smart_toy_outlined,
+      'share': Icons.share_outlined,
+      'monitor': Icons.monitor_heart_outlined,
+      'git': Icons.account_tree_outlined,
+      'docker': Icons.inventory_2_outlined,
+    };
+    final tool = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(title: Text('终端工具')),
+              for (final entry in terminalToolNames.entries)
+                ListTile(
+                  leading: Icon(icons[entry.key]),
+                  title: Text(
+                    entry.key == 'files'
+                        ? '打开当前目录'
+                        : entry.key == 'agent'
+                        ? '打开 Agent'
+                        : entry.value,
+                  ),
+                  subtitle:
+                      !widget.demo &&
+                          !['files', 'share'].contains(entry.key) &&
+                          widget.host?.savedAuth != true
+                      ? const Text('需先保存主机 SSH 密码或配置凭据')
+                      : null,
+                  enabled:
+                      widget.demo ||
+                      (widget.host != null &&
+                          (['files', 'share'].contains(entry.key) ||
+                              widget.host!.savedAuth)),
+                  onTap: () => Navigator.pop(sheet, entry.key),
+                ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || tool == null) return;
+    if (widget.demo) {
+      notice(context, '示例模式不连接主机，请在安卓客户端连接真实服务后使用');
+      return;
+    }
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TerminalToolScreen(
+          api: widget.api!,
+          host: widget.host!,
+          session: terminal.session,
+          tool: tool,
+        ),
+      ),
+    );
+    if (!mounted || result == null || result['dockerID'] is! String) return;
+    try {
+      final target = await widget.api!.create(
+        widget.host!,
+        name: '${widget.host!.name} · ${result['name']}',
+      );
+      if (!mounted) return;
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TerminalScreen(
+            api: widget.api,
+            session: target,
+            host: widget.host,
+            device: widget.device,
+            demo: false,
+            preferences: widget.preferences,
+            initialDraft:
+                'docker exec -it ${shellQuote(result['dockerID'])} sh',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) notice(context, '容器终端打开失败：$e');
+    }
+  }
+
+  Future<void> _split(Axis direction) async {
+    try {
+      final data = widget.demo
+          ? [demoSessions, demoHosts]
+          : await Future.wait([widget.api!.sessions(), widget.api!.hosts()]);
+      if (!mounted) return;
+      final sessions = data[0] as List<RemoteSession>,
+          hosts = data[1] as List<RemoteHost>;
+      final occupied = {...widget.occupiedSessionIDs, widget.session.id};
+      final selected = await showModalBottomSheet<RemoteSession>(
+        context: context,
+        isScrollControlled: true,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .75,
+        ),
+        builder: (sheet) => SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  title: Text(
+                    direction == Axis.horizontal ? '添加左右分屏' : '添加上下分屏',
+                  ),
+                  subtitle: const Text('选择已有会话，远端任务保持运行'),
+                ),
+                for (final session in sessions.where(
+                  (session) => !session.ended && !occupied.contains(session.id),
+                ))
+                  ListTile(
+                    leading: const Icon(Icons.terminal_rounded),
+                    title: Text(session.name),
+                    subtitle: Text('${session.mode} · ${session.createdLabel}'),
+                    onTap: () => Navigator.pop(sheet, session),
+                  ),
+                if (sessions.every(
+                  (session) => session.ended || occupied.contains(session.id),
+                ))
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('没有其他会话，请先在主页新建会话'),
+                  ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (selected == null || !mounted) return;
+      setState(() {
+        _splitAxis = direction;
+        _splitSession = selected;
+        _splitHost = hosts
+            .where((host) => host.id == selected.hostID)
+            .firstOrNull;
+      });
+    } catch (e) {
+      if (mounted) notice(context, '分屏打开失败：$e');
     }
   }
 
@@ -540,6 +811,90 @@ class _TerminalScreenState extends State<TerminalScreen>
     if (mounted) notice(context, '已复制');
   }
 
+  Future<void> _pasteClipboard() async {
+    try {
+      final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+      if (!mounted) return;
+      if (text == null || text.isEmpty) {
+        notice(context, '剪贴板中没有文本');
+        return;
+      }
+      final value = draft.value;
+      final selection = value.selection;
+      final start = selection.isValid ? selection.start : value.text.length;
+      final end = selection.isValid ? selection.end : value.text.length;
+      draft.value = TextEditingValue(
+        text: value.text.replaceRange(start, end, text),
+        selection: TextSelection.collapsed(offset: start + text.length),
+      );
+      _openComposer();
+    } catch (e) {
+      if (mounted) notice(context, '读取剪贴板失败：$e');
+    }
+  }
+
+  Future<void> _renameSession() async {
+    final value = TextEditingController(text: terminal.session.name);
+    final form = GlobalKey<FormState>();
+    var saving = false;
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (dialog) => StatefulBuilder(
+        builder: (dialog, update) => AlertDialog(
+          title: const Text('重命名会话'),
+          content: Form(
+            key: form,
+            child: TextFormField(
+              controller: value,
+              autofocus: true,
+              maxLength: 80,
+              enabled: !saving,
+              decoration: InputDecoration(labelText: '会话名称', errorText: error),
+              validator: (text) =>
+                  text == null ||
+                      text.trim().isEmpty ||
+                      text.trim().runes.length > 80
+                  ? '请输入 1～80 个字符'
+                  : null,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(dialog),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (!form.currentState!.validate()) return;
+                      update(() {
+                        saving = true;
+                        error = null;
+                      });
+                      try {
+                        await terminal.rename(value.text);
+                        if (dialog.mounted) Navigator.pop(dialog);
+                      } catch (e) {
+                        if (dialog.mounted) {
+                          update(() {
+                            saving = false;
+                            error = '$e';
+                          });
+                        }
+                      }
+                    },
+              child: Text(saving ? '保存中…' : '保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    value.dispose();
+  }
+
   Future<void> _connectionInfo() => showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
@@ -547,7 +902,7 @@ class _TerminalScreenState extends State<TerminalScreen>
       content: SingleChildScrollView(
         child: SelectableText(
           [
-            widget.session.name,
+            terminal.session.name,
             '会话编号：${widget.session.id}\n创建：${widget.session.createdLabel}',
             '${widget.host?.name ?? widget.session.hostID} · ${widget.session.mode}',
             widget.demo ? '示例数据 · ${terminal.status}' : terminal.status,
@@ -603,7 +958,7 @@ class _TerminalScreenState extends State<TerminalScreen>
 
   Widget _inputOptions() => PopupMenuButton<String>(
     tooltip: '输入选项',
-    icon: const Icon(Icons.add_rounded, size: 20, color: V.muted),
+    icon: Icon(Icons.add_rounded, size: 20, color: V.muted),
     onSelected: (action) async {
       if (action == 'attach') {
         focus.unfocus();
@@ -638,11 +993,7 @@ class _TerminalScreenState extends State<TerminalScreen>
         IconButton(
           tooltip: '收起输入',
           onPressed: _hideComposer,
-          icon: const Icon(
-            Icons.keyboard_hide_outlined,
-            size: 20,
-            color: V.muted,
-          ),
+          icon: Icon(Icons.keyboard_hide_outlined, size: 20, color: V.muted),
         ),
         Expanded(
           child: TextField(
@@ -671,11 +1022,9 @@ class _TerminalScreenState extends State<TerminalScreen>
           tooltip: terminal.sending ? '等待写入确认' : '发送',
           onPressed: terminal.canInput ? () => _submit() : null,
           style: IconButton.styleFrom(
-            backgroundColor: V.text,
+            backgroundColor: V.accent,
             foregroundColor: V.bg,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
+            shape: V.cut(r: 10),
           ),
           icon: terminal.sending
               ? const SizedBox(
@@ -703,11 +1052,11 @@ class _TerminalScreenState extends State<TerminalScreen>
               Expanded(
                 child: Text(
                   terminal.selectionText.isEmpty
-                      ? '划选终端文本'
+                      ? '长按或拖动选择文本'
                       : '已选择 ${terminal.selectionText.runes.length} 个字符',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: V.muted),
+                  style: TextStyle(fontSize: 12, color: V.muted),
                 ),
               ),
               TextButton(
@@ -717,52 +1066,57 @@ class _TerminalScreenState extends State<TerminalScreen>
               const SizedBox(width: 8),
             ],
           )
-        : Row(
-            children: [
-              IconButton(
-                tooltip: '展开输入',
-                onPressed: _openComposer,
-                icon: const Icon(Icons.keyboard_outlined, size: 21),
-              ),
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      _shortcut('Esc', [27]),
-                      _shortcut('Ctrl+C', [3]),
-                    ],
+        : LayoutBuilder(
+            builder: (context, bounds) => Row(
+              children: [
+                IconButton(
+                  tooltip: '展开输入',
+                  onPressed: _openComposer,
+                  icon: const Icon(Icons.keyboard_outlined, size: 21),
+                ),
+                if (bounds.maxWidth >= 300)
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _shortcut('Esc', [27]),
+                          _shortcut('Ctrl+C', [3]),
+                        ],
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  tooltip: '选择文本',
+                  onPressed: _toggleSelection,
+                  icon: Icon(
+                    Icons.select_all_rounded,
+                    size: 20,
+                    color: V.muted,
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: '选择文本',
-                onPressed: _toggleSelection,
-                icon: const Icon(
-                  Icons.select_all_rounded,
-                  size: 20,
-                  color: V.muted,
+                if (bounds.maxWidth >= 300)
+                  IconButton(
+                    tooltip: '快捷键',
+                    // The same shortcuts remain available from the pane menu.
+                    onPressed: _shortcuts,
+                    icon: Icon(
+                      Icons.keyboard_command_key_rounded,
+                      size: 19,
+                      color: V.muted,
+                    ),
+                  ),
+                IconButton(
+                  tooltip: '全屏终端',
+                  onPressed: () => setState(() => immersive = true),
+                  icon: Icon(
+                    Icons.fullscreen_rounded,
+                    size: 22,
+                    color: V.muted,
+                  ),
                 ),
-              ),
-              IconButton(
-                tooltip: '快捷键',
-                onPressed: _shortcuts,
-                icon: const Icon(
-                  Icons.keyboard_command_key_rounded,
-                  size: 19,
-                  color: V.muted,
-                ),
-              ),
-              IconButton(
-                tooltip: '全屏终端',
-                onPressed: () => setState(() => immersive = true),
-                icon: const Icon(
-                  Icons.fullscreen_rounded,
-                  size: 22,
-                  color: V.muted,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
   );
 
@@ -778,6 +1132,7 @@ class _TerminalScreenState extends State<TerminalScreen>
         appBar: immersive
             ? null
             : AppBar(
+                automaticallyImplyLeading: widget.onClosePane == null,
                 toolbarHeight: 48,
                 titleSpacing: 0,
                 title: InkWell(
@@ -786,7 +1141,7 @@ class _TerminalScreenState extends State<TerminalScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.session.displayName(widget.host),
+                        terminal.session.displayName(widget.host),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -801,7 +1156,11 @@ class _TerminalScreenState extends State<TerminalScreen>
                             : terminal.status,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 10, color: V.muted),
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: V.accent,
+                          fontFamily: V.mono,
+                        ),
                       ),
                     ],
                   ),
@@ -832,86 +1191,170 @@ class _TerminalScreenState extends State<TerminalScreen>
                 SizedBox(height: immersive ? 0 : 1, child: const Divider()),
                 Expanded(
                   key: const ValueKey('terminal-output'),
-                  child: Stack(
+                  child: Flex(
+                    direction: _splitAxis,
                     children: [
-                      Positioned.fill(
-                        child: TerminalSurface(port: terminal.port),
-                      ),
-                      if (terminal.controlled &&
-                          terminal.historySize > 0 &&
-                          !terminal.applicationAlternate &&
-                          !terminal.selection)
-                        Positioned(
-                          right: 0,
-                          top: 8,
-                          bottom: 8,
-                          child: _HistoryRail(
-                            size: terminal.historySize,
-                            position: terminal.historyPosition,
-                            onPosition: terminal.scrollTo,
-                          ),
-                        ),
-                      if (!terminal.following)
-                        Positioned(
-                          right: 8,
-                          bottom: 8,
-                          child: IconButton.filledTonal(
-                            tooltip: '回到底部',
-                            onPressed: terminal.bottom,
-                            icon: const Icon(Icons.arrow_downward, size: 20),
-                          ),
-                        ),
-                      if (immersive)
-                        Positioned(
-                          right: 6,
-                          top: 6,
-                          child: IconButton.filledTonal(
-                            tooltip: '退出全屏',
-                            onPressed: () => setState(() => immersive = false),
-                            icon: const Icon(
-                              Icons.fullscreen_exit_rounded,
-                              size: 22,
+                      Expanded(
+                        key: const ValueKey('primary-terminal-output'),
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: TerminalSurface(port: terminal.port),
                             ),
-                          ),
-                        ),
-                      if (!terminal.connected && !widget.demo)
-                        Positioned(
-                          left: 12,
-                          right: 12,
-                          top: 12,
-                          child: Material(
-                            color: V.surface,
-                            borderRadius: BorderRadius.circular(10),
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      terminal.detail.isEmpty
-                                          ? terminal.status
-                                          : '${terminal.status}\n${terminal.detail}',
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: V.muted,
+                            if (terminal.controlled &&
+                                terminal.historySize > 0 &&
+                                !terminal.applicationAlternate &&
+                                !terminal.selection)
+                              Positioned(
+                                right: 0,
+                                top: 8,
+                                bottom: 8,
+                                child: _HistoryRail(
+                                  size: terminal.historySize,
+                                  position: terminal.historyPosition,
+                                  onPosition: terminal.scrollTo,
+                                ),
+                              ),
+                            if (!terminal.following)
+                              Positioned(
+                                right: 4,
+                                bottom: 4,
+                                // Small and see-through; the tap area stays 48px.
+                                child: Semantics(
+                                  button: true,
+                                  label: '回到底部',
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: terminal.bottom,
+                                    child: SizedBox(
+                                      width: 48,
+                                      height: 48,
+                                      child: Center(
+                                        child: Container(
+                                          width: 28,
+                                          height: 28,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: V.surface.withValues(
+                                              alpha: .5,
+                                            ),
+                                            border: Border.all(
+                                              color: V.text.withValues(
+                                                alpha: .16,
+                                              ),
+                                            ),
+                                          ),
+                                          child: Icon(
+                                            Icons.keyboard_arrow_down_rounded,
+                                            size: 18,
+                                            color: V.text.withValues(alpha: .7),
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),
-                                  TextButton(
-                                    onPressed: () => terminal.connect(),
-                                    child: const Text('重试'),
-                                  ),
-                                ],
+                                ),
                               ),
-                            ),
+                            if (immersive)
+                              Positioned(
+                                right: 6,
+                                top: 6,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton.filledTonal(
+                                      tooltip: '终端操作',
+                                      onPressed: _menu,
+                                      icon: const Icon(
+                                        Icons.more_horiz,
+                                        size: 22,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    IconButton.filledTonal(
+                                      tooltip: '退出全屏',
+                                      onPressed: () =>
+                                          setState(() => immersive = false),
+                                      icon: const Icon(
+                                        Icons.fullscreen_exit_rounded,
+                                        size: 22,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            if (!terminal.connected && !widget.demo)
+                              Positioned(
+                                left: 12,
+                                right: 12,
+                                top: 12,
+                                child: Material(
+                                  color: V.surface,
+                                  shape: V.cut(r: 10, color: V.danger),
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      12,
+                                      4,
+                                      4,
+                                      4,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            terminal.detail.isEmpty
+                                                ? terminal.status
+                                                : '${terminal.status}\n${terminal.detail}',
+                                            maxLines: 3,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: V.muted,
+                                            ),
+                                          ),
+                                        ),
+                                        TextButton(
+                                          onPressed: () => terminal.connect(),
+                                          child: const Text('重试'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (_splitSession != null) ...[
+                        SizedBox(
+                          width: _splitAxis == Axis.horizontal ? 1 : null,
+                          height: _splitAxis == Axis.vertical ? 1 : null,
+                          child: ColoredBox(color: V.line),
+                        ),
+                        Expanded(
+                          child: TerminalScreen(
+                            key: ValueKey(_splitSession!.id),
+                            api: widget.api,
+                            session: _splitSession!,
+                            host: _splitHost,
+                            device: widget.device,
+                            demo: widget.demo,
+                            preferences: widget.preferences,
+                            occupiedSessionIDs: {
+                              ...widget.occupiedSessionIDs,
+                              widget.session.id,
+                            },
+                            onClosePane: () => setState(() {
+                              _splitSession = null;
+                              _splitHost = null;
+                            }),
                           ),
                         ),
+                      ],
                     ],
                   ),
                 ),
-                if (!immersive) ...[
+                if (!immersive || terminal.selection) ...[
                   if (uploading)
                     Row(
                       children: [
@@ -928,7 +1371,7 @@ class _TerminalScreenState extends State<TerminalScreen>
                         ),
                         Text(
                           '${(uploadProgress * 100).round()}%',
-                          style: const TextStyle(fontSize: 11, color: V.muted),
+                          style: TextStyle(fontSize: 11, color: V.muted),
                         ),
                         IconButton(
                           tooltip: '取消上传',
@@ -955,8 +1398,8 @@ class _TerminalScreenState extends State<TerminalScreen>
     style: TextButton.styleFrom(
       minimumSize: const Size(48, 48),
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      foregroundColor: V.text,
-      textStyle: const TextStyle(fontSize: 12),
+      foregroundColor: V.accent,
+      textStyle: const TextStyle(fontSize: 12, fontFamily: V.mono),
     ),
     onPressed: terminal.canInput ? () => _key(label, data) : null,
     child: Text(label),

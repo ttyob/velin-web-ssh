@@ -29,6 +29,15 @@ class RemoteSession {
     createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '')?.toLocal(),
   );
   bool get ended => status == 'ended';
+  RemoteSession withName(String value) => RemoteSession(
+    id: id,
+    hostID: hostID,
+    name: value,
+    mode: mode,
+    status: status,
+    error: error,
+    createdAt: createdAt,
+  );
   String get shortID {
     final value = id.replaceAll('-', '');
     return value.length <= 8 ? value : value.substring(value.length - 8);

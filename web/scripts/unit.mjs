@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 
 await import('./api-csrf.mjs')
+await import('./terminal-selection-unit.mjs')
 
 async function loadModule(path) {
   const source = await readFile(path, 'utf8')

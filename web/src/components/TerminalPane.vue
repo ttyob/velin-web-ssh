@@ -39,6 +39,7 @@ import {
 import { normalizeTerminalWheelDelta } from "../terminalWheel";
 import { terminalClipboardFiles, terminalFileReference, terminalUploadName } from "../terminalClipboard";
 import { handleTerminalKeyEvent, terminalNewlineInput } from "../terminalKeyboard";
+import { attachScrollingSelection } from "../terminalSelection";
 
 const props = withDefaults(
   defineProps<{
@@ -146,6 +147,7 @@ let applicationClickStart: { x: number; y: number; row: number; column: number }
 let applicationHoverEvent: MouseEvent | undefined;
 const applicationButtonHovered = ref(false);
 let remoteSelectionText = "";
+let scrollingSelection: ReturnType<typeof attachScrollingSelection> | undefined;
 let clipboardWarningShown = false;
 let resizeAfterWrite = false;
 let scrollFrame: number | undefined;
@@ -272,6 +274,12 @@ function isAtBottom() {
 
 function handleTerminalWheel(event: WheelEvent) {
 	if (!terminal || event.deltaY === 0) return true;
+	if (scrollingSelection?.dragging && scrollingSelection.wheel(terminalWheelLines(event))) {
+		event.preventDefault();
+		event.stopPropagation();
+		return false;
+	}
+	scrollingSelection?.wheel(0);
 	const buffer = terminal.buffer.active;
 	const useRemoteHistory =
 		props.session.sessionMode === "tmux" &&
@@ -717,6 +725,7 @@ function writeTerminal(data: Uint8Array, callback?: () => void, isReplay = false
     pendingWrites = Math.max(0, pendingWrites - 1);
     if (isReplay) pendingReplayWrites = Math.max(0, pendingReplayWrites - 1);
     callback?.();
+    if (!pendingWrites) scrollingSelection?.changed();
     updateApplicationButtonHover();
     if (resizeSnapshot) {
       if (resizeFollowingBottom) {
@@ -753,6 +762,7 @@ function updateConversationMode() {
 
 function resetTerminalForReplay() {
   if (replayResetApplied || replayResumesCurrentTerminal) return;
+  scrollingSelection?.clear();
   terminal?.reset();
   replayResetApplied = true;
 }
@@ -1484,8 +1494,10 @@ function sendModifiedKey(key: string) {
   sendKey(modifiedKey(key));
 }
 function findNext() {
-  if (searchText.value)
+  if (searchText.value) {
+    scrollingSelection?.clear();
     search?.findNext(searchText.value, { caseSensitive: false });
+  }
 }
 function focus() {
   terminal?.focus();
@@ -1572,6 +1584,7 @@ async function sendInput(data: string, options: { confirmPaste?: boolean } = {})
 function sendInputNow(data: string) {
   if (!data || socket?.readyState !== WebSocket.OPEN || !controller.value)
     return;
+  scrollingSelection?.clear();
   resumeOutputFollow();
   clearTimeout(outputSettleTimer);
   emit("attention", props.session.id, "clear");
@@ -1700,7 +1713,7 @@ async function pasteTerminalFiles(files: File[]) {
   }
 }
 async function copySelection() {
-  const selected = terminal?.getSelection() || remoteSelectionText;
+  const selected = scrollingSelection?.text() ?? (terminal?.getSelection() || remoteSelectionText);
   if (!selected) return ElMessage.info("请先选中终端内容");
   await copyTerminalText(selected);
 }
@@ -1757,6 +1770,7 @@ function finishSelectionCopy(event: MouseEvent) {
   // Read the final selection after xterm's document mouseup handler has run.
   queueMicrotask(() => {
     if (disposed || !props.visible) return;
+    if (scrollingSelection?.text() !== undefined) return;
     const selected = terminal?.getSelection();
     if (selected) void copyTerminalText(selected, true);
     else if (click && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
@@ -1774,6 +1788,7 @@ function handleTerminalClipboard(value: string) {
   try {
     const selected = new TextDecoder().decode(base64ToBytes(encoded));
     if (selected) {
+      scrollingSelection?.clear();
       remoteSelectionText = selected;
       void copyTerminalText(selected, true);
     }
@@ -1807,10 +1822,12 @@ async function pasteClipboard() {
   }
 }
 function selectAll() {
+  scrollingSelection?.clear();
   terminal?.selectAll();
   terminal?.focus();
 }
 function clearTerminal() {
+  scrollingSelection?.clear();
   terminal?.clear();
   terminal?.focus();
 }
@@ -1893,9 +1910,33 @@ onMounted(() => {
   terminal.loadAddon(search);
   terminal.loadAddon(new WebLinksAddon(previewTerminalLink));
   terminal.open(container.value!);
-  terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, () => {
-    void sendInput(terminalNewlineInput, { confirmPaste: false });
-  }));
+  scrollingSelection = attachScrollingSelection(terminal, {
+    canScroll: () => connected.value && controller.value && !replaying &&
+      socket?.readyState === WebSocket.OPEN &&
+      (props.session.sessionMode === "tmux" || applicationAlternateScreen.value),
+    visible: () => props.visible && !disposed,
+    tmuxHistory: () => props.session.sessionMode === "tmux" && remoteHistoryMode.value,
+    copy: (text) => { void copyTerminalText(text, true); },
+    newline: nativeTerminalText ? "\r\n" : "\n",
+    scroll: (lines) => {
+      if (applicationAlternateScreen.value) {
+        socket?.send(JSON.stringify({ type: "scroll_application", lines,
+          row: Math.max(1, Math.floor(terminal!.rows / 3)),
+          column: Math.max(1, Math.floor(terminal!.cols / 2)) }));
+      } else sendRemoteHistoryScroll(lines);
+    },
+  });
+  terminal.attachCustomKeyEventHandler((event) => {
+    const selected = scrollingSelection?.text();
+    if (selected && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+      event.preventDefault();
+      if (event.type === "keydown") void copyTerminalText(selected);
+      return false;
+    }
+    return handleTerminalKeyEvent(event, () => {
+      void sendInput(terminalNewlineInput, { confirmPaste: false });
+    });
+  });
   // Honor scroll regions and screen switches so TUI redraws keep their
   // cursor positions. tmux history is reached through the remote scrollbar.
   fitTerminal();
@@ -1927,11 +1968,13 @@ onMounted(() => {
     if (!historyLocked.value) hasNewOutput.value = false;
   });
   terminal.buffer.onBufferChange(buffer => {
+    scrollingSelection?.clear();
     localAlternateScreen.value = buffer.type === "alternate";
   });
-  terminal.onResize(({ cols, rows }) =>
-    rememberTerminalDimensions(cols, rows),
-  );
+  terminal.onResize(({ cols, rows }) => {
+    scrollingSelection?.clear();
+    rememberTerminalDimensions(cols, rows);
+  });
   terminal.attachCustomWheelEventHandler(handleTerminalWheel);
   terminal.onTitleChange((title) => {
     terminalTitle = title.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80);
@@ -2011,6 +2054,7 @@ watch(
 );
 onBeforeUnmount(() => {
   disposed = true;
+  scrollingSelection?.dispose();
   filePasteAbort?.abort();
   container.value?.removeEventListener("mousedown", startSelectionCopy, true);
   container.value?.removeEventListener("mousemove", updateApplicationButtonHover);

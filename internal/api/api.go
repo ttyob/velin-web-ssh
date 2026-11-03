@@ -38,6 +38,7 @@ import (
 	"github.com/ttyob/velin-web-ssh/internal/netdial"
 	"github.com/ttyob/velin-web-ssh/internal/remotedesktop"
 	"github.com/ttyob/velin-web-ssh/internal/security"
+	"github.com/ttyob/velin-web-ssh/internal/sessionbridge"
 	"github.com/ttyob/velin-web-ssh/internal/store"
 	"github.com/ttyob/velin-web-ssh/internal/tailnet"
 	"github.com/ttyob/velin-web-ssh/internal/terminal"
@@ -51,6 +52,7 @@ type API struct {
 	store           *store.Store
 	vault           *security.Vault
 	terminals       *terminal.Manager
+	sessionBridge   *sessionbridge.Module
 	forwards        *forward.Manager
 	agents          *agent.Manager
 	webProxies      *webProxyManager
@@ -117,6 +119,7 @@ func newAPI(cfg config.Config, s *store.Store, v *security.Vault, t *terminal.Ma
 	forwards.SetDialer(dialer)
 	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha), updateClient: &http.Client{Timeout: 10 * time.Second}, updateURL: defaultReleaseURL, shareViewers: make(map[string]map[string]*shareViewerConnection), shareFailures: make(map[string]shareFailure)}
 	a.restoreAIModelConfig()
+	a.initSessionBridge()
 	a.restoreHostPortWebServices()
 	go a.commandTaskWorker()
 	go a.expireTerminalShares()
@@ -136,11 +139,13 @@ func (a *API) Router() http.Handler {
 	r.Get("/api/public/shares/{token}", a.publicTerminalShare)
 	r.Post("/api/public/shares/{token}/access", a.accessTerminalShare)
 	r.Get("/ws/shares/{token}", a.terminalShareWS)
+	r.Handle(sessionbridge.Endpoint, http.HandlerFunc(a.serveSessionBridge))
 	r.Group(func(r chi.Router) {
 		r.Use(a.authenticate)
 		r.Use(a.requirePasswordChange)
 		r.Use(a.requireUnlocked)
 		a.registerMobileRoutes(r)
+		a.registerSessionBridgeRoutes(r)
 		r.Get("/api/auth/me", a.me)
 		r.Post("/api/auth/lock", a.lockSession)
 		r.Post("/api/auth/unlock", a.unlockSession)
@@ -303,6 +308,12 @@ func (a *API) requestID(next http.Handler) http.Handler {
 func (a *API) csrfProtection(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isSafeMethod(r.Method) || isWebProxyPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// MCP uses only an independently authenticated Bearer token, never
+		// browser cookies. All browser management APIs retain CSRF protection.
+		if r.URL.Path == sessionbridge.Endpoint && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -604,13 +615,13 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		a.deleteLoginCaptcha(in.CaptchaID)
 	}
 	a.revokeBrowserSessions(r)
-	a.clearSessionCookies(w)
-	http.SetCookie(w, &http.Cookie{Name: a.sessionCookieName(), Value: token, Path: "/", HttpOnly: true, Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: int(ttl.Seconds())})
+	a.clearSessionCookie(w, r)
+	http.SetCookie(w, &http.Cookie{Name: a.sessionCookieName(r), Value: token, Path: "/", HttpOnly: true, Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: int(ttl.Seconds())})
 	writeJSON(w, 200, map[string]any{"user": u})
 }
 func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 	a.revokeBrowserSessions(r)
-	a.clearSessionCookies(w)
+	a.clearSessionCookie(w, r)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (a *API) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, currentUser(r)) }
@@ -871,7 +882,7 @@ func (a *API) revokeAllDevices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "database_error", "撤销设备失败")
 		return
 	}
-	a.clearSessionCookies(w)
+	a.clearSessionCookie(w, r)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (a *API) deleteDevice(w http.ResponseWriter, r *http.Request) {
@@ -2082,8 +2093,8 @@ func (a *API) csrfToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if cookie, err := r.Cookie(a.csrfCookieName()); err != nil || cookie.Value != token {
-		http.SetCookie(w, &http.Cookie{Name: a.csrfCookieName(), Value: token, Path: "/", Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
+	if cookie, err := r.Cookie(a.csrfCookieName(r)); err != nil || cookie.Value != token {
+		http.SetCookie(w, &http.Cookie{Name: a.csrfCookieName(r), Value: token, Path: "/", Secure: a.cfg.CookieSecure, SameSite: http.SameSiteStrictMode})
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
@@ -2116,6 +2127,8 @@ type terminalWSMessage struct {
 	Lines, Row, Column     int
 	Sequence               uint64
 	Approved               bool
+	// Force asks the owner's own device to take control without approval.
+	Force bool `json:"force"`
 }
 
 func forwardTerminalEventDuringReplay(writeJSON func(any) error, ev terminal.Event, pendingOutput *[]terminal.Event) error {
@@ -2175,6 +2188,13 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 	if _, parseErr := uuid.Parse(deviceID); parseErr != nil {
 		deviceID = ""
 	}
+	// Optional: replay only the newest bytes. A resumed replay is only cut when
+	// it is itself larger than the limit, and is then flagged truncated so the
+	// client does not splice it onto its cached output.
+	replayTail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	if replayTail < 0 || replayTail > 64<<20 {
+		replayTail = 0
+	}
 	var events <-chan terminal.Event
 	var subscriptionDone <-chan struct{}
 	var replay terminal.Replay
@@ -2184,6 +2204,16 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 		events, subscriptionDone, replay = s.Subscribe(clientID, resumeStreamID, resumeOffset, reconnectKey)
 	}
 	defer s.Unsubscribe(clientID)
+	if replayTail > 0 {
+		if resumeStreamID == "" || resumeStreamID != replay.StreamID || replay.Truncated {
+			replay = replay.Tail(replayTail)
+		} else if replay.Size() > replayTail {
+			// A resume that is itself huge: send only its end and flag the
+			// replay as truncated so the client drops its cached output.
+			replay = replay.Tail(replayTail)
+			replay.Truncated = true
+		}
+	}
 	controller := ""
 	if s.IsController(clientID) {
 		controller = clientID
@@ -2311,7 +2341,7 @@ func (a *API) terminalWS(w http.ResponseWriter, r *http.Request) {
 		case "terminal_theme":
 			_ = s.SetTerminalColors(clientID, msg.Foreground, msg.Background)
 		case "request_control":
-			if s.RequestControl(clientID) {
+			if (msg.Force && s.ForceControl(clientID)) || s.RequestControl(clientID) {
 				_ = writeJSON(terminal.Event{Type: "control_granted", Controller: clientID})
 			} else {
 				_ = writeJSON(terminal.Event{Type: "control_pending"})

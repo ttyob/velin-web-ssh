@@ -46,6 +46,7 @@ import ToolsDrawer from "./ToolsDrawer.vue";
 import CredentialsPanel from "./CredentialsPanel.vue";
 import TaskPanel from "./TaskPanel.vue";
 import SecurityPanel from "./SecurityPanel.vue";
+import SessionBridgePanel from "../features/session-bridge/SessionBridgePanel.vue";
 import {
   accentPresets,
   findInterfaceTheme,
@@ -85,6 +86,7 @@ const tabMetaMap: Record<string, { title: string; desc: string }> = {
   forwards: { title: "端口转发", desc: "管理本地与远程端口转发" },
   data: { title: "数据", desc: "加密备份、导出与导入" },
   tasks: { title: "任务队列", desc: "查看后台任务与执行进度" },
+  "session-bridge": { title: "外部 Agent", desc: "授权 OpenClaw 等 Agent 访问你的终端会话" },
   updates: { title: "版本更新", desc: "检查并获取新版本" },
 };
 const tab = ref("terminal"),
@@ -781,6 +783,9 @@ function forwardBatch(text: string, sessionIDs: string[]) {
               </button>
             </template>
             <span class="sp-nav-group">工具</span>
+            <button :class="{ active: tab === 'session-bridge' }" @click="tab = 'session-bridge'">
+              <Bot :size="15" /><span>外部 Agent</span>
+            </button>
             <button :class="{ active: tab === 'snippets' }" @click="tab = 'snippets'">
               <Code2 :size="15" /><span>命令片段</span>
             </button>
@@ -1058,6 +1063,7 @@ function forwardBatch(text: string, sessionIDs: string[]) {
 
             <!-- ============ 凭据 / 任务 ============ -->
             <SecurityPanel v-else-if="tab === 'security'" />
+            <SessionBridgePanel v-else-if="tab === 'session-bridge'" />
             <CredentialsPanel
               v-else-if="tab === 'credentials'"
               :credentials="credentials"

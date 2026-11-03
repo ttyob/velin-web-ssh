@@ -528,7 +528,15 @@ try {
     await page.mouse.up()
     if (shift) await page.keyboard.up('Shift')
   }
-  const expectClipboard = text => page.waitForFunction(async text => (await navigator.clipboard.readText()) === text, text)
+  const expectClipboard = async text => {
+    let actual
+    for (let attempt = 0; attempt < 40; attempt++) {
+      actual = await page.evaluate(() => navigator.clipboard.readText())
+      if (actual === text) return
+      await page.waitForTimeout(50)
+    }
+    assert.equal(actual, text)
+  }
   await output('\x1bccopy-one text\r\n中文复制测试')
   await selectText()
   await expectClipboard('copy-one')
@@ -594,6 +602,112 @@ try {
   })
   await page.getByRole('button', { name: '复制选中内容', exact: true }).click()
   await expectClipboard(remoteText)
+
+  // Cross-screen mouse drags must retain all traversed rows while tmux or a
+  // full-screen CLI redraws the same alternate buffer. Use actual mouse/wheel
+  // events and the shared pane, in both Canvas and Windows DOM runs.
+  for (const mode of ['cli', 'tmux']) {
+    for (const direction of [-1, 1]) {
+      await page.evaluate(({ mode }) => {
+        window.session.sessionMode = 'tmux'
+        window.receive({ type: 'history_state', historySize: 0, alternateScreen: true })
+        window.testTerminal.reset()
+        window.testTerminal.resize(80, 24)
+        const fixture = window.selectionFixture = { top: 80, position: 100, mode, paints: 0, send: window.testSocket.send }
+        fixture.line = row => `copy-${String(row).padStart(3, '0')} 中文🙂 transcript`
+        fixture.draw = () => {
+          const lines = mode === 'cli'
+            ? ['CLI TITLE', ...Array.from({ length: 21 }, (_, i) => fixture.line(fixture.top + i)), 'draft > preserved', 'Esc help']
+            : Array.from({ length: 24 }, (_, i) => fixture.line(fixture.top + i))
+          window.output(lines.map((line, row) => `\x1b[${row + 1};1H\x1b[2K${line}`).join(''))
+          fixture.paints++
+        }
+        window.testSocket.send = function(raw) {
+          fixture.send.call(this, raw)
+          const message = JSON.parse(raw)
+          if (message.type !== (mode === 'cli' ? 'scroll_application' : 'scroll_history_to')) return
+          const delta = mode === 'cli' ? message.lines : message.position - fixture.position
+          fixture.top += delta
+          if (mode === 'tmux') {
+            fixture.position = message.position
+            window.receive({ ...message, type: 'history_position' })
+          }
+          fixture.draw()
+        }
+        window.output('\x1b[?1049h\x1b[?1000l\x1b[?1006l')
+        fixture.draw()
+        window.receive({ type: 'history_state', historySize: mode === 'tmux' ? 200 : 0, alternateScreen: mode === 'cli' })
+        if (mode === 'tmux') window.receive({ type: 'history_position', position: 100, historySize: 200 })
+        window.messages.length = 0
+      }, { mode })
+      await flush()
+      const box = await page.locator('.terminal-canvas > .xterm .xterm-screen').boundingBox()
+      const cell = { width: box.width / 80, height: box.height / 24 }
+      const start = { row: 8, column: 8 }, end = { row: direction < 0 ? 3 : 15, column: 5 }
+      const edgeDrag = mode === 'cli' && direction < 0
+      if (edgeDrag) {
+        await output('\x1b[?1000h\x1b[?1006h')
+        await page.keyboard.down('Shift')
+      }
+      await page.mouse.move(box.x + cell.width * (start.column + .2), box.y + cell.height * (start.row + .5))
+      await page.mouse.down()
+      await page.mouse.move(box.x + cell.width * (end.column + .2), box.y + cell.height * (end.row + .5), { steps: 6 })
+      for (let step = 0; step < (edgeDrag ? 24 : 48); step++) {
+        await wheel(direction * 64)
+        await flush()
+      }
+      if (edgeDrag) {
+        await page.mouse.move(box.x + cell.width * (end.column + .2), box.y - cell.height)
+        await page.waitForFunction(() => window.selectionFixture.top <= 32)
+      }
+      await page.mouse.up()
+      if (edgeDrag) await page.keyboard.up('Shift')
+      if (!edgeDrag) await page.waitForFunction(top => window.selectionFixture.top === top, 80 + direction * 48)
+      await page.waitForTimeout(80)
+      const finalTop = await page.evaluate(() => window.selectionFixture.top)
+      assert.ok(Math.abs(finalTop - 80) >= 48, 'The remote transcript must actually scroll more than two viewports')
+      const first = direction < 0 ? finalTop + (edgeDrag ? 1 : end.row) - (mode === 'cli' ? 1 : 0) : 80 + start.row - (mode === 'cli' ? 1 : 0)
+      const last = direction < 0 ? 80 + start.row - (mode === 'cli' ? 1 : 0) : 80 + 48 + end.row - (mode === 'cli' ? 1 : 0)
+      const firstCol = direction < 0 ? end.column : start.column, lastCol = direction < 0 ? start.column : end.column
+      const expected = Array.from({ length: last - first + 1 }, (_, i) => {
+        const line = `copy-${String(first + i).padStart(3, '0')} 中文🙂 transcript`
+        return i === 0 ? line.slice(firstCol) : i === last - first ? line.slice(0, lastCol) : line
+      }).join(windowsRendering ? '\r\n' : '\n')
+      await expectClipboard(expected)
+      assert.ok(expected.split('\n').length > 48, 'Selection must exceed two viewports')
+      // Right clicks and toolbar copying must retain the full drag, even after
+      // the current xterm selection is cleared by the browser's context menu.
+      await page.mouse.click(box.x + cell.width * 10, box.y + cell.height * 10, { button: 'right' })
+      await page.evaluate(() => { window.testTerminal.clearSelection(); return navigator.clipboard.writeText('copy-again') })
+      await page.getByRole('button', { name: '复制选中内容', exact: true }).click()
+      await expectClipboard(expected)
+      const nativeCopy = await page.evaluate(() => {
+        const data = new DataTransfer()
+        window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data }))
+        return data.getData('text/plain')
+      })
+      assert.equal(nativeCopy, expected)
+      await page.evaluate(() => { window.testTerminal.focus(); return navigator.clipboard.writeText('ctrl-copy') })
+      await page.keyboard.press('Control+c')
+      await expectClipboard(expected)
+      await page.evaluate(() => { window.testSocket.send = window.selectionFixture.send })
+    }
+  }
+  console.log('Cross-screen CLI/tmux drag, full-range clipboard and right-click retry checks passed')
+
+  // Ordinary SSH must retain xterm's native local scrollback and drag behavior.
+  await page.evaluate(() => { window.session.sessionMode = 'normal'; window.testTerminal.reset() })
+  await output(Array.from({length: 100}, (_, i) => `local-${String(i).padStart(3, '0')}`).join('\r\n'))
+  {
+    const box = await page.locator('.terminal-canvas > .xterm .xterm-screen').boundingBox()
+    await page.mouse.move(box.x + box.width * 6.2 / 80, box.y + box.height * 8.5 / 24)
+    await page.mouse.down()
+    for (let step = 0; step < 48; step++) await wheel(-64)
+    await page.mouse.move(box.x + box.width * 3.2 / 80, box.y + box.height * 3.5 / 24)
+    await page.mouse.up()
+    await expectClipboard(['al-031', ...Array.from({length: 52}, (_, i) => `local-${String(32 + i).padStart(3, '0')}`), 'local-'].join(windowsRendering ? '\r\n' : '\n'))
+  }
+  await page.evaluate(() => { window.session.sessionMode = 'tmux' })
 
   // Replay bytes emitted by a real tmux client on a PTY, including its
   // incremental copy-mode redraws. Protocol-only mocks cannot catch cursor
@@ -737,6 +851,40 @@ try {
                 `${mode}, cycle ${cycle}, delta ${delta}: the visible history must actually move in order`)
             }
           }
+        }
+        // A real tmux copy-mode redraw is incremental and includes a position
+        // indicator. Exercise the full drag, not just independently selected
+        // screens. Shift preserves the application's native mouse selection.
+        {
+          const forced = mode !== 'alternate-keyboard'
+          if (forced) await page.keyboard.down('Shift')
+          await page.mouse.move(box.x + box.width * 8.2 / 80, box.y + box.height * 8.5 / 24)
+          await page.mouse.down()
+          const endRow = alternate ? 3 : 0
+          await page.mouse.move(box.x + box.width * 5.2 / 80, box.y + box.height * (endRow + .5) / 24, { steps: 6 })
+          for (let step = 0; step < 48; step++) {
+            const start = await page.evaluate(() => window.messages.length)
+            await wheel(-64)
+            const type = alternate ? 'scroll_application' : 'scroll_history_to'
+            await page.waitForFunction(({start, type}) => window.messages.slice(start).some(m => m.type === type), {start, type}, {timeout: 5000})
+            const message = await page.evaluate(({start, type}) => window.messages.slice(start).find(m => m.type === type), {start, type})
+            peer.stdin.write(JSON.stringify(message) + '\n')
+            await apply(await read())
+          }
+          await page.mouse.up()
+          if (forced) await page.keyboard.up('Shift')
+          const first = firstLine - 48 + endRow, last = firstLine + 8
+          const expected = Array.from({length: last - first + 1}, (_, i) => {
+            const line = `original-${String(first + i).padStart(3, '0')}`
+            return i === 0 ? line.slice(5) : i === last - first ? line.slice(0, 8) : line
+          }).join(windowsRendering ? '\r\n' : '\n')
+          await expectClipboard(expected)
+          // Return to the initial screen for the button and input regressions.
+          const message = alternate
+            ? { type: 'scroll_application', lines: 48, row: 8, column: 40 }
+            : { type: 'scroll_history_to', position: initial.historySize, historySize: initial.historySize }
+          peer.stdin.write(JSON.stringify(message) + '\n')
+          await apply(await read())
         }
         if (mode === 'alternate-keyboard') {
           const forward = async type => {

@@ -194,13 +194,13 @@ class _SessionLockState extends State<SessionLock> {
                             padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
                             child: Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.lock_outline_rounded,
                                   size: 17,
                                   color: V.muted,
                                 ),
                                 const SizedBox(width: 8),
-                                const Text(
+                                Text(
                                   'velin',
                                   style: TextStyle(
                                     color: V.muted,
@@ -227,7 +227,7 @@ class _SessionLockState extends State<SessionLock> {
                             padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
                             child: Row(
                               children: [
-                                const Expanded(
+                                Expanded(
                                   child: Text(
                                     '远端任务继续运行',
                                     style: TextStyle(
@@ -286,7 +286,7 @@ class _SessionLockState extends State<SessionLock> {
                 ),
               ),
               const SizedBox(height: 10),
-              Text(date, style: const TextStyle(fontSize: 16, color: V.accent)),
+              Text(date, style: TextStyle(fontSize: 16, color: V.accent)),
               const SizedBox(height: 64),
               _avatar(),
               const SizedBox(height: 14),
@@ -299,14 +299,11 @@ class _SessionLockState extends State<SessionLock> {
                 ),
               ),
               const SizedBox(height: 6),
-              const Text(
-                '工作台已锁定',
-                style: TextStyle(color: V.muted, fontSize: 13),
-              ),
+              Text('工作台已锁定', style: TextStyle(color: V.muted, fontSize: 13)),
               const SizedBox(height: 40),
-              const Icon(Icons.keyboard_arrow_up_rounded, color: V.accent),
+              Icon(Icons.keyboard_arrow_up_rounded, color: V.accent),
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 '轻触屏幕，输入 PIN 解锁',
                 style: TextStyle(color: V.accent, fontSize: 13),
               ),
@@ -317,16 +314,8 @@ class _SessionLockState extends State<SessionLock> {
     ),
   );
 
-  Widget _avatar() => Container(
-    width: 64,
-    height: 64,
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: .06),
-      shape: BoxShape.circle,
-      border: Border.all(color: Colors.white.withValues(alpha: .1)),
-    ),
-    child: const Icon(Icons.person_outline_rounded, size: 30, color: V.accent),
-  );
+  Widget _avatar() =>
+      SoftBadge(Icons.person_outline_rounded, size: 64, color: V.sky);
 
   Widget _pinPanel() => Center(
     key: const ValueKey('lock-pin-panel'),
@@ -346,7 +335,7 @@ class _SessionLockState extends State<SessionLock> {
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               '输入 6 位锁屏 PIN',
               textAlign: TextAlign.center,
               style: TextStyle(color: V.muted, fontSize: 13),

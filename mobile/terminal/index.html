@@ -2,14 +2,15 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
   <link rel="stylesheet" href="xterm.css">
   <link rel="stylesheet" href="terminal.css">
   <title>Velin Terminal</title>
 </head>
 <body>
-  <div id="viewport"><div id="terminal"></div></div>
+  <div id="viewport"><div id="zoomer"><div id="terminal"></div></div></div>
+  <button id="scroll-knob" type="button" aria-label="按住上下拖动滚动" hidden></button>
   <script src="xterm.js"></script>
   <script src="addon-fit.js"></script>
   <script src="terminal.js"></script>

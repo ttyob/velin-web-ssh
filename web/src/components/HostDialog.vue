@@ -31,7 +31,8 @@ const defaults = (): Host => ({
   keepaliveInterval: 30,
   maxRetries: 5,
   terminalType: "xterm-256color",
-  sessionMode: "tmux",
+  // New hosts start as a plain SSH session; tmux persistence is opt-in.
+  sessionMode: "normal",
   jumpHostID: "",
   rdpMode: "web",
   rdpQuality: "crisp",

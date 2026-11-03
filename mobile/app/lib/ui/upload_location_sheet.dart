@@ -54,14 +54,14 @@ class _UploadLocationSheetState extends State<UploadLocationSheet> {
             const SizedBox(height: 8),
             Text(
               widget.demo ? '示例附件 · 不会读取或上传本地文件' : '上传到当前会话的项目，再将路径加入输入草稿。',
-              style: const TextStyle(fontSize: 13, color: V.muted),
+              style: TextStyle(fontSize: 13, color: V.muted),
             ),
             const SizedBox(height: 20),
             Container(
               constraints: const BoxConstraints(maxHeight: 160),
-              decoration: BoxDecoration(
+              decoration: ShapeDecoration(
                 color: V.bg,
-                borderRadius: BorderRadius.circular(12),
+                shape: V.cut(r: 12, color: V.line),
               ),
               child: ListView.separated(
                 shrinkWrap: true,
@@ -69,7 +69,7 @@ class _UploadLocationSheetState extends State<UploadLocationSheet> {
                 separatorBuilder: (_, _) => const Divider(indent: 48),
                 itemBuilder: (_, index) => ListTile(
                   dense: true,
-                  leading: const Icon(
+                  leading: Icon(
                     Icons.insert_drive_file_outlined,
                     size: 22,
                     color: V.accent,
@@ -105,7 +105,7 @@ class _UploadLocationSheetState extends State<UploadLocationSheet> {
               },
             ),
             const SizedBox(height: 12),
-            const Row(
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.folder_outlined, size: 18, color: V.muted),

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { downloadToolFile } from "../utils/toolDownloads";
 import { computed, defineAsyncComponent, ref, watch } from "vue";
 import {
   Download,
@@ -165,9 +166,7 @@ async function deleteEntry(entry: FileEntry) {
 
 function downloadEntry(entry: FileEntry) {
   if (!props.host) return;
-  const link = document.createElement("a");
-  link.href = `/api/sftp/${props.host.id}/download?path=${encodeURIComponent(entry.path)}${sessionQuery.value}`;
-  link.click();
+  downloadToolFile(`/api/sftp/${props.host.id}/download?path=${encodeURIComponent(entry.path)}${sessionQuery.value}`);
 }
 
 const editableExtensions = new Set([

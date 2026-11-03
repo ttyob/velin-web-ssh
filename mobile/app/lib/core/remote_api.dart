@@ -206,6 +206,46 @@ class RemoteApi {
       (await request('/api/sessions') as List)
           .map((j) => RemoteSession.fromJson(Map<String, dynamic>.from(j)))
           .toList();
+
+  // Trusted tool panels use a loopback gateway. Authentication stays here;
+  // upstream Set-Cookie headers are never returned to their WebView.
+  Future<Response<ResponseBody>> toolRequest(
+    String path, {
+    String method = 'GET',
+    dynamic data,
+    Map<String, dynamic>? headers,
+    CancelToken? cancel,
+  }) async {
+    final uri = endpoint(path);
+    final response = await _dio.requestUri<ResponseBody>(
+      uri,
+      data: data,
+      cancelToken: cancel,
+      options: Options(
+        method: method,
+        responseType: ResponseType.stream,
+        receiveTimeout: Duration.zero,
+        followRedirects: false,
+        validateStatus: (_) => true,
+        headers: {
+          ...?headers,
+          'Cookie': cookieHeader(uri),
+          'User-Agent': 'Velin-Mobile-Tools/0.1',
+        },
+      ),
+    );
+    await _capture(response);
+    return response;
+  }
+
+  Future<WebSocket> toolSocket(String path) {
+    final uri = endpoint(path);
+    return WebSocket.connect(
+      uri.replace(scheme: uri.scheme == 'https' ? 'wss' : 'ws').toString(),
+      headers: {'Cookie': cookieHeader(uri)},
+    );
+  }
+
   Future<List<RemoteHost>> hosts() async =>
       (await request('/api/hosts') as List)
           .map((j) => RemoteHost.fromJson(Map<String, dynamic>.from(j)))
@@ -314,11 +354,25 @@ class RemoteApi {
     );
   }
 
-  Future<WebSocket> connect(RemoteSession session, String device) async {
+  /// [streamID]/[offset] resume a stream from cached output; [tail] limits a
+  /// full replay to roughly its newest bytes. Servers that do not know these
+  /// parameters ignore them and send the full replay.
+  Future<WebSocket> connect(
+    RemoteSession session,
+    String device, {
+    String streamID = '',
+    int offset = 0,
+    int tail = 0,
+  }) async {
     final http = endpoint('/ws/sessions/${session.id}');
     final uri = http.replace(
       scheme: base.scheme == 'https' ? 'wss' : 'ws',
-      queryParameters: {'attach': 'view', 'device': device},
+      queryParameters: {
+        'attach': 'view',
+        'device': device,
+        if (streamID.isNotEmpty) ...{'stream': streamID, 'offset': '$offset'},
+        if (tail > 0) 'tail': '$tail',
+      },
     );
     var abandoned = false;
     return WebSocket.connect(

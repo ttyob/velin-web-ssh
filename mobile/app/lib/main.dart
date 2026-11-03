@@ -15,16 +15,24 @@ import 'ui/session_lock.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: V.bg,
-    ),
-  );
   final preferences = await SharedPreferences.getInstance();
+  V.restore(
+    preferences.getString('mobile.appTheme'),
+    preferences.getString('mobile.appBackdrop'),
+    file: preferences.getString('mobile.appBackdropFile'),
+    dim: preferences.getDouble('mobile.appBackdropDim'),
+  );
+  _applySystemBars();
   runApp(VelinApp(preferences: preferences));
 }
+
+void _applySystemBars() => SystemChrome.setSystemUIOverlayStyle(
+  SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarColor: V.bg,
+  ),
+);
 
 class VelinApp extends StatefulWidget {
   final SharedPreferences preferences;
@@ -45,7 +53,22 @@ class _VelinAppState extends State<VelinApp> {
   @override
   void initState() {
     super.initState();
+    V.revision.addListener(_restyle);
     _restore();
+  }
+
+  // Colours are resolved at build time; const subtrees are skipped by the
+  // framework, so mark every element dirty to repaint with the new palette.
+  void _restyle() {
+    if (!mounted) return;
+    _applySystemBars();
+    setState(() {});
+    void visit(Element element) {
+      element.markNeedsBuild();
+      element.visitChildren(visit);
+    }
+
+    (context as Element).visitChildren(visit);
   }
 
   Future<void> _restore() async {
@@ -179,6 +202,7 @@ class _VelinAppState extends State<VelinApp> {
 
   @override
   void dispose() {
+    V.revision.removeListener(_restyle);
     lockNavigation.dispose();
     api?.close();
     super.dispose();
@@ -240,6 +264,7 @@ class _VelinAppState extends State<VelinApp> {
         user?['sessionLocked'] == true && user?['forcePasswordChange'] != true;
     lockNavigation.locked = locked;
     return MaterialApp(
+      scrollBehavior: const _CalmScrollBehavior(),
       navigatorKey: navigation,
       navigatorObservers: [lockNavigation],
       title: 'Velin Mobile',
@@ -287,4 +312,18 @@ class _VelinAppState extends State<VelinApp> {
           : const Scaffold(),
     );
   }
+}
+
+/// No edge glow / stretch flash when a list is dragged past its end.
+class _CalmScrollBehavior extends MaterialScrollBehavior {
+  const _CalmScrollBehavior();
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) => child;
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const ClampingScrollPhysics();
 }

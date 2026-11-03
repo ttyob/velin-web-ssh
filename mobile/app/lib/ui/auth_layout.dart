@@ -7,51 +7,7 @@ class AuthBackdrop extends StatelessWidget {
   const AuthBackdrop({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: const BoxDecoration(color: Color(0xff101216)),
-    child: Stack(
-      fit: StackFit.expand,
-      children: [
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: RadialGradient(
-              center: Alignment(.9, -.9),
-              radius: 1.4,
-              colors: [Color(0xff283342), Color(0xff14181f), Color(0xff101216)],
-              stops: [0, .5, 1],
-            ),
-          ),
-        ),
-        Positioned(
-          right: -160,
-          top: -160,
-          child: IgnorePointer(
-            child: Container(
-              width: 420,
-              height: 420,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: .035)),
-              ),
-              child: Center(
-                child: Container(
-                  width: 300,
-                  height: 300,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: .035),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        child,
-      ],
-    ),
-  );
+  Widget build(BuildContext context) => Scene(child: child);
 }
 
 class AuthBrand extends StatelessWidget {
@@ -61,30 +17,26 @@ class AuthBrand extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: .06),
-          borderRadius: BorderRadius.circular(11),
-          border: Border.all(color: Colors.white.withValues(alpha: .1)),
-        ),
-        child: const Icon(Icons.terminal_rounded, size: 21, color: V.text),
-      ),
-      const SizedBox(width: 10),
-      const Expanded(
-        child: Text(
-          'velin',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 25,
-            fontWeight: FontWeight.w600,
-            letterSpacing: -.9,
+      const SoftBadge(Icons.terminal_rounded, size: 46),
+      const SizedBox(width: 12),
+      Expanded(
+        child: ShaderMask(
+          shaderCallback: (r) =>
+              LinearGradient(colors: [V.accent, V.sky]).createShader(r),
+          child: const Text(
+            'velin',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2,
+              color: Colors.white,
+            ),
           ),
         ),
       ),
-      if (demo) const StateChip('设计预览'),
+      if (demo) StateChip('设计预览', color: V.yellow),
     ],
   );
 }
@@ -127,26 +79,24 @@ class AuthPage extends StatelessWidget {
                     children: [
                       AuthBrand(demo: demo),
                       const SizedBox(height: 36),
+                      const SectionLabel('欢迎回来，今晚也写点代码吧'),
+                      const SizedBox(height: 10),
                       Text(
                         title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 28,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: -.7,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1,
+                          shadows: [Shadow(color: V.accent, blurRadius: 18)],
                         ),
                       ),
                       const SizedBox(height: 8),
-                      Text(subtitle, style: const TextStyle(color: V.muted)),
+                      Text(subtitle, style: TextStyle(color: V.muted)),
                       const SizedBox(height: 24),
-                      Container(
+                      SoftPanel(
                         padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: const Color(0xff1a1e25).withValues(alpha: .85),
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: .08),
-                          ),
-                        ),
+                        radius: 22,
+                        glow: true,
                         child: child,
                       ),
                       const SizedBox(height: 20),
@@ -173,14 +123,11 @@ class AuthError extends StatelessWidget {
     child: Container(
       margin: const EdgeInsets.only(top: 16),
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: V.danger.withValues(alpha: .08),
-        borderRadius: BorderRadius.circular(10),
+      decoration: ShapeDecoration(
+        color: V.danger.withValues(alpha: .1),
+        shape: V.cut(r: 8, color: V.danger.withValues(alpha: .7)),
       ),
-      child: Text(
-        message,
-        style: const TextStyle(color: V.danger, fontSize: 13),
-      ),
+      child: Text(message, style: TextStyle(color: V.danger, fontSize: 13)),
     ),
   );
 }

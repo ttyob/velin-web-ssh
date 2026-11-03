@@ -8,6 +8,7 @@ clipboard/
 !/docs/development.md
 !/docs/mobile-app-requirements.md
 !/docs/mobile-app-development-plan.md
+!/docs/session-agent-integration.md
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
@@ -20,7 +21,11 @@ dist/fnos/
 *.log
 .env
 .DS_Store
-velin
+/velin
+/build/bin/
+/desktop/wailsjs/
+mobile/app/.config/
+mobile/app/.flutter
 .well-known/acme-challenge/
 mobile/app/assets/terminal/
 mobile/terminal/node_modules/

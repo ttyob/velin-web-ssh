@@ -69,7 +69,7 @@ class _ServiceProfilesScreenState extends State<ServiceProfilesScreen> {
                     validator: (v) => (v ?? '').trim().isEmpty ? '请填写账户' : null,
                   ),
                   const SizedBox(height: 12),
-                  const Text(
+                  Text(
                     '地址或账户变更后需重新登录。',
                     style: TextStyle(fontSize: 12, color: V.muted),
                   ),
@@ -159,53 +159,65 @@ class _ServiceProfilesScreenState extends State<ServiceProfilesScreen> {
         ),
       ],
     ),
-    body: SafeArea(
-      top: false,
-      child: ListView(
-        children: [
-          if (store.all.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text(
-                '添加服务地址后，可选择该服务登录。',
-                style: TextStyle(color: V.muted),
+    body: Scene(
+      child: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.all(14),
+          children: [
+            if (store.all.isEmpty)
+              Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  '添加服务地址后，可选择该服务登录。',
+                  style: TextStyle(color: V.muted),
+                ),
               ),
-            ),
-          for (final p in store.all) ...[
-            ListTile(
-              minTileHeight: 80,
-              leading: Icon(
-                _isCurrent(p) ? Icons.check_circle_outline : Icons.dns_outlined,
-                color: V.accent,
+            for (final p in store.all) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: SoftPanel(
+                  padding: EdgeInsets.zero,
+                  color: _isCurrent(p) ? V.sky : V.accent,
+                  glow: _isCurrent(p),
+                  child: ListTile(
+                    minTileHeight: 80,
+                    leading: SoftBadge(
+                      _isCurrent(p)
+                          ? Icons.check_circle_outline
+                          : Icons.dns_outlined,
+                      color: _isCurrent(p) ? V.sky : V.accent,
+                    ),
+                    title: Text(
+                      p.name.isEmpty ? p.account : p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    subtitle: Text(
+                      '${p.account} · ${p.server}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: V.muted),
+                    ),
+                    onTap: () => Navigator.pop(context, p),
+                    trailing: PopupMenuButton<String>(
+                      tooltip: '服务操作',
+                      onSelected: (v) {
+                        if (v == 'edit') _edit(p);
+                        if (v == 'delete') _delete(p);
+                      },
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                        const PopupMenuItem(value: 'delete', child: Text('删除')),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-              title: Text(
-                p.name.isEmpty ? p.account : p.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 14),
-              ),
-              subtitle: Text(
-                '${p.account} · ${p.server}',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: V.muted),
-              ),
-              onTap: () => Navigator.pop(context, p),
-              trailing: PopupMenuButton<String>(
-                tooltip: '服务操作',
-                onSelected: (v) {
-                  if (v == 'edit') _edit(p);
-                  if (v == 'delete') _delete(p);
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'edit', child: Text('编辑')),
-                  const PopupMenuItem(value: 'delete', child: Text('删除')),
-                ],
-              ),
-            ),
-            const Divider(indent: 64),
+            ],
           ],
-        ],
+        ),
       ),
     ),
   );

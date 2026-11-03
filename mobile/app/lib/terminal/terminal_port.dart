@@ -3,6 +3,10 @@ import 'package:uuid/uuid.dart';
 class TerminalPort {
   final String sessionID;
   String generation = const Uuid().v4();
+
+  /// Terminal palette background (`#rrggbb`), known before the page loads so
+  /// the native view and page start in the right colour.
+  String? background;
   void Function(Map<String, dynamic>)? onMessage;
   void Function(Map<String, dynamic>)? _send;
   final List<Map<String, dynamic>> _pending = [];
@@ -33,7 +37,7 @@ class TerminalPort {
     if (_send == null) {
       if (message['type'] == 'reset') {
         _pending.removeWhere(
-          (item) => !['font', 'theme'].contains(item['type']),
+          (item) => !['font', 'theme', 'knob'].contains(item['type']),
         );
       }
       _pending.add(message);

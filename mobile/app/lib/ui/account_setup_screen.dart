@@ -79,7 +79,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Row(
+          Row(
             children: [
               Icon(Icons.key_outlined, size: 18, color: V.accent),
               SizedBox(width: 8),

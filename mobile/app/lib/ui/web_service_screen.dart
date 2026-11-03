@@ -64,7 +64,7 @@ class _WebServiceScreenState extends State<WebServiceScreen> {
           ? ListView(
               padding: const EdgeInsets.all(24),
               children: [
-                const Text('示例网页', style: TextStyle(color: V.muted)),
+                Text('示例网页', style: TextStyle(color: V.muted)),
                 const SizedBox(height: 24),
                 Text(
                   widget.service.name,
@@ -73,7 +73,7 @@ class _WebServiceScreenState extends State<WebServiceScreen> {
                 const SizedBox(height: 12),
                 Text(
                   widget.service.targetURL,
-                  style: const TextStyle(color: V.accent),
+                  style: TextStyle(color: V.accent),
                 ),
                 const SizedBox(height: 24),
                 const Text('原生 App 会通过当前 Velin 服务访问此网页。此预览不连接远端服务。'),

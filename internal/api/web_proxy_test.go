@@ -3,17 +3,22 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/security"
 	"github.com/ttyob/velin-web-ssh/internal/store"
 )
 
@@ -710,8 +715,13 @@ func TestRootProxyCannotOverwriteVelinSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookies := response.Header.Values("Set-Cookie")
-	if len(cookies) != 1 || strings.Contains(cookies[0], cookieName+"=") || !strings.Contains(cookies[0], "upstream=value") {
+	if len(cookies) != 4 {
 		t.Fatalf("root proxy cookies=%v", cookies)
+	}
+	for _, cookie := range response.Cookies() {
+		if isWebProxyControlCookie(cookie.Name) && !strings.HasPrefix(cookie.Name, proxyControlCookie) {
+			t.Fatal("root proxy overwrote an outer security cookie")
+		}
 	}
 }
 
@@ -727,9 +737,149 @@ func TestPathProxyCannotOverwriteVelinSecurityCookies(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookies := response.Header.Values("Set-Cookie")
-	if len(cookies) != 1 || !strings.Contains(cookies[0], "upstream=value") {
+	if len(cookies) != 6 {
 		t.Fatalf("path proxy cookies=%v", cookies)
 	}
+	for _, cookie := range response.Cookies() {
+		if isWebProxyControlCookie(cookie.Name) && (!strings.HasPrefix(cookie.Name, proxyControlCookie) || cookie.Path != "/") {
+			t.Fatal("path proxy overwrote an outer security cookie")
+		}
+	}
+}
+
+func TestProxyControlCookiesAreServiceAndBrowserScoped(t *testing.T) {
+	target, _ := url.Parse("http://velin.internal:8377")
+	first := &webProxySession{serviceID: "first", userID: "owner", routePrefix: stableWebProxyPrefix("first"), target: target, upstream: target.Host}
+	second := &webProxySession{serviceID: "second", userID: "owner", routePrefix: stableWebProxyPrefix("second"), target: target, upstream: target.Host}
+	request := httptest.NewRequest(http.MethodGet, "https://public.example/login?__velin_web_service=first", nil)
+	response := &http.Response{Header: http.Header{"Set-Cookie": {"velin_csrf_http=inner-token; Path=/; SameSite=Strict", "velin_session_http=inner-session; Path=/; HttpOnly"}}, Body: io.NopCloser(strings.NewReader("")), Request: request}
+	if err := first.modifyResponse(response); err != nil {
+		t.Fatal(err)
+	}
+	for _, cookie := range response.Cookies() {
+		if !strings.HasPrefix(cookie.Name, first.controlCookiePrefix(request)) || cookie.Path != "/" || cookie.Domain != "" {
+			t.Fatal("inner cookie was not isolated for root navigation")
+		}
+		request.AddCookie(cookie)
+	}
+	request.AddCookie(&http.Cookie{Name: httpCookieName, Value: "outer-session"})
+	request.AddCookie(&http.Cookie{Name: httpCSRFCookieName, Value: "outer-csrf"})
+	if got := first.upstreamCookieHeader(request); got != "velin_csrf_http=inner-token; velin_session_http=inner-session" {
+		t.Fatalf("inner cookies were not restored, or outer cookies leaked: %q", got)
+	}
+	if got := second.upstreamCookieHeader(request); got != "" {
+		t.Fatalf("another service received cookies: %q", got)
+	}
+	// The same parent account in a second browser cannot inherit an inner login
+	// from the shared cookie jar, and a proxy reconnect keeps browser cookies valid.
+	anonymous := httptest.NewRequest(http.MethodGet, request.URL.String(), nil)
+	if got := first.upstreamCookieHeader(anonymous); got != "" {
+		t.Fatal("inner login was shared between browsers")
+	}
+	reconnected := &webProxySession{serviceID: first.serviceID, userID: first.userID, routePrefix: first.routePrefix, target: target, upstream: target.Host}
+	if got := reconnected.upstreamCookieHeader(request); got != first.upstreamCookieHeader(request) {
+		t.Fatal("proxy reconnect lost the browser's inner login")
+	}
+	request.AddCookie(&http.Cookie{Name: first.controlCookiePrefix(request) + base64.RawURLEncoding.EncodeToString([]byte("unrelated")), Value: "invalid"})
+	request.AddCookie(&http.Cookie{Name: first.controlCookiePrefix(request) + "not-valid!", Value: "invalid"})
+	if strings.Contains(first.upstreamCookieHeader(request), "invalid") {
+		t.Fatal("malformed or unsupported cookie names were forwarded")
+	}
+}
+
+func TestVelinLoginThroughSavedWebProxy(t *testing.T) {
+	openStore := func(name string) *store.Store {
+		t.Helper()
+		db, err := store.Open(filepath.Join(t.TempDir(), name+".db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	outerDB, innerDB := openStore("outer"), openStore("inner")
+	hash, err := security.HashPassword("test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = outerDB.CreateUser("owner", "outer-user", hash, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"inner-a", "inner-b"} {
+		if err = innerDB.CreateUser(name, name, hash, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inner := httptest.NewServer((&API{store: innerDB, cfg: config.Config{DeploymentID: "inner"}}).Router())
+	defer inner.Close()
+	target, _ := url.Parse(inner.URL)
+	if err = outerDB.SaveHost(store.Host{ID: "host", UserID: "owner", Name: "SSH", Address: "127.0.0.1", Port: 22, Username: "dev"}); err != nil {
+		t.Fatal(err)
+	}
+	manager := &webProxyManager{stableSessions: make(map[string]*webProxySession)}
+	for _, id := range []string{"first", "second"} {
+		if err = outerDB.SaveWebService(store.WebService{ID: id, UserID: "owner", HostID: "host", Name: id, TargetURL: inner.URL, ProxyMode: "path", PageMode: "html"}); err != nil {
+			t.Fatal(err)
+		}
+		session := &webProxySession{serviceID: id, userID: "owner", routePrefix: stableWebProxyPrefix(id), target: target, upstream: target.Host, stable: true, pageMode: "html", createdAt: time.Now(), lastUsedAt: time.Now(), transport: http.DefaultTransport.(*http.Transport).Clone()}
+		session.proxy = session.reverseProxy()
+		manager.stableSessions[stableWebProxyKey("owner", id)] = session
+		defer session.transport.CloseIdleConnections()
+	}
+	outer := httptest.NewServer((&API{store: outerDB, cfg: config.Config{DeploymentID: "outer"}, webProxies: manager}).Router())
+	defer outer.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	request := func(method, path, body, csrf string, want int) map[string]any {
+		t.Helper()
+		r, err := http.NewRequest(method, outer.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("X-CSRF-Token", csrf)
+		response, err := client.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var result map[string]any
+		if err = json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != want {
+			t.Fatalf("%s %s status=%d, want %d: %v", method, path, response.StatusCode, want, result)
+		}
+		return result
+	}
+	login := func(prefix, name string) string {
+		t.Helper()
+		csrf := request(http.MethodGet, prefix+"/api/csrf", "", "", http.StatusOK)["token"].(string)
+		request(http.MethodPost, prefix+"/api/auth/login", `{"username":"`+name+`","password":"test-password"}`, csrf, http.StatusOK)
+		return csrf
+	}
+	outerCSRF := login("", "outer-user")
+	firstCSRF := login(stableWebProxyPrefix("first"), "inner-a")
+	request(http.MethodGet, stableWebProxyPrefix("second")+"/api/auth/me", "", "", http.StatusUnauthorized)
+	secondCSRF := login(stableWebProxyPrefix("second"), "inner-b")
+	for prefix, want := range map[string]string{"": "outer-user", stableWebProxyPrefix("first"): "inner-a", stableWebProxyPrefix("second"): "inner-b"} {
+		if got := request(http.MethodGet, prefix+"/api/auth/me", "", "", http.StatusOK)["username"]; got != want {
+			t.Fatalf("session mixed between control and proxied services: %v != %v", got, want)
+		}
+	}
+	// A root URL with the marker must also carry only the selected inner session.
+	if got := request(http.MethodGet, "/api/auth/me?__velin_web_service=first", "", "", http.StatusOK)["username"]; got != "inner-a" {
+		t.Fatal("marked root navigation lost the inner session")
+	}
+	request(http.MethodPost, stableWebProxyPrefix("first")+"/api/auth/logout", "{}", firstCSRF, http.StatusOK)
+	request(http.MethodGet, stableWebProxyPrefix("first")+"/api/auth/me", "", "", http.StatusUnauthorized)
+	request(http.MethodGet, "/api/auth/me", "", "", http.StatusOK)
+	request(http.MethodGet, stableWebProxyPrefix("second")+"/api/auth/me", "", "", http.StatusOK)
+	request(http.MethodPost, stableWebProxyPrefix("second")+"/api/auth/logout", "{}", secondCSRF, http.StatusOK)
+	request(http.MethodPost, "/api/auth/logout", "{}", outerCSRF, http.StatusOK)
 }
 
 func TestHostPortValidation(t *testing.T) {

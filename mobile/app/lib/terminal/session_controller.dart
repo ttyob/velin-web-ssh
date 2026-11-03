@@ -5,11 +5,13 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import '../core/models.dart';
 import '../core/remote_api.dart';
+import 'replay_cache.dart';
+import 'replay_tail.dart';
 import 'terminal_port.dart';
 
 class SessionController extends ChangeNotifier {
   final RemoteApi? api;
-  final RemoteSession session;
+  RemoteSession session;
   final String device;
   final TerminalPort port;
   final bool demo;
@@ -35,6 +37,7 @@ class SessionController extends ChangeNotifier {
   String status = '正在连接', detail = '', selectionText = '';
   double fontSize = 13;
   Future<void> Function(Map<String, dynamic>)? onRecovery;
+  Future<void> Function()? onContextMenu;
   SessionController(this.api, this.session, this.device, {this.demo = false})
     : port = TerminalPort(session.id) {
     port.onMessage = _bridge;
@@ -76,6 +79,7 @@ class SessionController extends ChangeNotifier {
     selection = false;
     selectionText = '';
     _clientID = '';
+    _replayTail.finish();
     port.push({'type': 'reset'});
     port.push({'type': 'control', 'enabled': false});
     port.push({'type': 'selection', 'enabled': false});
@@ -112,7 +116,15 @@ class SessionController extends ChangeNotifier {
         passphrase: passphrase,
       );
       if (_disposed || current != _connection) return;
-      final socket = await api!.connect(session, device);
+      await _prepareResume(current);
+      if (_disposed || current != _connection) return;
+      final socket = await api!.connect(
+        session,
+        device,
+        streamID: _resumeStream,
+        offset: _streamEnd,
+        tail: _tailRequest,
+      );
       if (_disposed || current != _connection) {
         await socket.close();
         return;
@@ -202,6 +214,20 @@ class SessionController extends ChangeNotifier {
         _receivedOffset = (e['offset'] as num?)?.toInt() ?? 0;
         status = remoteReady ? '正在同步' : '正在连接 SSH';
         replaying = true;
+        // Resuming is only valid when the server confirms the same stream and
+        // sends the output after our cached offset; otherwise start clean.
+        final helloStream = e['streamID'] as String? ?? '';
+        final resumed =
+            _resumeStream.isNotEmpty &&
+            helloStream == _resumeStream &&
+            e['truncated'] != true;
+        if (!resumed) {
+          _replayTail.finish();
+          _raw.clear();
+        }
+        _streamID = helloStream;
+        _streamEnd = (e['offset'] as num?)?.toInt() ?? 0;
+        _resumeStream = '';
         port.push({
           'type': 'setViewport',
           'rows': e['rows'] ?? 30,
@@ -216,15 +242,21 @@ class SessionController extends ChangeNotifier {
       case 'replay_live':
         break; // Preview is never appended twice.
       case 'replay':
-        _write(e, finalReplay: e['replayFinal'] == true);
+        // Only the end of a long history is rendered: old output is never
+        // parsed, so the session opens on its last screen immediately.
+        final replayBytes = base64Decode(e['data'] as String? ?? '');
+        _replayTail.add(replayBytes);
+        _raw.add(replayBytes);
+        if (e['replayFinal'] == true) _flushReplay();
       case 'replay_end':
-        // A zero-byte write is an ordered rendering barrier after reset.
-        _write({'data': ''}, finalReplay: true);
+        // An empty final write is an ordered rendering barrier after reset.
+        _flushReplay();
       case 'output':
         final bytes = base64Decode(e['data'] as String);
         final end = (e['offset'] as num).toInt(), start = end - bytes.length;
         if (end <= _receivedOffset) return;
         if (start > _receivedOffset) {
+          _invalidateStream();
           _fail('输出存在缺口，请重新同步', retry: false);
           return;
         }
@@ -232,6 +264,9 @@ class SessionController extends ChangeNotifier {
           (_receivedOffset - start).clamp(0, bytes.length),
         );
         _receivedOffset = end;
+        _raw.add(Uint8List.fromList(suffix));
+        _streamEnd = end;
+        _scheduleCacheSave();
         _write({'data': base64Encode(suffix), 'offset': end});
         _historyRefresh ??= Timer(const Duration(milliseconds: 600), () {
           _historyRefresh = null;
@@ -270,7 +305,18 @@ class SessionController extends ChangeNotifier {
             : '查看模式';
         port.push({'type': 'control', 'enabled': controlled});
       case 'control_pending':
-        status = '等待电脑端允许接管';
+        // A server without forced takeover keeps asking the active controller.
+        // Retry for a minute: it succeeds once that page closes or goes idle.
+        status = '等待电脑端允许接管（自动重试中）';
+        _controlRetries = 0;
+        _controlRetry ??= Timer.periodic(const Duration(seconds: 3), (timer) {
+          if (controlled || !connected || ++_controlRetries > 20) {
+            timer.cancel();
+            _controlRetry = null;
+            return;
+          }
+          send({'type': 'request_control', 'force': true});
+        });
       case 'control_denied':
         controlled = false;
         status = '接管请求未获批准';
@@ -320,11 +366,80 @@ class SessionController extends ChangeNotifier {
     _notify();
   }
 
+  /// One-shot message for the screen to show (cleared by the screen).
+  String scrollHint = '';
+  DateTime _lastScrollHint = DateTime.fromMillisecondsSinceEpoch(0);
+
   String _clientID = '';
+  final _replayTail = ReplayTail();
+
+  // Exact newest bytes of the output stream and where they end. They let a
+  // reconnect (or the next time the session is opened, via ReplayCache) ask the
+  // server for only what was printed since, instead of the whole history.
+  static const _tailRequest = 256 * 1024;
+  final _raw = StreamTail(max: _tailRequest);
+  String _streamID = '', _resumeStream = '';
+  int _streamEnd = -1;
+  Timer? _cacheTimer;
+
+  Future<void> _prepareResume(int connection) async {
+    _resumeStream = '';
+    if (_streamID.isEmpty || _streamEnd < 0 || _raw.size == 0) {
+      final cached = await ReplayCache.load(session.id);
+      if (_disposed || connection != _connection) return;
+      if (cached != null) {
+        _raw
+          ..clear()
+          ..add(cached.bytes);
+        _streamID = cached.streamID;
+        _streamEnd = cached.end;
+      }
+    }
+    if (_streamID.isNotEmpty && _streamEnd >= 0 && _raw.size > 0) {
+      _resumeStream = _streamID;
+      _replayTail.finish();
+      _replayTail.add(_raw.bytes());
+    }
+  }
+
+  void _invalidateStream() {
+    _streamID = '';
+    _resumeStream = '';
+    _streamEnd = -1;
+    _raw.clear();
+    _replayTail.finish();
+    unawaited(ReplayCache.delete(session.id));
+  }
+
+  void _scheduleCacheSave() {
+    if (demo || api == null || replaying || _disposed) return;
+    _cacheTimer ??= Timer(const Duration(seconds: 3), saveCache);
+  }
+
+  /// Persists the latest output so the next open can resume from it.
+  void saveCache() {
+    _cacheTimer?.cancel();
+    _cacheTimer = null;
+    if (demo || api == null || replaying) return;
+    if (_streamID.isEmpty || _streamEnd < 0 || _raw.size == 0) return;
+    unawaited(
+      ReplayCache.save(
+        session.id,
+        CachedStream(_streamID, _streamEnd, _raw.bytes()),
+      ),
+    );
+  }
+
+  void _flushReplay() {
+    final bytes = _replayTail.finish();
+    _write({'data': base64Encode(bytes)}, finalReplay: true);
+  }
+
   void _write(Map<String, dynamic> e, {bool finalReplay = false}) {
     final data = e['data'] as String? ?? '', length = base64Decode(data).length;
     _queuedBytes += length;
     if (_queuedBytes > 4 * 1024 * 1024) {
+      _invalidateStream();
       _fail('输出队列超出上限，请重新同步', retry: false);
       return;
     }
@@ -354,6 +469,7 @@ class SessionController extends ChangeNotifier {
         }
         if (e['id'] == 'replay-final') {
           replaying = false;
+          _scheduleCacheSave();
           status = remoteReady ? (controlled ? '已接管' : '查看模式') : '正在连接 SSH';
         }
       case 'modes':
@@ -366,6 +482,11 @@ class SessionController extends ChangeNotifier {
         });
       case 'selection':
         selectionText = e['text'] as String? ?? '';
+      case 'selectionMode':
+        selection = e['enabled'] == true;
+        if (!selection) selectionText = '';
+      case 'contextMenu':
+        unawaited(onContextMenu?.call());
       case 'following':
         following = e['enabled'] == true;
       case 'fit':
@@ -375,16 +496,21 @@ class SessionController extends ChangeNotifier {
       case 'scroll':
         if (!controlled) {
           detail = '查看模式可浏览本地历史；远端历史需要先接管';
+          final now = DateTime.now();
+          if (now.difference(_lastScrollHint) > const Duration(seconds: 4)) {
+            _lastScrollHint = now;
+            scrollHint = '当前是查看模式，点右上角“接管”后才能滚动 Codex 等程序';
+          }
           break;
         }
         if (!remoteReady || replaying) break;
         if (applicationAlternate && historyPosition >= historySize) {
-          send({
-            'type': 'scroll_application',
-            'lines': (e['lines'] as int).clamp(-3, 3),
-            'row': e['row'],
-            'column': e['column'],
-          });
+          // The transcript sits above the composer, so wheel steps target it
+          // rather than the finger position.
+          _appScrollRow = (e['anchorRow'] as num?)?.toInt() ?? e['row'] as int;
+          _appScrollColumn =
+              (e['anchorColumn'] as num?)?.toInt() ?? e['column'] as int;
+          _queueApplicationScroll(e['lines'] as int);
         } else if (session.mode == 'tmux') {
           scrollTo(historyPosition + (e['lines'] as int));
         }
@@ -429,6 +555,38 @@ class SessionController extends ChangeNotifier {
     });
   }
 
+  // Wheel steps are merged and paced: each one is a separate remote command, so
+  // sending every touch move would queue up and keep scrolling after release.
+  int _appScrollLines = 0, _appScrollRow = 1, _appScrollColumn = 1;
+  Timer? _appScrollTimer;
+
+  void _queueApplicationScroll(int lines) {
+    _appScrollLines = (_appScrollLines + lines).clamp(-12, 12);
+    if (_appScrollTimer != null) return;
+    _flushApplicationScroll();
+    _appScrollTimer = Timer.periodic(const Duration(milliseconds: 60), (timer) {
+      if (_appScrollLines == 0 || !connected) {
+        _appScrollLines = 0;
+        timer.cancel();
+        _appScrollTimer = null;
+        return;
+      }
+      _flushApplicationScroll();
+    });
+  }
+
+  void _flushApplicationScroll() {
+    final step = _appScrollLines.clamp(-3, 3);
+    if (step == 0) return;
+    _appScrollLines -= step;
+    send({
+      'type': 'scroll_application',
+      'lines': step,
+      'row': _appScrollRow,
+      'column': _appScrollColumn,
+    });
+  }
+
   void scrollTo(int position) {
     if (!controlled || !remoteReady || replaying) return;
     historyPosition = position.clamp(0, historySize);
@@ -442,6 +600,9 @@ class SessionController extends ChangeNotifier {
     _notify();
   }
 
+  Timer? _controlRetry;
+  int _controlRetries = 0;
+
   void requestControl() {
     if (!connected || !remoteReady || replaying) return;
     if (demo) {
@@ -450,7 +611,9 @@ class SessionController extends ChangeNotifier {
       port.push({'type': 'control', 'enabled': true});
       _notify();
     } else {
-      send({'type': 'request_control'});
+      // `force` takes over from the owner's own computer without waiting for
+      // approval; older servers ignore it and answer control_pending.
+      send({'type': 'request_control', 'force': true});
     }
   }
 
@@ -494,7 +657,28 @@ class SessionController extends ChangeNotifier {
 
   void toggleSelection() {
     selection = !selection;
+    if (!selection) selectionText = '';
     port.push({'type': 'selection', 'enabled': selection});
+    _notify();
+  }
+
+  void selectAll() => port.push({'type': 'selectAll'});
+
+  void clearDisplay() => port.push({'type': 'clear'});
+
+  Future<void> rename(String value) async {
+    final name = value.trim();
+    if (name.isEmpty || name.runes.length > 80) {
+      throw const FormatException('会话名称应为 1～80 个字符');
+    }
+    if (!demo) {
+      await api!.request(
+        '/api/sessions/${session.id}',
+        method: 'PATCH',
+        data: {'name': name},
+      );
+    }
+    session = session.withName(name);
     _notify();
   }
 
@@ -512,6 +696,7 @@ class SessionController extends ChangeNotifier {
   }
 
   void pause() {
+    saveCache();
     _active = false;
     _connection++;
     _retry?.cancel();
@@ -543,6 +728,10 @@ class SessionController extends ChangeNotifier {
     _retry?.cancel();
     _heartbeat?.cancel();
     _historyRefresh?.cancel();
+    _appScrollTimer?.cancel();
+    _controlRetry?.cancel();
+    saveCache();
+    _cacheTimer?.cancel();
     send({'type': 'release_control'});
     _pendingInput?.complete(false);
     _pendingInput = null;

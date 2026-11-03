@@ -5,8 +5,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api, json } from "../api";
 import type { TerminalSession, TerminalShare } from "../types";
 
-const props = defineProps<{ modelValue: boolean; session?: TerminalSession }>();
-const emit = defineEmits<{ "update:modelValue": [boolean] }>();
+const props = defineProps<{ modelValue: boolean; session?: TerminalSession; baseURL?: string }>();
+const emit = defineEmits<{ "update:modelValue": [boolean]; open: [url: string] }>();
 const password = ref("");
 const permission = ref<"view" | "operate">("view");
 const expiresInMinutes = ref(60);
@@ -79,6 +79,7 @@ async function createShare() {
 }
 
 function absoluteURL(item: TerminalShare) {
+  if (props.baseURL) return new URL((item.url || "").replace(/^\//, ""), props.baseURL).href;
   return new URL(item.url || "", location.origin).href;
 }
 
@@ -99,6 +100,7 @@ async function copyURL(item: TerminalShare) {
 }
 
 function preview(item: TerminalShare) {
+  if (props.baseURL) { emit("open", absoluteURL(item)); return; }
   window.open(absoluteURL(item), "_blank", "noopener,noreferrer");
 }
 

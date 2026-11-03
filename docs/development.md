@@ -4,7 +4,7 @@
 
 手机 App 已有独立 Flutter 第一版与 Android 调试构建，真机验收待完成：[构建与使用](../mobile/README.md) · [需求与技术设计](mobile-app-requirements.md) · [开发任务与验收计划](mobile-app-development-plan.md)。
 
-需要 Go 1.25.13、Node.js 18.20.4 或更高版本，以及 npm。
+需要 Go 1.27.3、Node.js 18.20.4 或更高版本，以及 npm。
 
 ## 本地运行
 
@@ -54,13 +54,17 @@ npm run test:sessions
 npm run test:connections
 ```
 
+会话可通过双击标签名称、标签或终端窗格的右键菜单，以及会话管理中的操作菜单重命名。名称为 1 到 80 个字符，通过现有会话接口保存；分屏菜单只修改所点窗格对应的会话。终端程序发出的 OSC 标题单独用于标签提示，不覆盖保存的名称。`npm run test:sessions` 同时验证名称持久化、重复主机名、分屏目标、保存失败和自动标题隔离。
+
 ## Windows 打包
 
 Windows GUI 使用 Wails 构建，在项目根目录先构建要内嵌的网页资源：
 
 登录、首次改密与锁屏在浏览器和 Windows WebView2 中共用同一套 Vue 页面。认证样式集中于 `web/src/styles-auth.css`，使用独立的黑灰配色，工作区主题偏好不覆盖认证页面。锁屏中央显示简洁指针钟表、24 小时制时间、锁定状态和点击解锁提示；时间取自当前设备，每秒更新，切回页面时立即校准，退出锁屏后清理计时器。点击提示以轻微呼吸和圆环波纹循环引导，点击屏幕或按 Enter / Space 通过上移、淡入与模糊过渡展开 PIN，Esc 反向收起并清空输入。PIN 验证成功后，遮罩向上揭开、表单淡出，露出工作区；验证失败保持锁屏。减少动态效果偏好会关闭过渡和循环动效。切换账号入口位于 PIN 界面，焦点限制在遮罩内，底层工作区使用 `inert`。验证、限流、自动锁定及跨标签页信号继续复用原服务端流程。Windows 首次启动的管理员凭据提示位于 `desktop/dist/index.html`，保持同样的表单和配色。现有项目没有开放注册接口，账户仍由管理员创建。
 
-登录会话与安全令牌 Cookie 使用部署 ID 区分同一主机上的不同服务，并隔离历史 Cookie 的 Secure 属性及路径冲突。升级时兼容可读取的旧登录会话；登录后通过 `/api/auth/me` 确认 Cookie 已生效，再进入工作区或首次改密页。改密页遇到会话失效会返回登录页。
+登录会话与安全令牌 Cookie 按部署 ID、请求域名和端口生成独立名称，只设置当前主机的根路径 Cookie，不设置父域 `Domain`。相同域名指向同一实例的内外网入口共用登录状态；不同域名、端口或实例分别登录，退出只清理当前范围的 Cookie。新命名不再读取或删除旧 Cookie，避免历史路径、Secure 属性和其他实例的 Cookie 干扰；升级后需要重新登录一次。反向代理须原样传递 `Host`（Nginx 使用 `proxy_set_header Host $http_host;`，保留非默认端口），所有 API 和 WebSocket 路径保持一致，不能缓存 `/api/csrf`。登录后通过 `/api/auth/me` 确认 Cookie 已生效，再进入工作区或首次改密页；改密页遇到会话失效会返回登录页。
+
+内网 Web 代理可在同一域名下代理另一个 Velin：`/workspace` 访问当前控制台，`/login?__velin_web_service=<服务 ID>` 访问所选内网服务。目标返回的 `velin_session*`、`velin_csrf*` 等保留名称使用独立的代理 Cookie 名称保存，按服务、所属用户、入口域名与端口、目标地址隔离，转发到该目标时恢复原名；当前控制台 Cookie 不会转发或被覆盖。代理登录 Cookie 保存在各自浏览器，不使用服务共享 Cookie 缓存。更新须应用在发起代理的 Velin 实例，之后从“内网 Web”重新打开目标服务；无需先升级被代理实例。后端回归覆盖当前控制台及两个被代理 Velin 的同时登录、地址栏标记、代理重连和分别退出。
 
 `npm --prefix web run test:auth` 使用隔离的 API 数据验证验证码、双因素认证、改密确认、手动 / 闲置 / 刷新恢复锁屏、错误 PIN、焦点限制、键盘和窄屏布局，并验证 Windows 初始账户提示、登录 Cookie 未保存及改密会话失效的处理。后端测试覆盖存在历史 Cookie 时的登录、首次改密、访问工作区和退出流程。截图写入 `artifacts/auth-redesign-20261031/`；浏览器检查不能替代 Windows 真机 WebView2 验收。
 
@@ -68,7 +72,7 @@ Windows GUI 使用 Wails 构建，在项目根目录先构建要内嵌的网页�
 npm --prefix web ci
 npm --prefix web run build
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
-wails build -platform windows/amd64 -clean -m -s -skipbindings
+wails build -platform windows/amd64 -clean -m -s -skipbindings -skipembedcreate
 ```
 
 产物为 `build/bin/velin-web-ssh.exe`。fnOS 原生包构建见 [fnOS 打包说明](../packaging/fnos/README.md)。

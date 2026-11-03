@@ -212,7 +212,7 @@ func TestCSRFProtectionRejectsExplicitCrossSiteRequest(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodPut, "http://velin.example/api/preferences", strings.NewReader(`{}`))
-	request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-test-token-123456789012345678901234567890"})
+	request.AddCookie(&http.Cookie{Name: a.csrfCookieName(request), Value: "csrf-test-token-123456789012345678901234567890"})
 	request.Header.Set("X-CSRF-Token", "csrf-test-token-123456789012345678901234567890")
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

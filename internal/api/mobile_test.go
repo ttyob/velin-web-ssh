@@ -28,7 +28,7 @@ func TestMobileCapabilitiesRequireAuthentication(t *testing.T) {
 	for _, authenticated := range []bool{false, true} {
 		r := httptest.NewRequest("GET", "/api/mobile/v1/capabilities", nil)
 		if authenticated {
-			r.Header.Set("Cookie", a.sessionCookieName()+"=token")
+			r.Header.Set("Cookie", a.sessionCookieName(r)+"=token")
 		}
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)

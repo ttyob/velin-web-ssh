@@ -1,8 +1,49 @@
 :root { color-scheme: dark; background: #101113; }
 html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
-#viewport { height: 100%; overflow: auto; padding: 6px 6px; box-sizing: border-box; }
+#viewport { position: relative; height: 100%; overflow: auto; padding: 6px 6px; box-sizing: border-box; }
 #terminal { height: 100%; min-width: 100%; }
 .xterm { height: 100%; }
+/* Rendered spans are replaced when selecting; keep touch targets on the stable screen. */
+.xterm-rows { pointer-events: none; }
 .xterm-viewport { scrollbar-width: thin; scrollbar-color: #51545e transparent; }
+/* Pinch zoom is implemented in the page (see touch.js) so the whole screen can be
+   panned to its edges and zoomed out until the full terminal fits. */
+body { touch-action: none; -webkit-user-select: none; user-select: none; }
 body.browse { touch-action: pan-x; }
-body.select { touch-action: none; }
+#zoomer { display: block; min-width: 100%; height: 100%; }
+#terminal { transform-origin: 0 0; }
+.selection-handle { position: absolute; z-index: 5; width: 40px; height: 38px; margin-left: -20px; padding: 0; border: 0; background: transparent; color: #b4c5ef; touch-action: none; }
+.selection-handle[hidden] { display: none; }
+.selection-handle::before { content: ''; position: absolute; left: 19px; top: calc(-1 * var(--cell-height)); width: 2px; height: var(--cell-height); background: currentColor; }
+.selection-handle::after { content: ''; position: absolute; top: 0; left: 12px; width: 16px; height: 16px; border-radius: 50%; background: currentColor; box-shadow: 0 1px 3px #0008; }
+.selection-handle[data-edge="start"] { margin-left: -32px; }
+.selection-handle[data-edge="start"]::before { left: 31px; }
+.selection-handle[data-edge="start"]::after { left: 16px; border-top-right-radius: 0; }
+.selection-handle[data-edge="end"] { margin-left: -8px; }
+.selection-handle[data-edge="end"]::before { left: 7px; }
+.selection-handle[data-edge="end"]::after { left: 8px; border-top-left-radius: 0; }
+.selection-handle.inset-left { margin-left: -8px; }
+.selection-handle.inset-left::before { left: 7px; }
+.selection-handle.inset-left::after { left: 8px; border-radius: 0 50% 50% 50%; }
+.selection-handle.inset-right { margin-left: -32px; }
+.selection-handle.inset-right::before { left: 31px; }
+.selection-handle.inset-right::after { left: 16px; border-radius: 50% 0 50% 50%; }
+/* History replay renders hidden; the finished screen is revealed at once. */
+body.restoring #terminal { opacity: 0; }
+#restoring { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #9a9fb0; font: 13px/1.4 sans-serif; letter-spacing: .08em; pointer-events: none; }
+#restoring[hidden] { display: none; }
+/* Floating scroll knob: follows the finger, springs back on release. */
+:root { --knob: #b4c5ef; }
+#scroll-knob { position: fixed; right: 30px; bottom: 72px; z-index: 9; width: 46px; height: 46px; padding: 0; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--knob) 55%, transparent); background: color-mix(in srgb, var(--knob) 14%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); opacity: .5; touch-action: none; -webkit-tap-highlight-color: transparent;
+  transform: translateY(var(--knob-y, 0px)) scale(var(--knob-scale, 1));
+  transition: transform .3s cubic-bezier(.2, 1.5, .4, 1), opacity .2s, box-shadow .2s; }
+#scroll-knob.active { opacity: .95; --knob-scale: 1.14; transition: opacity .15s, box-shadow .15s;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--knob) 55%, transparent); }
+#scroll-knob::before, #scroll-knob::after { content: ''; position: absolute; left: 50%; width: 9px; height: 9px; margin-left: -4.5px;
+  border-style: solid; border-color: var(--knob); border-width: 2px 0 0 2px; border-radius: 1px; opacity: .55; transition: opacity .12s; }
+#scroll-knob::before { top: 11px; transform: rotate(45deg); }
+#scroll-knob::after { bottom: 11px; transform: rotate(225deg); }
+#scroll-knob.up::before, #scroll-knob.down::after { opacity: 1; }
+#scroll-knob[hidden], body.select #scroll-knob, body.restoring #scroll-knob { display: none; }

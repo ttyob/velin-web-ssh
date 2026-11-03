@@ -33,6 +33,7 @@ import {
   Monitor,
   MoreHorizontal,
   PanelLeftClose,
+  Pencil,
   Plus,
   Rows2,
   Search,
@@ -177,6 +178,7 @@ const hostDialog = ref(false),
 let tmuxInstallRetry: (() => Promise<void>) | undefined;
 let tmuxNormalFallback: (() => Promise<void>) | undefined;
 const sessionDirectories = reactive<Record<string, string>>({});
+const terminalTitles = reactive<Record<string, string>>({});
 const conversationSessions = reactive<Record<string, boolean>>({});
 const sessionAttention = reactive<Record<string, TerminalAttentionNotice>>({});
 const pendingTerminalCommands = reactive<Record<string, string>>({});
@@ -229,6 +231,8 @@ const pinnedSessionIDs = ref<string[]>([]);
 const mobileCtrl = ref(false),
   mobileAlt = ref(false);
 const contextMenu = reactive({ open: false, x: 0, y: 0, leafID: "" });
+const tabContextMenu = reactive({ open: false, x: 0, y: 0, tabID: "" });
+const tabContextSession = computed(() => tabSession(tabContextMenu.tabID));
 const dockerContext = reactive({
   sessionID: "",
   checking: false,
@@ -394,6 +398,40 @@ function tabSession(tabID: string) {
 }
 function tabTitle(tabID: string) {
   return pendingConnections[tabID]?.name || desktopTabs[tabID]?.host.name || tabSession(tabID)?.name || "已结束会话";
+}
+function tabDescription(tabID: string) {
+  const session = tabSession(tabID);
+  if (!session) return tabTitle(tabID);
+  const host = sessionHost(session);
+  return [session.name, host && `${host.name} · ${host.username}@${host.address}`, terminalTitles[session.id], "双击名称或右键重命名"]
+    .filter(Boolean).join("\n");
+}
+function closeContextMenus() {
+  contextMenu.open = false;
+  tabContextMenu.open = false;
+}
+function openTabContext(event: MouseEvent, tabID: string) {
+  closeContextMenus();
+  tabContextMenu.tabID = tabID;
+  tabContextMenu.x = Math.max(6, Math.min(event.clientX, window.innerWidth - 216));
+  tabContextMenu.y = Math.max(6, Math.min(event.clientY, window.innerHeight - 80));
+  tabContextMenu.open = true;
+}
+function renameTabSession(tabID: string) {
+  const session = tabSession(tabID);
+  closeContextMenus();
+  if (session) void renameSession(session);
+}
+function renamePaneSession() {
+  const tree = activeTree.value;
+  const session = tree && sessionForLeaf(tree, contextMenu.leafID);
+  closeContextMenus();
+  if (session) void renameSession(session);
+}
+function closeContextTab() {
+  const tabID = tabContextMenu.tabID;
+  closeContextMenus();
+  void closeTab(tabID);
 }
 function tabStatus(tabID: string) {
   return pendingConnections[tabID] ? (pendingConnections[tabID].stage === "failed" ? "unreachable" : "creating") : desktopTabs[tabID]?.status || tabSession(tabID)?.status || "ended";
@@ -975,6 +1013,7 @@ function focusPane(leafID: string) {
   scheduleSave();
 }
 function openContext(event: MouseEvent, leafID: string) {
+  closeContextMenus();
   focusPane(leafID);
   contextMenu.open = true;
   contextMenu.leafID = leafID;
@@ -990,7 +1029,7 @@ function openContext(event: MouseEvent, leafID: string) {
   );
   contextMenu.y = Math.max(
     6,
-    Math.min(event.clientY, window.innerHeight - 500),
+    Math.min(event.clientY, window.innerHeight - 560),
   );
   const request = ++dockerContextRequest;
   if (!session) {
@@ -1410,6 +1449,7 @@ async function closeTab(tabID: string) {
 function removeLocal(id: string) {
   delete sessionAttention[id];
   delete conversationSessions[id];
+  delete terminalTitles[id];
   for (const tab of [...layout.tabs]) {
     if (!layout.trees?.[tab]) continue;
     const next = removeSession(layout.trees![tab], id);
@@ -1496,8 +1536,10 @@ function tabAttentionIcon(kind: TabAttentionKind) {
   }[kind];
 }
 function updateTitle(id: string, title: string) {
-  const session = sessions.value.find((item) => item.id === id);
-  if (session && title) session.name = title;
+  // OSC titles describe the running program; the saved session name belongs
+  // to the user and must survive shell prompts, CLI updates and reconnects.
+  if (title) terminalTitles[id] = title;
+  else delete terminalTitles[id];
 }
 function scheduleSave() {
   clearTimeout(saveTimer.value);
@@ -1895,15 +1937,29 @@ async function renameSession(session: TerminalSession) {
         confirmButtonText: "保存",
         cancelButtonText: "取消",
         inputValue: session.name,
-        inputValidator: (v) => Boolean(v.trim()) || "名称不能为空",
+        inputPlaceholder: "例如：前端开发、接口调试",
+        inputValidator: (value) => {
+          const name = value.trim();
+          return Boolean(name) && [...name].length <= 80 || "会话名称需为 1 到 80 个字符";
+        },
       },
     );
+    const name = value.trim();
+    if (name === session.name) return;
     const saved = await api<TerminalSession>(`/api/sessions/${session.id}`, {
       method: "PATCH",
-      body: json({ name: value }),
+      body: json({ name }),
     });
-    session.name = saved.name;
-  } catch {}
+    const current = sessions.value.find((item) => item.id === session.id);
+    if (current) {
+      current.name = saved.name;
+      current.updatedAt = saved.updatedAt;
+    }
+    ElMessage.success("会话已重命名");
+  } catch (error) {
+    if (error !== "cancel" && error !== "close")
+      ElMessage.error(error instanceof Error ? error.message : "重命名失败，请重试");
+  }
 }
 async function duplicateSession(session: TerminalSession) {
   const host = sessionHost(session);
@@ -2046,7 +2102,7 @@ function closeWorkspaceOverlays() {
   dockerHost.value = undefined;
   dockerSessionID.value = "";
   setTmuxInstallOpen(false);
-  contextMenu.open = false;
+  closeContextMenus();
   splitDialog.open = false;
   mobileSidebar.value = false;
   mobileCtrl.value = false;
@@ -2146,7 +2202,7 @@ function handleKeyboard(event: KeyboardEvent) {
     return;
   }
   if (event.key === "Escape") {
-    contextMenu.open = false;
+    closeContextMenus();
     splitDialog.open = false;
     return;
   }
@@ -2193,7 +2249,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="workspace-shell" @click="contextMenu.open = false">
+  <main class="workspace-shell" @click="closeContextMenus">
     <nav
       :inert="locked || undefined"
       class="app-rail desktop-only"
@@ -2445,12 +2501,14 @@ onBeforeUnmount(() => {
               class="terminal-tab"
               :class="{ active: layout.active === id }"
               @click="activate(id)"
+              @contextmenu.prevent.stop="openTabContext($event, id)"
             >
               <span
                 class="status-dot"
                 :class="statusColor(tabStatus(id))"
               ></span
-              ><span class="tab-title">{{ tabTitle(id) }}</span
+              ><span class="tab-title" :title="tabDescription(id)"
+                @dblclick.stop="renameTabSession(id)">{{ tabTitle(id) }}</span
               ><el-tooltip
                 v-if="tabIndicators[id]"
                 :content="tabIndicators[id].label"
@@ -2609,6 +2667,18 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </section>
+    <Transition name="context">
+      <nav v-if="tabContextMenu.open" class="pane-context-menu tab-context-menu"
+        aria-label="标签操作"
+        :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }" @click.stop>
+        <button v-if="tabContextSession" @click="renameTabSession(tabContextMenu.tabID)">
+          <Pencil :size="16" /><span>重命名会话</span>
+        </button>
+        <button class="danger" @click="closeContextTab">
+          <X :size="16" /><span>关闭标签</span>
+        </button>
+      </nav>
+    </Transition>
     <transition name="context"
       ><nav
         v-if="contextMenu.open"
@@ -2616,6 +2686,11 @@ onBeforeUnmount(() => {
         :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
         @click.stop
       >
+        <span class="context-label">会话</span>
+        <button @click="renamePaneSession">
+          <Pencil :size="16" /><span>重命名会话</span>
+        </button>
+        <span class="context-separator" />
         <span class="context-label">编辑</span>
         <button @click="copyPaneSelection">
           <Copy :size="16" /><span>复制选中内容</span></button

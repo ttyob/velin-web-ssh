@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,7 @@ const (
 	hostPortAccessQuery  = "__velin_access"
 	hostPortAccessCookie = "velin_host_port_"
 	pathAccessCookie     = "velin_web_service_"
+	proxyControlCookie   = "velin_web_proxy_"
 	webPageModeHTML      = "html"
 	webPageModeVite      = "vite"
 )
@@ -90,6 +92,7 @@ type webProxySession struct {
 	lastUsedAt   time.Time
 	active       int
 	routePrefix  string
+	serviceID    string
 	stable       bool
 	rootProxy    bool
 	pageMode     string
@@ -395,6 +398,7 @@ func (m *webProxyManager) getOrCreateStable(ctx context.Context, userID, service
 			if !rootProxy {
 				session.routePrefix = stableWebProxyPrefix(serviceID)
 			}
+			session.serviceID = serviceID
 			session.stable = true
 			session.rootProxy = rootProxy
 			session.pageMode = pageMode
@@ -639,10 +643,15 @@ func (s *webProxySession) modifyResponse(response *http.Response) error {
 	for _, raw := range setCookies {
 		if cookie, err := http.ParseSetCookie(raw); err == nil {
 			if isWebProxyControlCookie(cookie.Name) {
-				continue
+				// Another Velin installation has its own cookies with these names.
+				// Store them under this service's namespace, never as outer control
+				// cookies. Root navigation with the query marker must receive them too.
+				cookie.Name = s.controlCookiePrefix(response.Request) + base64.RawURLEncoding.EncodeToString([]byte(cookie.Name))
+				cookie.Path = "/"
+			} else {
+				cookie.Path = prefix + "/"
 			}
 			cookie.Domain = ""
-			cookie.Path = prefix + "/"
 			cookie.Secure = response.Request.Header.Get("X-Forwarded-Proto") == "https"
 			response.Header.Add("Set-Cookie", cookie.String())
 		}
@@ -740,11 +749,50 @@ func (s *webProxySession) upstreamCookieHeader(request *http.Request) string {
 		parts = append(parts, cookie.String())
 	}
 	for _, cookie := range request.Cookies() {
+		if restored := s.restoreControlCookie(request, cookie); restored != nil {
+			parts = append(parts, restored.String())
+			continue
+		}
 		if _, managed := jarNames[cookie.Name]; !managed && !isWebProxyControlCookie(cookie.Name) {
 			parts = append(parts, cookie.String())
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+func (s *webProxySession) controlCookiePrefix(request *http.Request) string {
+	host := request.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = request.Host
+	}
+	scope := s.serviceID
+	if scope == "" {
+		scope = s.prefix()
+	}
+	// Keep saved-service cookies stable across proxy reconnects, while separating
+	// services, owners, public ports and targets. Never keep these login cookies
+	// in the server's shared per-service cookie jar.
+	scope += "\x00" + s.userID + "\x00" + strings.ToLower(host) + "\x00" + s.target.String() + "\x00" + s.upstream
+	return proxyControlCookie + security.TokenHash(scope)[:22] + "_"
+}
+
+func (s *webProxySession) restoreControlCookie(request *http.Request, cookie *http.Cookie) *http.Cookie {
+	if !strings.HasPrefix(cookie.Name, proxyControlCookie) {
+		return nil
+	}
+	suffix, ok := strings.CutPrefix(cookie.Name, s.controlCookiePrefix(request))
+	if !ok {
+		return nil
+	}
+	name, err := base64.RawURLEncoding.DecodeString(suffix)
+	if err != nil || !isWebProxyControlCookie(string(name)) {
+		return nil
+	}
+	restored := &http.Cookie{Name: string(name), Value: cookie.Value}
+	if restored.Valid() != nil {
+		return nil
+	}
+	return restored
 }
 
 func (s *webProxySession) captureUpstreamCookies(request *http.Request, rawCookies []string) {
@@ -788,7 +836,7 @@ func (s *webProxySession) cookieJarURL(request *http.Request) *url.URL {
 }
 
 func isWebProxyControlCookie(name string) bool {
-	return name == cookieName || name == csrfCookieName || name == httpCookieName || name == httpCSRFCookieName || strings.HasPrefix(name, cookieName+"_") || strings.HasPrefix(name, csrfCookieName+"_") || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie)
+	return name == cookieName || name == csrfCookieName || name == httpCookieName || name == httpCSRFCookieName || strings.HasPrefix(name, cookieName+"_") || strings.HasPrefix(name, csrfCookieName+"_") || strings.HasPrefix(name, hostPortAccessCookie) || strings.HasPrefix(name, pathAccessCookie) || strings.HasPrefix(name, proxyControlCookie)
 }
 
 func rewriteRequestOrigin(request *http.Request, prefix string, target *url.URL, upstreamHost string) {

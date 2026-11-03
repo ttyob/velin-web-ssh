@@ -1,9 +1,16 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
+import 'dart:io';
+import 'dart:ui' as ui;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/models.dart';
 import '../core/remote_api.dart';
 import '../terminal/palettes.dart';
+import '../terminal/replay_cache.dart';
 import '../core/service_profiles.dart';
 import 'host_editor.dart';
 import 'service_profiles_screen.dart';
@@ -131,7 +138,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (saved == null || !mounted) return;
     setState(() {
       hosts = [...hosts.where((h) => h.id != saved.id), saved];
-      tab = 1;
+      tab = 2;
     });
   }
 
@@ -157,8 +164,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onTap: () => Navigator.pop(c, 'edit'),
             ),
             ListTile(
-              leading: const Icon(Icons.delete_outline, color: V.danger),
-              title: const Text('删除主机', style: TextStyle(color: V.danger)),
+              leading: Icon(Icons.delete_outline, color: V.danger),
+              title: Text('删除主机', style: TextStyle(color: V.danger)),
               onTap: () => Navigator.pop(c, 'delete'),
             ),
             const SizedBox(height: 12),
@@ -217,14 +224,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     await (widget.onServiceSwitch ?? widget.onLogout)();
   }
-
-  Future<void> _webServices() => Navigator.push<void>(
-    context,
-    MaterialPageRoute(
-      builder: (_) =>
-          WebServicesScreen(api: widget.api, hosts: hosts, demo: widget.demo),
-    ),
-  );
 
   bool _favorite(RemoteSession s) =>
       widget.preferences.getBool('mobile.favorite.$scope.${s.id}') ?? false;
@@ -331,8 +330,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onTap: () => Navigator.pop(c, 'rename'),
             ),
             ListTile(
-              leading: const Icon(Icons.stop_circle_outlined, color: V.danger),
-              title: const Text('终止远端会话', style: TextStyle(color: V.danger)),
+              leading: Icon(Icons.stop_circle_outlined, color: V.danger),
+              title: Text('终止远端会话', style: TextStyle(color: V.danger)),
               onTap: () => Navigator.pop(c, 'end'),
             ),
             const SizedBox(height: 12),
@@ -435,20 +434,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _load(silent: true);
   }
 
-  Widget _empty(String title, String hint) => ListView(
+  Widget _empty(String title, String hint, {Widget? header}) => ListView(
     physics: const AlwaysScrollableScrollPhysics(),
-    padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
+    padding: EdgeInsets.fromLTRB(
+      header == null ? 24 : 14,
+      header == null ? 72 : 12,
+      header == null ? 24 : 14,
+      24,
+    ),
     children: [
+      ?header,
+      if (header != null) const SizedBox(height: 40),
+      Center(child: SoftBadge(Icons.nightlight_round, size: 64)),
+      const SizedBox(height: 20),
       Text(
         title,
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 16),
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1,
+        ),
       ),
       const SizedBox(height: 8),
       Text(
         hint,
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 12, color: V.muted),
+        style: TextStyle(fontSize: 12, color: V.muted, fontFamily: V.mono),
       ),
     ],
   );
@@ -458,8 +470,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         sessions
             .where(
               (s) =>
-                  (filter != 1 || _favorite(s)) &&
-                  (filter != 0 || !s.ended) &&
+                  (tab != 1 || _favorite(s)) &&
+                  (tab == 1 || filter != 0 || !s.ended) &&
                   '${s.name} ${s.shortID} ${_host(s.hostID)?.name ?? ''}'
                       .toLowerCase()
                       .contains(search.toLowerCase()),
@@ -478,14 +490,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return RefreshIndicator(
       onRefresh: _load,
       child: visible.isEmpty
-          ? _empty(search.isEmpty ? '暂无会话' : '没有匹配的会话', '从右上角新建，或切换筛选条件。')
-          : ListView.separated(
+          ? _empty(
+              search.isEmpty ? (tab == 1 ? '还没有收藏的会话' : '暂无会话') : '没有匹配的会话',
+              tab == 1 ? '在会话上长按或点 ⋮，选择“收藏会话”。' : '从右上角新建，或切换筛选条件。',
+              header: tab == 0 && !searchOpen ? _hero() : null,
+            )
+          : ListView.builder(
               key: const ValueKey('session-list'),
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.only(bottom: 12),
-              itemCount: visible.length,
-              separatorBuilder: (_, _) => const Divider(indent: 64),
-              itemBuilder: (context, index) {
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+              itemCount: visible.length + (tab == 0 && !searchOpen ? 1 : 0),
+              itemBuilder: (context, rawIndex) {
+                final withHero = tab == 0 && !searchOpen;
+                if (withHero && rawIndex == 0) return _hero();
+                final index = withHero ? rawIndex - 1 : rawIndex;
                 final session = visible[index],
                     host = _host(visible[index].hostID);
                 final state = session.ended
@@ -493,64 +511,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     : session.status == 'attached'
                     ? '已连接'
                     : '待恢复';
-                return ListTile(
-                  key: ValueKey('session-${session.id}'),
-                  minTileHeight: 76,
-                  contentPadding: const EdgeInsets.only(left: 16, right: 4),
-                  horizontalTitleGap: 12,
-                  leading: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: V.surface,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.terminal_rounded,
-                      size: 19,
-                      color: V.text,
-                    ),
-                  ),
-                  title: Text(
-                    _sessionTitle(session),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: Text(
-                      '${host?.name ?? session.hostID} · ${session.createdLabel} · $state',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11, color: V.muted),
-                    ),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_favorite(session))
-                        const Icon(
-                          Icons.star_rounded,
-                          size: 13,
-                          color: V.muted,
+                final stateColor = session.ended
+                    ? V.muted
+                    : session.status == 'attached'
+                    ? V.accent
+                    : V.yellow;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: SoftPanel(
+                    key: ValueKey('session-${session.id}'),
+                    padding: const EdgeInsets.fromLTRB(12, 10, 2, 10),
+                    color: stateColor,
+                    stripe: true,
+                    glow: session.status == 'attached' && !session.ended,
+                    onTap: () => _open(session),
+                    onLongPress: () => _sessionMenu(session),
+                    child: Row(
+                      children: [
+                        SoftBadge(Icons.terminal_rounded, color: stateColor),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _sessionTitle(session),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: .4,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${host?.name ?? session.hostID} · ${session.createdLabel}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: V.muted,
+                                  fontFamily: V.mono,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              StateChip(state, color: stateColor),
+                            ],
+                          ),
                         ),
-                      IconButton(
-                        tooltip: '会话操作',
-                        onPressed: () => _sessionMenu(session),
-                        icon: const Icon(
-                          Icons.more_horiz,
-                          size: 20,
-                          color: V.muted,
+                        if (_favorite(session))
+                          Icon(Icons.star_rounded, size: 16, color: V.yellow),
+                        IconButton(
+                          tooltip: '会话操作',
+                          onPressed: () => _sessionMenu(session),
+                          icon: Icon(Icons.more_vert, size: 20, color: V.muted),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                  onTap: () => _open(session),
-                  onLongPress: () => _sessionMenu(session),
                 );
               },
             ),
@@ -569,226 +588,598 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onRefresh: _load,
       child: visible.isEmpty
           ? _empty('暂无匹配的 SSH 主机', '点击右上角“＋”添加 SSH 主机。')
-          : ListView.separated(
+          : ListView.builder(
               physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
               itemCount: visible.length,
-              separatorBuilder: (_, _) => const Divider(indent: 64),
               itemBuilder: (_, index) {
                 final host = visible[index];
-                return ListTile(
-                  minTileHeight: 76,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                  horizontalTitleGap: 12,
-                  leading: Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: V.surface,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.dns_outlined,
-                      size: 19,
-                      color: V.text,
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: SoftPanel(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 2, 10),
+                    color: V.sky,
+                    stripe: true,
+                    onTap: () => _connectHost(host),
+                    onLongPress: () => _hostMenu(host),
+                    child: Row(
+                      children: [
+                        SoftBadge(Icons.dns_outlined, color: V.sky),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                host.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: .4,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${host.username}@${host.address}:${host.port}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: V.muted,
+                                  fontFamily: V.mono,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '主机操作',
+                          onPressed: () => _hostMenu(host),
+                          icon: Icon(Icons.more_vert, size: 20, color: V.muted),
+                        ),
+                      ],
                     ),
                   ),
-                  title: Text(
-                    host.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  subtitle: Text(
-                    '${host.username}@${host.address}:${host.port}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11, color: V.muted),
-                  ),
-                  trailing: IconButton(
-                    tooltip: '主机操作',
-                    onPressed: () => _hostMenu(host),
-                    icon: const Icon(
-                      Icons.more_horiz,
-                      size: 20,
-                      color: V.muted,
-                    ),
-                  ),
-                  onTap: () => _connectHost(host),
-                  onLongPress: () => _hostMenu(host),
                 );
               },
             ),
     );
   }
 
+  Widget _group(String label, List<Widget> children, {Color? color}) => Padding(
+    padding: const EdgeInsets.only(bottom: 18),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionLabel(label, color: color),
+        const SizedBox(height: 10),
+        SoftPanel(
+          padding: EdgeInsets.zero,
+          color: color,
+          child: Column(children: children),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _pickTheme(String id) async {
+    await widget.preferences.setString('mobile.appTheme', id);
+    V.select(palette: id);
+  }
+
+  Future<void> _customBackdrop() async {
+    // First tap (or tapping the active one again) picks a photo; otherwise it
+    // just switches back to the saved photo.
+    if (V.customPath.isNotEmpty &&
+        File(V.customPath).existsSync() &&
+        V.backdrop != 'custom') {
+      await widget.preferences.setString('mobile.appBackdrop', 'custom');
+      V.select(backdrop: 'custom');
+      return;
+    }
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        withData: false,
+      );
+      final source = picked?.files.single.path;
+      if (source == null) return;
+      final input = File(source);
+      if (await input.length() > 25 * 1024 * 1024) {
+        if (mounted) notice(context, '图片太大，请选择 25MB 以内的图片');
+        return;
+      }
+      final codec = await ui.instantiateImageCodec(await input.readAsBytes());
+      codec.dispose();
+      final dir = await getApplicationSupportDirectory();
+      final suffix = source.split('.').last.toLowerCase();
+      final extension = {'png', 'webp', 'jpg', 'jpeg'}.contains(suffix)
+          ? suffix
+          : 'jpg';
+      final saved = await input.copy(
+        '${dir.path}/backdrop_${DateTime.now().millisecondsSinceEpoch}.$extension',
+      );
+      final old = V.customPath;
+      await widget.preferences.setString('mobile.appBackdrop', 'custom');
+      await widget.preferences.setString('mobile.appBackdropFile', saved.path);
+      V.select(backdrop: 'custom', file: saved.path);
+      if (old.isNotEmpty && old != saved.path) {
+        try {
+          await File(old).delete();
+        } catch (_) {}
+      }
+      await FilePicker.platform.clearTemporaryFiles();
+    } catch (e) {
+      if (mounted) notice(context, '图片无法使用，请换一张试试');
+    }
+  }
+
+  Future<void> _pickBackdrop(String id) async {
+    await widget.preferences.setString('mobile.appBackdrop', id);
+    V.select(backdrop: id);
+  }
+
   Widget _settings() => ListView(
-    padding: const EdgeInsets.all(20),
+    padding: const EdgeInsets.all(14),
     children: [
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const CircleAvatar(
-          backgroundColor: V.surface,
-          child: Icon(Icons.person_outline, color: V.accent),
-        ),
-        title: Text('${widget.user['username']}'),
-        subtitle: Text(
-          widget.demo ? '设计预览 · 示例数据' : '${widget.api!.base}',
-          style: const TextStyle(color: V.muted, fontSize: 12),
-        ),
-      ),
-      const SizedBox(height: 24),
-      const Divider(),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.dns_outlined),
-        title: const Text('Velin 服务管理'),
-        onTap: _profiles,
-      ),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.language),
-        title: const Text('反向代理'),
-        onTap: _webServices,
-      ),
-      const Divider(),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('终端字号'),
-        subtitle: const Text(
-          '仅保存在这台手机',
-          style: TextStyle(color: V.muted, fontSize: 12),
-        ),
-        trailing: DropdownButton<double>(
-          value: widget.preferences.getDouble('mobile.fontSize') ?? 13,
-          items: [12.0, 13.0, 14.0, 15.0, 16.0, 18.0]
-              .map(
-                (v) => DropdownMenuItem(value: v, child: Text('${v.toInt()}')),
-              )
-              .toList(),
-          onChanged: (v) async {
-            if (v != null) {
-              await widget.preferences.setDouble('mobile.fontSize', v);
-              setState(() {});
-            }
-          },
+      SoftPanel(
+        glow: true,
+        radius: 18,
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            SoftBadge(Icons.person_outline, size: 48, color: V.sky),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${widget.user['username']}',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: .6,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    widget.demo ? '设计预览 · 示例数据' : '${widget.api!.base}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: V.muted,
+                      fontSize: 11,
+                      fontFamily: V.mono,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      const Divider(),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('终端配色'),
-        subtitle: const Text(
-          '仅影响手机显示',
-          style: TextStyle(color: V.muted, fontSize: 12),
+      const SizedBox(height: 22),
+      _group('网络与服务', [
+        ListTile(
+          leading: const Icon(Icons.dns_outlined),
+          title: const Text('Velin 服务管理'),
+          trailing: Icon(Icons.chevron_right, color: V.muted),
+          onTap: _profiles,
         ),
-        trailing: DropdownButton<String>(
-          value:
-              widget.preferences.getString('mobile.terminalTheme') ??
-              'graphite',
-          items: terminalPalettes.entries
-              .map(
-                (entry) => DropdownMenuItem(
-                  value: entry.key,
-                  child: Text(entry.value['name']!),
+        const Divider(),
+        ListTile(
+          leading: const Icon(Icons.language),
+          title: const Text('反向代理'),
+          trailing: Icon(Icons.chevron_right, color: V.muted),
+          onTap: () => setState(() => tab = 3),
+        ),
+      ], color: V.accent),
+      if (widget.onLock != null)
+        _group('安全', [
+          ListTile(
+            leading: Icon(Icons.lock_outline_rounded, color: V.yellow),
+            title: const Text('锁定工作台'),
+            subtitle: Text(
+              '需输入 PIN 才能继续使用',
+              style: TextStyle(color: V.muted, fontSize: 12),
+            ),
+            trailing: Icon(Icons.chevron_right, color: V.muted),
+            onTap: () async {
+              try {
+                await widget.onLock?.call();
+              } catch (e) {
+                if (mounted) notice(context, e);
+              }
+            },
+          ),
+        ], color: V.yellow),
+      _group('外观', [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('主题配色', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final p in V.palettes)
+                      _ThemeSwatch(
+                        palette: p,
+                        selected: V.paletteId == p.id,
+                        onTap: () => _pickTheme(p.id),
+                      ),
+                  ],
                 ),
-              )
-              .toList(),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('背景插画', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _BackdropTile(
+                      label: '跟随主题',
+                      selected: V.backdrop.isEmpty,
+                      onTap: () => _pickBackdrop(''),
+                    ),
+                    for (final (id, name) in V.arts)
+                      _BackdropTile(
+                        label: name,
+                        art: 'assets/art/$id.svg',
+                        selected: V.backdrop == id,
+                        onTap: () => _pickBackdrop(id),
+                      ),
+                    _BackdropTile(
+                      label: '自定义',
+                      file: V.customPath.isEmpty ? null : V.customPath,
+                      selected: V.backdrop == 'custom',
+                      onTap: _customBackdrop,
+                    ),
+                    _BackdropTile(
+                      label: '纯色',
+                      selected: V.backdrop == 'none',
+                      onTap: () => _pickBackdrop('none'),
+                    ),
+                  ],
+                ),
+              ),
+              if (V.backdrop != 'none') ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Text(
+                      '背景暗度',
+                      style: TextStyle(color: V.muted, fontSize: 12),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: V.dim,
+                        min: 0,
+                        max: .9,
+                        onChanged: (value) => V.select(dim: value),
+                        onChangeEnd: (value) => widget.preferences.setDouble(
+                          'mobile.appBackdropDim',
+                          value,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ]),
+      _group('终端偏好', [
+        SwitchListTile(
+          title: const Text('悬浮滚动按钮'),
+          subtitle: Text(
+            '默认关闭；开启后终端右下角出现，按住上下拖动滚动',
+            style: TextStyle(color: V.muted, fontSize: 12),
+          ),
+          value: widget.preferences.getBool('mobile.scrollKnob') ?? false,
           onChanged: (value) async {
-            if (value != null) {
-              await widget.preferences.setString('mobile.terminalTheme', value);
-              if (mounted) setState(() {});
-            }
+            await widget.preferences.setBool('mobile.scrollKnob', value);
+            if (mounted) setState(() {});
           },
         ),
-      ),
-      const Divider(),
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.cleaning_services_outlined),
-        title: const Text('清理本地草稿与最近记录'),
-        onTap: () async {
-          if (!await confirm(
-            context,
-            '清理本地记录？',
-            '会删除当前服务和账户的手机草稿、收藏和最近记录。远端会话和附件保留。',
-            action: '清理',
-          )) {
-            return;
-          }
-          for (final key
-              in widget.preferences
-                  .getKeys()
-                  .where(
-                    (k) =>
-                        k.startsWith('mobile.draft.$scope.') ||
-                        k.startsWith('mobile.recent.$scope.') ||
-                        k.startsWith('mobile.favorite.$scope.'),
-                  )
-                  .toList()) {
-            await widget.preferences.remove(key);
-          }
-          if (mounted) setState(() {});
-        },
-      ),
-      const Divider(),
-      const SizedBox(height: 24),
+        const Divider(),
+        ListTile(
+          title: const Text('终端字号'),
+          subtitle: Text(
+            '仅保存在这台手机',
+            style: TextStyle(color: V.muted, fontSize: 12),
+          ),
+          trailing: DropdownButton<double>(
+            value: widget.preferences.getDouble('mobile.fontSize') ?? 13,
+            dropdownColor: V.surface,
+            underline: const SizedBox.shrink(),
+            style: TextStyle(color: V.accent, fontFamily: V.mono),
+            items: [12.0, 13.0, 14.0, 15.0, 16.0, 18.0]
+                .map(
+                  (v) =>
+                      DropdownMenuItem(value: v, child: Text('${v.toInt()}')),
+                )
+                .toList(),
+            onChanged: (v) async {
+              if (v != null) {
+                await widget.preferences.setDouble('mobile.fontSize', v);
+                setState(() {});
+              }
+            },
+          ),
+        ),
+        const Divider(),
+        ListTile(
+          title: const Text('终端配色'),
+          subtitle: Text(
+            '仅影响手机显示',
+            style: TextStyle(color: V.muted, fontSize: 12),
+          ),
+          trailing: DropdownButton<String>(
+            value:
+                widget.preferences.getString('mobile.terminalTheme') ??
+                'graphite',
+            dropdownColor: V.surface,
+            underline: const SizedBox.shrink(),
+            style: TextStyle(color: V.accent, fontFamily: V.mono),
+            items: terminalPalettes.entries
+                .map(
+                  (entry) => DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(entry.value['name']!),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) async {
+              if (value != null) {
+                await widget.preferences.setString(
+                  'mobile.terminalTheme',
+                  value,
+                );
+                if (mounted) setState(() {});
+              }
+            },
+          ),
+        ),
+      ]),
+      _group('本地数据', [
+        ListTile(
+          leading: Icon(Icons.cleaning_services_outlined, color: V.yellow),
+          title: const Text('清理本地草稿与最近记录'),
+          onTap: () async {
+            if (!await confirm(
+              context,
+              '清理本地记录？',
+              '会删除当前服务和账户的手机草稿、收藏和最近记录。远端会话和附件保留。',
+              action: '清理',
+            )) {
+              return;
+            }
+            for (final key
+                in widget.preferences
+                    .getKeys()
+                    .where(
+                      (k) =>
+                          k.startsWith('mobile.draft.$scope.') ||
+                          k.startsWith('mobile.recent.$scope.') ||
+                          k.startsWith('mobile.favorite.$scope.'),
+                    )
+                    .toList()) {
+              await widget.preferences.remove(key);
+            }
+            await ReplayCache.clear();
+            if (mounted) setState(() {});
+          },
+        ),
+      ], color: V.yellow),
+      const SizedBox(height: 6),
       OutlinedButton.icon(
         onPressed: widget.onLogout,
         icon: const Icon(Icons.logout, size: 18),
         label: const Text('退出登录'),
       ),
-      const SizedBox(height: 36),
-      const Center(
+      const SizedBox(height: 32),
+      Center(
         child: Text(
-          'VELIN MOBILE · 0.1.2',
-          style: TextStyle(color: V.muted, fontSize: 11, letterSpacing: 1),
+          '✦ velin mobile · 0.1.2 ✦',
+          style: TextStyle(
+            color: V.muted,
+            fontSize: 11,
+            letterSpacing: 2,
+            fontFamily: V.mono,
+          ),
         ),
       ),
     ],
   );
-  Widget _tab(String label, int value) => Expanded(
-    child: TextButton(
-      onPressed: () => setState(() => tab = value),
-      style: TextButton.styleFrom(
-        minimumSize: const Size(48, 48),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        foregroundColor: tab == value ? V.text : V.muted,
-        shape: const RoundedRectangleBorder(),
+  Widget _proxy() => WebServicesScreen(
+    key: const ValueKey('proxy-tab'),
+    api: widget.api,
+    hosts: hosts,
+    demo: widget.demo,
+    embedded: true,
+  );
+
+  Widget _filterPill() => Container(
+    padding: const EdgeInsets.all(3),
+    decoration: BoxDecoration(
+      color: V.surface.withValues(alpha: .7),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: V.accent.withValues(alpha: .3)),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final (value, label) in [(0, '进行中'), (2, '全部')])
+          GestureDetector(
+            key: ValueKey('filter-$value'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => filter = value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              decoration: BoxDecoration(
+                color: filter == value ? V.accent : Colors.transparent,
+                borderRadius: BorderRadius.circular(15),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: filter == value ? V.bg : V.muted,
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
+  Widget _stat(String label, int value, Color color) => Expanded(
+    child: Container(
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: .35)),
       ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 15,
-          fontWeight: tab == value ? FontWeight.w600 : FontWeight.w400,
-        ),
+      child: Column(
+        children: [
+          Text(
+            '$value',
+            style: TextStyle(
+              color: color,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          Text(label, style: TextStyle(color: V.muted, fontSize: 10)),
+        ],
       ),
     ),
   );
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      toolbarHeight: 52,
-      titleSpacing: tab == 2 ? 0 : 8,
-      leading: tab == 2
-          ? BackButton(onPressed: () => setState(() => tab = 0))
-          : null,
-      title: tab == 2
-          ? const Text('设置', style: TextStyle(fontSize: 16))
-          : Row(
+  Widget _hero() {
+    final hour = DateTime.now().hour;
+    final greeting = hour < 6
+        ? '夜深了'
+        : hour < 11
+        ? '早上好'
+        : hour < 14
+        ? '中午好'
+        : hour < 18
+        ? '下午好'
+        : '晚上好';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: SoftPanel(
+        glow: true,
+        radius: 22,
+        padding: const EdgeInsets.fromLTRB(16, 14, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                _tab(widget.demo ? '会话 · 示例' : '会话', 0),
-                _tab('主机', 1),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$greeting，${widget.user['username']}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: .5,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '今晚也写点漂亮的代码吧 ✦',
+                        style: TextStyle(color: V.muted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: SoftBadge(
+                    Icons.nightlight_round,
+                    size: 46,
+                    color: V.yellow,
+                  ),
+                ),
               ],
             ),
-      actions: tab == 2
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _stat(
+                  '在线',
+                  sessions
+                      .where((s) => !s.ended && s.status == 'attached')
+                      .length,
+                  V.accent,
+                ),
+                _stat('会话', sessions.where((s) => !s.ended).length, V.sky),
+                _stat('收藏', sessions.where(_favorite).length, V.yellow),
+                _stat('主机', hosts.length, V.accent),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static const _titles = ['会话', '收藏', '主机', '代理', '设置'];
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    extendBody: true,
+    extendBodyBehindAppBar: true,
+    appBar: AppBar(
+      toolbarHeight: 52,
+      backgroundColor: Colors.transparent,
+      scrolledUnderElevation: 0,
+      shape: const Border(),
+      title: Row(
+        children: [
+          Icon(Icons.auto_awesome, size: 16, color: V.accent),
+          const SizedBox(width: 8),
+          Text(
+            tab == 0 && widget.demo ? '会话 · 示例' : _titles[tab],
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.5,
+            ),
+          ),
+        ],
+      ),
+      actions: tab > 2
           ? null
           : [
+              if (tab == 0) Center(child: _filterPill()),
               IconButton(
                 tooltip: searchOpen ? '收起搜索' : '搜索',
                 onPressed: () => setState(() {
@@ -804,130 +1195,125 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
               IconButton(
-                tooltip: tab == 1 ? '添加 SSH 主机' : '新建会话',
+                tooltip: tab == 2 ? '添加 SSH 主机' : '新建会话',
                 onPressed: () {
-                  if (tab == 1) {
+                  if (tab == 2) {
                     _editHost();
                   } else {
-                    setState(() => tab = 1);
+                    setState(() => tab = 2);
                   }
                 },
                 icon: const Icon(Icons.add_rounded, size: 22),
               ),
-              PopupMenuButton<String>(
-                tooltip: '列表选项',
-                icon: const Icon(Icons.more_horiz, size: 22),
-                onSelected: (value) async {
-                  if (value == 'refresh') {
-                    _load();
-                    return;
-                  }
-                  if (value == 'host') {
-                    _editHost();
-                    return;
-                  }
-                  if (value == 'proxy') {
-                    _webServices();
-                    return;
-                  }
-                  if (value == 'lock') {
-                    try {
-                      await widget.onLock?.call();
-                    } catch (e) {
-                      if (context.mounted) notice(context, e);
-                    }
-                    return;
-                  }
-                  if (value == 'profiles') {
-                    _profiles();
-                    return;
-                  }
-                  setState(() {
-                    if (value == 'settings') {
-                      tab = 2;
-                    }
-                    if (value.startsWith('filter:')) {
-                      filter = int.parse(value.substring(7));
-                      tab = 0;
-                    }
-                  });
-                },
-                itemBuilder: (_) => [
-                  if (tab == 0) ...[
-                    for (final (index, label) in ['进行中', '已收藏', '全部会话'].indexed)
-                      CheckedPopupMenuItem(
-                        value: 'filter:$index',
-                        checked: filter == index,
-                        child: Text(label),
-                      ),
-                    const PopupMenuDivider(),
-                  ],
-                  const PopupMenuItem(value: 'refresh', child: Text('刷新列表')),
-                  const PopupMenuItem(value: 'host', child: Text('添加 SSH 主机')),
-                  const PopupMenuItem(value: 'proxy', child: Text('反向代理')),
-                  const PopupMenuItem(
-                    value: 'profiles',
-                    child: Text('Velin 服务管理'),
-                  ),
-                  if (widget.onLock != null)
-                    const PopupMenuItem(value: 'lock', child: Text('锁定工作台')),
-                  const PopupMenuItem(value: 'settings', child: Text('设置')),
-                ],
-              ),
             ],
     ),
-    body: SafeArea(
+    bottomNavigationBar: SafeArea(
       top: false,
-      child: Column(
-        children: [
-          const Divider(),
-          if (searchOpen && tab != 2)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-              child: TextField(
-                key: const ValueKey('session-search'),
-                controller: searchController,
-                autofocus: true,
-                onChanged: (value) => setState(() => search = value),
-                decoration: InputDecoration(
-                  hintText: tab == 0 ? '搜索会话或主机' : '搜索主机',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(30),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: V.surface.withValues(alpha: .78),
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: V.accent.withValues(alpha: .28)),
+              ),
+              child: NavigationBar(
+                backgroundColor: Colors.transparent,
+                surfaceTintColor: Colors.transparent,
+                elevation: 0,
+                height: 64,
+                selectedIndex: tab,
+                onDestinationSelected: (value) => setState(() => tab = value),
+                destinations: [
+                  NavigationDestination(
+                    icon: Icon(Icons.terminal_rounded),
+                    selectedIcon: Icon(Icons.terminal_rounded, color: V.accent),
+                    label: '会话',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.star_border_rounded),
+                    selectedIcon: Icon(Icons.star_rounded, color: V.accent),
+                    label: '收藏',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.dns_outlined),
+                    selectedIcon: Icon(Icons.dns_rounded, color: V.accent),
+                    label: '主机',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.language),
+                    selectedIcon: Icon(Icons.language, color: V.accent),
+                    label: '代理',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.settings_outlined),
+                    selectedIcon: Icon(Icons.settings_rounded, color: V.accent),
+                    label: '设置',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+    body: Scene(
+      child: SafeArea(
+        top: true,
+        child: Column(
+          children: [
+            if (searchOpen && tab < 3)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+                child: TextField(
+                  key: const ValueKey('session-search'),
+                  controller: searchController,
+                  autofocus: true,
+                  onChanged: (value) => setState(() => search = value),
+                  decoration: InputDecoration(
+                    hintText: tab == 2 ? '搜索主机' : '搜索会话或主机',
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                   ),
                 ),
               ),
-            ),
-          if (tab == 0 && filter != 0)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.only(left: 16, top: 8, bottom: 2),
-                child: Text(
-                  filter == 1 ? '已收藏' : '全部会话',
-                  style: const TextStyle(fontSize: 11, color: V.muted),
+            if (error.isNotEmpty)
+              Material(
+                color: V.surface,
+                child: ListTile(
+                  dense: true,
+                  title: Text(
+                    error,
+                    style: TextStyle(color: V.danger, fontSize: 12),
+                  ),
+                  trailing: TextButton(
+                    onPressed: _load,
+                    child: const Text('重试'),
+                  ),
                 ),
               ),
+            Expanded(
+              child: tab < 3 && busy && sessions.isEmpty && error.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : [
+                      _sessionList,
+                      _sessionList,
+                      _hostList,
+                      _proxy,
+                      _settings,
+                    ][tab](),
             ),
-          if (error.isNotEmpty)
-            Material(
-              color: V.surface,
-              child: ListTile(
-                dense: true,
-                title: Text(
-                  error,
-                  style: const TextStyle(color: V.danger, fontSize: 12),
-                ),
-                trailing: TextButton(onPressed: _load, child: const Text('重试')),
-              ),
-            ),
-          Expanded(
-            child: busy && sessions.isEmpty && error.isEmpty
-                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-                : [_sessionList, _hostList, _settings][tab](),
-          ),
-        ],
+          ],
+        ),
       ),
     ),
   );
@@ -981,29 +1367,191 @@ class _NewSessionScreenState extends State<NewSessionScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: Text(widget.name)),
-    body: Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (busy)
-              const CircularProgressIndicator()
-            else
-              const Icon(Icons.cloud_off_outlined, color: V.danger, size: 40),
-            const SizedBox(height: 24),
-            Text(busy ? '正在创建终端…' : error, textAlign: TextAlign.center),
-            if (!busy) ...[
-              const SizedBox(height: 20),
-              FilledButton(onPressed: _create, child: const Text('重试')),
+    body: Scene(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (busy)
+                const CircularProgressIndicator()
+              else
+                Icon(Icons.cloud_off_outlined, color: V.danger, size: 40),
+              const SizedBox(height: 24),
+              Text(busy ? '正在创建终端…' : error, textAlign: TextAlign.center),
+              if (!busy) ...[
+                const SizedBox(height: 20),
+                FilledButton(onPressed: _create, child: const Text('重试')),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                '返回页面会保留已创建的远端会话',
+                style: TextStyle(color: V.muted, fontSize: 12),
+              ),
             ],
-            const SizedBox(height: 12),
-            const Text(
-              '返回页面会保留已创建的远端会话',
-              style: TextStyle(color: V.muted, fontSize: 12),
-            ),
-          ],
+          ),
         ),
+      ),
+    ),
+  );
+}
+
+class _ThemeSwatch extends StatelessWidget {
+  final AppPalette palette;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ThemeSwatch({
+    required this.palette,
+    required this.selected,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(right: 12),
+    child: GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 64,
+            height: 64,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: palette.bg,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: selected ? V.accent : palette.line,
+                width: selected ? 2.2 : 1,
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: V.accent.withValues(alpha: .35),
+                        blurRadius: 12,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _dot(palette.accent),
+                    const SizedBox(width: 5),
+                    _dot(palette.sky),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _dot(palette.yellow),
+                    const SizedBox(width: 5),
+                    _dot(palette.surface),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            palette.name,
+            style: TextStyle(
+              fontSize: 12,
+              color: selected ? V.accent : V.muted,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+  Widget _dot(Color c) => Container(
+    width: 16,
+    height: 16,
+    decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+  );
+}
+
+class _BackdropTile extends StatelessWidget {
+  final String label;
+  final String? art, file;
+  final bool selected;
+  final VoidCallback onTap;
+  const _BackdropTile({
+    required this.label,
+    this.art,
+    this.file,
+    required this.selected,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(right: 12),
+    child: GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 58,
+            height: 96,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: V.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: selected ? V.accent : V.line,
+                width: selected ? 2.2 : 1,
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: V.accent.withValues(alpha: .35),
+                        blurRadius: 12,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: file != null
+                ? Image.file(
+                    File(file!),
+                    fit: BoxFit.cover,
+                    cacheWidth: 200,
+                    errorBuilder: (_, _, _) =>
+                        const Center(child: Icon(Icons.broken_image_outlined)),
+                  )
+                : art == null
+                ? Center(
+                    child: Icon(
+                      label == '纯色'
+                          ? Icons.format_color_fill_rounded
+                          : label == '自定义'
+                          ? Icons.add_photo_alternate_outlined
+                          : Icons.auto_awesome,
+                      color: selected ? V.accent : V.muted,
+                    ),
+                  )
+                : SvgPicture.asset(
+                    art!,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.bottomCenter,
+                  ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: selected ? V.accent : V.muted,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
+        ],
       ),
     ),
   );

@@ -9,11 +9,15 @@ class WebServicesScreen extends StatefulWidget {
   final RemoteApi? api;
   final List<RemoteHost> hosts;
   final bool demo;
+
+  /// Rendered inside the home tabs: no app bar, add via floating button.
+  final bool embedded;
   const WebServicesScreen({
     super.key,
     required this.api,
     required this.hosts,
     this.demo = false,
+    this.embedded = false,
   });
   @override
   State<WebServicesScreen> createState() => _WebServicesScreenState();
@@ -98,103 +102,133 @@ class _WebServicesScreenState extends State<WebServicesScreen> {
     }
   }
 
+  Widget _scene({required Widget child}) =>
+      widget.embedded ? child : Scene(child: child);
+
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      toolbarHeight: 52,
-      title: const Text('反向代理', style: TextStyle(fontSize: 16)),
-      actions: [
-        IconButton(
-          tooltip: '添加反向代理',
-          onPressed: _edit,
-          icon: const Icon(Icons.add),
-        ),
-      ],
-    ),
-    body: SafeArea(
-      top: false,
-      child: busy
-          ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-          : error.isNotEmpty
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(error),
-                    TextButton(onPressed: _load, child: const Text('重试')),
-                  ],
-                ),
+    backgroundColor: widget.embedded ? Colors.transparent : null,
+    floatingActionButton: widget.embedded
+        ? Padding(
+            padding: const EdgeInsets.only(bottom: 84),
+            child: FloatingActionButton(
+              tooltip: '添加反向代理',
+              backgroundColor: V.accent,
+              foregroundColor: V.bg,
+              shape: const StadiumBorder(),
+              onPressed: _edit,
+              child: const Icon(Icons.add_rounded),
+            ),
+          )
+        : null,
+    appBar: widget.embedded
+        ? null
+        : AppBar(
+            toolbarHeight: 52,
+            title: const Text('反向代理', style: TextStyle(fontSize: 16)),
+            actions: [
+              IconButton(
+                tooltip: '添加反向代理',
+                onPressed: _edit,
+                icon: const Icon(Icons.add),
               ),
-            )
-          : RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: [
-                  if (widget.demo)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text(
-                        '示例数据 · 不连接真实服务',
-                        style: TextStyle(color: V.muted, fontSize: 12),
+            ],
+          ),
+    body: _scene(
+      child: SafeArea(
+        top: false,
+        child: busy
+            ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+            : error.isNotEmpty
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(error),
+                      TextButton(onPressed: _load, child: const Text('重试')),
+                    ],
+                  ),
+                ),
+              )
+            : RefreshIndicator(
+                onRefresh: _load,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(bottom: 88),
+                  children: [
+                    if (widget.demo)
+                      Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                          '示例数据 · 不连接真实服务',
+                          style: TextStyle(color: V.muted, fontSize: 12),
+                        ),
                       ),
-                    ),
-                  if (services.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Text(
-                        '暂无反向代理，点击右上角添加。',
-                        style: TextStyle(color: V.muted),
+                    if (services.isEmpty)
+                      Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text(
+                          '暂无反向代理，点击右上角添加。',
+                          style: TextStyle(color: V.muted),
+                        ),
                       ),
-                    ),
-                  for (final service in services) ...[
-                    ListTile(
-                      minTileHeight: 76,
-                      leading: const Icon(Icons.language, color: V.accent),
-                      title: Text(
-                        service.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 14),
-                      ),
-                      subtitle: Text(
-                        service.targetURL,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, color: V.muted),
-                      ),
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => WebServiceScreen(
-                            api: widget.api,
-                            service: service,
-                            demo: widget.demo,
+                    for (final service in services) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                        child: SoftPanel(
+                          padding: EdgeInsets.zero,
+                          child: ListTile(
+                            minTileHeight: 76,
+                            leading: const SoftBadge(Icons.language),
+                            title: Text(
+                              service.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                            subtitle: Text(
+                              service.targetURL,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 11, color: V.muted),
+                            ),
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => WebServiceScreen(
+                                  api: widget.api,
+                                  service: service,
+                                  demo: widget.demo,
+                                ),
+                              ),
+                            ),
+                            trailing: PopupMenuButton<String>(
+                              tooltip: '代理操作',
+                              onSelected: (v) {
+                                if (v == 'edit') _edit(service);
+                                if (v == 'delete') _delete(service);
+                              },
+                              itemBuilder: (_) => [
+                                const PopupMenuItem(
+                                  value: 'edit',
+                                  child: Text('编辑'),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text('删除'),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
-                      trailing: PopupMenuButton<String>(
-                        tooltip: '代理操作',
-                        onSelected: (v) {
-                          if (v == 'edit') _edit(service);
-                          if (v == 'delete') _delete(service);
-                        },
-                        itemBuilder: (_) => [
-                          const PopupMenuItem(value: 'edit', child: Text('编辑')),
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Text('删除'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(indent: 64),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
+      ),
     ),
   );
 }
@@ -288,144 +322,156 @@ class _WebServiceEditorState extends State<WebServiceEditor> {
         style: const TextStyle(fontSize: 16),
       ),
     ),
-    body: SafeArea(
-      top: false,
-      child: Form(
-        key: form,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TextFormField(
-              controller: name,
-              decoration: const InputDecoration(labelText: '服务名称'),
-              validator: (v) =>
-                  (v ?? '').trim().isEmpty || (v ?? '').runes.length > 100
-                  ? '名称需为 1 到 100 个字符'
-                  : null,
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              initialValue: host,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'SSH 代理主机'),
-              items: [
-                const DropdownMenuItem(
-                  value: '',
-                  child: Text('请选择已保存密码或凭据的主机'),
-                ),
-                for (final h in widget.hosts)
-                  DropdownMenuItem(
-                    value: h.id,
-                    enabled: h.savedAuth || widget.demo,
-                    child: Text(
-                      '${h.name}${h.savedAuth || widget.demo ? '' : '（需先保存认证）'}',
-                      overflow: TextOverflow.ellipsis,
-                    ),
+    body: Scene(
+      child: SafeArea(
+        top: false,
+        child: Form(
+          key: form,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              TextFormField(
+                controller: name,
+                decoration: const InputDecoration(labelText: '服务名称'),
+                validator: (v) =>
+                    (v ?? '').trim().isEmpty || (v ?? '').runes.length > 100
+                    ? '名称需为 1 到 100 个字符'
+                    : null,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                initialValue: host,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'SSH 代理主机'),
+                items: [
+                  const DropdownMenuItem(
+                    value: '',
+                    child: Text('请选择已保存密码或凭据的主机'),
                   ),
-              ],
-              validator: (v) => (v ?? '').isEmpty ? '请选择代理主机' : null,
-              onChanged: (v) => host = v!,
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: target,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: const InputDecoration(
-                labelText: '目标地址',
-                hintText: 'http://127.0.0.1:5173',
+                  for (final h in widget.hosts)
+                    DropdownMenuItem(
+                      value: h.id,
+                      enabled: h.savedAuth || widget.demo,
+                      child: Text(
+                        '${h.name}${h.savedAuth || widget.demo ? '' : '（需先保存认证）'}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                validator: (v) => (v ?? '').isEmpty ? '请选择代理主机' : null,
+                onChanged: (v) => host = v!,
               ),
-              validator: (v) {
-                final uri = Uri.tryParse((v ?? '').trim());
-                return uri == null ||
-                        !['http', 'https'].contains(uri.scheme) ||
-                        uri.host.isEmpty ||
-                        uri.userInfo.isNotEmpty ||
-                        uri.hasFragment
-                    ? '请填写有效的 HTTP / HTTPS 地址'
-                    : null;
-              },
-            ),
-            const Padding(
-              padding: EdgeInsets.only(top: 8, bottom: 12),
-              child: Text(
-                '目标地址由 SSH 主机访问，127.0.0.1 指该主机本身。',
-                style: TextStyle(fontSize: 12, color: V.muted),
-              ),
-            ),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: const Text('高级设置', style: TextStyle(fontSize: 14)),
-              subtitle: const Text(
-                '网页类型、代理模式、上游 Host、证书',
-                style: TextStyle(fontSize: 11, color: V.muted),
-              ),
-              children: [
-                DropdownButtonFormField<String>(
-                  initialValue: pageMode,
-                  decoration: const InputDecoration(labelText: '网页类型'),
-                  items: const [
-                    DropdownMenuItem(value: 'html', child: Text('普通网页')),
-                    DropdownMenuItem(value: 'vite', child: Text('Vite 开发预览')),
-                  ],
-                  onChanged: (v) => pageMode = v!,
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: target,
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: const InputDecoration(
+                  labelText: '目标地址',
+                  hintText: 'http://127.0.0.1:5173',
                 ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  initialValue: proxyMode,
-                  decoration: const InputDecoration(labelText: '代理模式'),
-                  items: const [
-                    DropdownMenuItem(value: 'path', child: Text('当前服务路径（推荐）')),
-                    DropdownMenuItem(value: 'host_port', child: Text('独立监听端口')),
-                  ],
-                  onChanged: (v) => setState(() => proxyMode = v!),
+                validator: (v) {
+                  final uri = Uri.tryParse((v ?? '').trim());
+                  return uri == null ||
+                          !['http', 'https'].contains(uri.scheme) ||
+                          uri.host.isEmpty ||
+                          uri.userInfo.isNotEmpty ||
+                          uri.hasFragment
+                      ? '请填写有效的 HTTP / HTTPS 地址'
+                      : null;
+                },
+              ),
+              Padding(
+                padding: EdgeInsets.only(top: 8, bottom: 12),
+                child: Text(
+                  '目标地址由 SSH 主机访问，127.0.0.1 指该主机本身。',
+                  style: TextStyle(fontSize: 12, color: V.muted),
                 ),
-                if (proxyMode == 'host_port') ...[
+              ),
+              ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('高级设置', style: TextStyle(fontSize: 14)),
+                subtitle: Text(
+                  '网页类型、代理模式、上游 Host、证书',
+                  style: TextStyle(fontSize: 11, color: V.muted),
+                ),
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: pageMode,
+                    decoration: const InputDecoration(labelText: '网页类型'),
+                    items: const [
+                      DropdownMenuItem(value: 'html', child: Text('普通网页')),
+                      DropdownMenuItem(value: 'vite', child: Text('Vite 开发预览')),
+                    ],
+                    onChanged: (v) => pageMode = v!,
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: proxyMode,
+                    decoration: const InputDecoration(labelText: '代理模式'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'path',
+                        child: Text('当前服务路径（推荐）'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'host_port',
+                        child: Text('独立监听端口'),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => proxyMode = v!),
+                  ),
+                  if (proxyMode == 'host_port') ...[
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: port,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Velin 监听端口',
+                      ),
+                      validator: (v) {
+                        final p = int.tryParse(v ?? '');
+                        return p == null || p < 1 || p > 65535
+                            ? '请填写有效端口'
+                            : null;
+                      },
+                    ),
+                    Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        '手机需能访问该端口；容器部署还需映射该端口。',
+                        style: TextStyle(fontSize: 12, color: V.muted),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   TextFormField(
-                    controller: port,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Velin 监听端口'),
-                    validator: (v) {
-                      final p = int.tryParse(v ?? '');
-                      return p == null || p < 1 || p > 65535 ? '请填写有效端口' : null;
-                    },
+                    controller: upstream,
+                    decoration: const InputDecoration(labelText: '上游 Host（可选）'),
                   ),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                      '手机需能访问该端口；容器部署还需映射该端口。',
-                      style: TextStyle(fontSize: 12, color: V.muted),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      '允许自签 HTTPS 证书',
+                      style: TextStyle(fontSize: 14),
                     ),
+                    value: skipTLS,
+                    onChanged: (v) => setState(() => skipTLS = v),
                   ),
                 ],
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: upstream,
-                  decoration: const InputDecoration(labelText: '上游 Host（可选）'),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text(
-                    '允许自签 HTTPS 证书',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                  value: skipTLS,
-                  onChanged: (v) => setState(() => skipTLS = v),
-                ),
-              ],
-            ),
-            if (error.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(error, style: const TextStyle(color: V.danger)),
               ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: busy ? null : _save,
-              child: Text(busy ? '正在保存…' : '保存代理'),
-            ),
-          ],
+              if (error.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(error, style: TextStyle(color: V.danger)),
+                ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: busy ? null : _save,
+                child: Text(busy ? '正在保存…' : '保存代理'),
+              ),
+            ],
+          ),
         ),
       ),
     ),

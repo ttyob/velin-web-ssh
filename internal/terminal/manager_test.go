@@ -197,6 +197,64 @@ func TestControlTransferRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestReplayTailKeepsNewestWholeSegments(t *testing.T) {
+	segments := [][]byte{[]byte("aaaa"), []byte("bbbb"), []byte("cccc"), []byte("dddd")}
+	r := Replay{StreamID: "s", Offset: 16, Segments: segments, Truncated: true}
+	if got := r.Tail(0); len(got.Segments) != 4 {
+		t.Fatalf("tail 0 must keep everything, got %d", len(got.Segments))
+	}
+	if got := r.Tail(1 << 20); len(got.Segments) != 4 {
+		t.Fatalf("tail larger than buffer must keep everything, got %d", len(got.Segments))
+	}
+	got := r.Tail(5)
+	if len(got.Segments) != 2 || string(got.Segments[0]) != "cccc" || string(got.Segments[1]) != "dddd" {
+		t.Fatalf("tail 5 should keep the last two whole segments, got %q", got.Segments)
+	}
+	if got.Offset != 16 || got.StreamID != "s" || !got.Truncated {
+		t.Fatalf("tail must not change stream position: %+v", got)
+	}
+	if one := r.Tail(4); len(one.Segments) != 1 || string(one.Segments[0]) != "dddd" {
+		t.Fatalf("tail 4 should keep exactly the last segment, got %q", one.Segments)
+	}
+	if len(segments) != 4 {
+		t.Fatal("tail modified the original segments")
+	}
+	if r.Size() != 16 || r.Tail(5).Size() != 8 {
+		t.Fatalf("unexpected sizes: %d %d", r.Size(), r.Tail(5).Size())
+	}
+}
+
+func TestForceControlTakesOverWithoutApprovalButNotForReadOnly(t *testing.T) {
+	s := &Session{subs: make(map[string]*terminalSubscriber), buffer: newRingBuffer(8)}
+	firstEvents, _, _ := s.Subscribe("first", "", 0)
+	s.Subscribe("second", "", 0)
+	s.SubscribeReadOnly("viewer", "", 0)
+	if s.RequestControl("second") {
+		t.Fatal("precondition: ordinary request must still need approval")
+	}
+	if !s.ForceControl("second") || !s.IsController("second") || s.IsController("first") {
+		t.Fatal("forced takeover did not move control")
+	}
+	if s.pendingControl != "" {
+		t.Fatal("forced takeover left a pending request behind")
+	}
+	foundChange := false
+	for len(firstEvents) > 0 {
+		if event := <-firstEvents; event.Type == "controller" && event.Controller == "second" {
+			foundChange = true
+		}
+	}
+	if !foundChange {
+		t.Fatal("previous controller was not told control moved")
+	}
+	if s.ForceControl("viewer") || s.IsController("viewer") {
+		t.Fatal("read-only attachment forced control")
+	}
+	if !s.ForceControl("second") {
+		t.Fatal("current controller could not renew control")
+	}
+}
+
 func TestSubscribeReclaimsControlWithMatchingReconnectKey(t *testing.T) {
 	s := &Session{subs: make(map[string]*terminalSubscriber), buffer: newRingBuffer(8)}
 	_, firstDone, _ := s.Subscribe("first", "", 0, "same-tab")

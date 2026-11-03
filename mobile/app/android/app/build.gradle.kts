@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Production signing is read from a properties file kept outside the repo:
+// VELIN_KEY_PROPERTIES=/path/to/key.properties (or android/key.properties).
+val keyProperties = Properties().also { props ->
+    val file = System.getenv("VELIN_KEY_PROPERTIES")?.let { File(it) }
+        ?: rootProject.file("key.properties")
+    if (file.isFile) file.inputStream().use { props.load(it) }
 }
 
 android {
@@ -29,11 +39,22 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (keyProperties.getProperty("storeFile") != null) {
+            create("release") {
+                storeFile = File(keyProperties.getProperty("storeFile"))
+                storePassword = keyProperties.getProperty("storePassword")
+                keyAlias = keyProperties.getProperty("keyAlias")
+                keyPassword = keyProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Production signing must be supplied by the distributor.
-            // Internal test artifacts are built explicitly with --debug.
-            signingConfig = null
+            // Never falls back to the debug key: without key.properties the
+            // release build stays unsigned. Internal builds use --debug.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 }

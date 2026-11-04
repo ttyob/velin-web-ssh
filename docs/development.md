@@ -75,7 +75,22 @@ go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
 wails build -platform windows/amd64 -clean -m -s -skipbindings -skipembedcreate
 ```
 
-产物为 `build/bin/velin-web-ssh.exe`。fnOS 原生包构建见 [fnOS 打包说明](../packaging/fnos/README.md)。
+产物为 `build/bin/velin-web-ssh.exe`。
+
+无 GUI 服务版复用 `cmd/velin` 服务入口，Windows 配置读取 EXE 同目录的 `.env`，默认使用同目录数据和内嵌网页。无需 Wails，在 Windows PowerShell 中构建：
+
+```powershell
+npm --prefix web ci
+npm --prefix web run build
+$env:CGO_ENABLED = "0"
+go test ./cmd/velin ./web
+go build -trimpath -ldflags "-s -w" -o build/bin/velin-web-ssh-windows-server-amd64.exe ./cmd/velin
+.\packaging\windows\smoke-server.ps1 -Executable (Get-Item build/bin/velin-web-ssh-windows-server-amd64.exe).FullName
+```
+
+跨平台构建时指定 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`。Windows 构建必须先生成 `web/dist`，才能内嵌网页资源。CI 在 Windows runner 上验证配置覆盖和独立 EXE 启动，从无网页文件的目录检查内嵌资源、数据位置、HTTP 登录与密码重置。服务版使用控制台子系统，保留日志输出和 Ctrl+C；桌面版继续使用 Wails。
+
+fnOS 原生包构建见 [fnOS 打包说明](../packaging/fnos/README.md)。
 
 ## 更新 README 截图
 
@@ -96,6 +111,6 @@ unset VELIN_SCREENSHOT_PASSWORD
 
 ## 发布
 
-[GitHub Actions](../.github/workflows/container.yml) 在 `main` 更新后执行测试并发布 Docker `edge` 镜像。推送 `v*` 版本标签后，执行测试、构建双架构 Docker 镜像及 fnOS 安装包、构建 Windows 单 EXE，最后统一创建 GitHub Release 和校验文件。
+[GitHub Actions](../.github/workflows/container.yml) 在 `main` 更新后执行测试、构建并验证 Windows 无 GUI 服务版，发布 Docker `edge` 镜像。推送 `v*` 版本标签后，执行测试、构建双架构 Docker 镜像及 fnOS 安装包、构建 Windows 桌面和无 GUI 服务两种单 EXE，最后统一创建 GitHub Release 和校验文件。
 
 正式镜像的 `latest` 跟随版本标签，发行版同时提供固定版本镜像地址。

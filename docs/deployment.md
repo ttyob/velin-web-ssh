@@ -84,9 +84,10 @@ docker compose run --rm --no-deps \
 - `velin-web-ssh-fnos-native-amd64-<版本号>.fpk`
 - `velin-web-ssh-fnos-native-arm64-<版本号>.fpk`
 - `velin-web-ssh-windows-gui-amd64-v<版本号>.exe`
+- `velin-web-ssh-windows-server-amd64-v<版本号>.exe`
 - `checksums.txt`
 
-Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 版本标签后，工作流会完成测试、Docker 镜像推送、飞牛安装包和 Windows 单 EXE 构建，再统一发布 GitHub Release。发布说明提供对应版本的 Docker 镜像地址；`latest` 跟随版本标签，`main` 分支构建发布为 `edge`。
+Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 `linux/arm64`。推送 `v*` 版本标签后，工作流会完成测试、Docker 镜像推送、飞牛安装包和 Windows 桌面 / 无 GUI 服务两种单 EXE 构建，再统一发布 GitHub Release。发布说明提供对应版本的 Docker 镜像地址；`latest` 跟随版本标签，`main` 分支构建发布为 `edge`。
 
 ## 飞牛 fnOS 原生应用包
 
@@ -99,8 +100,8 @@ packaging/fnos/build.sh
 构建脚本默认构建当前主机架构，也可以显式指定架构：
 
 ```bash
-VELIN_FNOS_VERSION=0.3.52 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
-VELIN_FNOS_VERSION=0.3.52 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.53 VELIN_FNOS_ARCH=amd64 packaging/fnos/build.sh
+VELIN_FNOS_VERSION=0.3.53 VELIN_FNOS_ARCH=arm64 packaging/fnos/build.sh
 ```
 
 忘记 fnOS 原生应用的管理员密码时，通过 SSH 登录 NAS 后执行：
@@ -120,7 +121,7 @@ sudo -u velin env \
 
 ## Windows 桌面版
 
-从 [Releases](https://github.com/ttyob/velin-web-ssh/releases/latest) 下载 `.exe`，放在可写目录中双击运行。
+从 [Releases](https://github.com/ttyob/velin-web-ssh/releases/latest) 下载 `windows-gui` EXE，放在可写目录中双击运行。
 
 Windows GUI 为单 EXE 便携版，网页资源直接内嵌在 `build/bin/velin-web-ssh.exe` 中，复制 EXE 即可运行。运行需要 WebView2 Runtime，缺少时程序会提示安装。数据库、主密钥和 `velin-web-ssh.log` 均保存在 EXE 所在目录，请选择可写目录。首次启动会显示管理员凭据对话框，密码可通过按钮复制。需要使用外部网页资源时，可在 `.env` 中指定 `VELIN_WEB_DIST`。
 
@@ -129,6 +130,31 @@ Windows GUI 为单 EXE 便携版，网页资源直接内嵌在 `build/bin/velin-
 ```powershell
 .\velin-web-ssh.exe --reset-admin-password
 ```
+
+## Windows 无 GUI 服务版
+
+下载 `velin-web-ssh-windows-server-amd64-v<版本号>.exe`，放入单独的可写目录后运行。网页资源已内嵌，不需要 Node.js、WebView2 或额外的网页文件。
+
+启动后保留控制台，浏览器访问 `http://127.0.0.1:8377`；其他设备使用 `http://<Windows 内网 IP>:8377`，Windows 防火墙需允许该端口。按 Ctrl+C 停止服务，关闭控制台也会结束进程。该 EXE 以普通控制台进程运行。
+
+数据库、主密钥和部署标识默认保存在 EXE 所在目录，首次生成的管理员账号和密码写入同目录的 `initial-admin-credentials.txt`。首次登录需修改密码。升级时替换 EXE 并保留这些数据文件；桌面版和服务版同时运行时请分别放在不同目录。
+
+需要修改监听地址或数据目录时，在 EXE 同目录创建 `.env`，系统环境变量优先。例如：
+
+```dotenv
+VELIN_ADDR=0.0.0.0:8377
+VELIN_COOKIE_SECURE=false
+```
+
+此版本默认允许 HTTP Cookie，通过 HTTPS 反向代理对外提供服务时设置 `VELIN_COOKIE_SECURE=true`。`VELIN_DATA_DIR` 可指定数据目录，`VELIN_WEB_DIST` 可显式切换为外部网页资源。RDP 网页连接需要另行配置可访问的 guacd，参见 `VELIN_GUACD_ADDR`。
+
+重置密码时先停止服务，在 PowerShell 中执行（文件名替换为下载的版本）：
+
+```powershell
+.\velin-web-ssh-windows-server-amd64-v<版本号>.exe --reset-admin-password
+```
+
+命令在控制台输出新密码并退出，之后重新启动服务。
 
 ## 配置
 

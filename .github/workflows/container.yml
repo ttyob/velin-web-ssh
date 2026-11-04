@@ -120,6 +120,46 @@ jobs:
           path: release/velin-web-ssh-windows-gui-amd64-*.exe
           if-no-files-found: error
 
+  windows-server:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.20.4"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded frontend
+        working-directory: web
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+      - name: Test Windows server configuration
+        run: go test ./cmd/velin ./web
+      - name: Build Windows server application
+        env:
+          VELIN_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
+          CGO_ENABLED: "0"
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          go build -trimpath -ldflags "-s -w -X github.com/ttyob/velin-web-ssh/internal/version.Current=$env:VELIN_VERSION" -o "release/velin-web-ssh-windows-server-amd64-${env:VELIN_VERSION}.exe" ./cmd/velin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test standalone Windows server
+        shell: pwsh
+        run: packaging/windows/smoke-server.ps1 -Executable (Get-Item release/velin-web-ssh-windows-server-amd64-*.exe).FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: velin-web-ssh-windows-server-release
+          path: release/velin-web-ssh-windows-server-amd64-*.exe
+          if-no-files-found: error
+
   fnos-package:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
@@ -157,7 +197,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, publish, fnos-package, windows-desktop]
+    needs: [test, publish, fnos-package, windows-desktop, windows-server]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -165,6 +205,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: velin-web-ssh-windows-desktop-release
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: velin-web-ssh-windows-server-release
           path: release
       - uses: actions/download-artifact@v4
         with:
@@ -176,7 +220,7 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          sha256sum velin-web-ssh-fnos-native-*.fpk velin-web-ssh-windows-gui-amd64-*.exe > checksums.txt
+          sha256sum velin-web-ssh-fnos-native-*.fpk velin-web-ssh-windows-*-amd64-*.exe > checksums.txt
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -187,8 +231,10 @@ jobs:
 
             飞牛 fnOS 原生应用：下载对应架构的 `.fpk` 安装包，使用 `checksums.txt` 校验文件完整性。
 
-            Windows x64 桌面版：下载 `.exe` 即可运行，网页资源已内嵌。需要 WebView2 Runtime。
+            Windows x64 桌面版：下载 `windows-gui` EXE 即可运行，网页资源已内嵌。需要 WebView2 Runtime。
+
+            Windows x64 无 GUI 服务版：下载 `windows-server` EXE，放在可写目录中运行，通过 `http://127.0.0.1:8377` 或 `http://<Windows 内网 IP>:8377` 访问。网页资源已内嵌，无需 WebView2。数据与初始账号文件保存在 EXE 同目录，关闭控制台会停止服务。
           files: |
             release/velin-web-ssh-fnos-native-*.fpk
-            release/velin-web-ssh-windows-gui-amd64-*.exe
+            release/velin-web-ssh-windows-*-amd64-*.exe
             release/checksums.txt

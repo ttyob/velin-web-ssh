@@ -1,5 +1,3 @@
-//go:build !windows
-
 package main
 
 import (
@@ -19,7 +17,6 @@ import (
 	"github.com/ttyob/velin-web-ssh/internal/adminreset"
 	"github.com/ttyob/velin-web-ssh/internal/agent"
 	"github.com/ttyob/velin-web-ssh/internal/api"
-	"github.com/ttyob/velin-web-ssh/internal/config"
 	"github.com/ttyob/velin-web-ssh/internal/forward"
 	"github.com/ttyob/velin-web-ssh/internal/security"
 	"github.com/ttyob/velin-web-ssh/internal/store"
@@ -28,7 +25,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, err := loadServerConfig()
 	if err != nil {
 		log.Fatal(err)
 	}

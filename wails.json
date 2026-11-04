@@ -6,7 +6,7 @@
   "build:dir": "build",
   "info": {
     "productName": "VelinWebSSH",
-    "productVersion": "0.3.53"
+    "productVersion": "0.3.54"
   },
   "author": {
     "name": "VelinWebSSH"

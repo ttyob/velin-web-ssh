@@ -46,12 +46,21 @@ assert.equal(tmuxInstallGuide('linux', 'alpine').command, 'sudo apk add tmux')
 assert.equal(tmuxInstallGuide('windows', '').supported, false)
 assert.match(tmuxInstallGuide('linux', 'unknown').command, /command -v apt-get/)
 
-const { buildRDPFile, rdpTarget } = await loadModule(new URL('../src/rdp.ts', import.meta.url))
+const { buildRDPFile, rdpTarget, nativeRDPAvailable, getNativeClipboardText, setNativeClipboardText } = await loadModule(new URL('../src/rdp.ts', import.meta.url))
 const rdpHost = { address: '2001:db8::10', port: 3389, name: 'Windows / prod', username: 'admin', desktopDomain: 'CORP' }
 assert.equal(rdpTarget(rdpHost), '[2001:db8::10]:3389')
 assert.match(buildRDPFile(rdpHost), /full address:s:\[2001:db8::10\]:3389\r\n/)
 assert.match(buildRDPFile(rdpHost), /username:s:admin\r\ndomain:s:CORP\r\n/)
 assert.doesNotMatch(buildRDPFile({ ...rdpHost, username: 'admin\r\nmalicious' }), /username:s:admin\r\nmalicious/)
+for (const name of ['desktopApp', 'App']) {
+  let copied
+  globalThis.go = { main:{ [name]:{ LaunchRDP:async () => {}, GetClipboardText:async () => 'desktop clipboard', SetClipboardText:async text => { copied = text } } } }
+  assert(nativeRDPAvailable())
+  assert.equal(await getNativeClipboardText(),'desktop clipboard')
+  assert.equal(await setNativeClipboardText('selected text'),true)
+  assert.equal(copied,'selected text')
+}
+delete globalThis.go
 
 const { resolveTabAttention, terminalOutputSettleDelay } = await loadModule(new URL('../src/terminalAttention.ts', import.meta.url))
 assert.equal(terminalOutputSettleDelay, 5000)

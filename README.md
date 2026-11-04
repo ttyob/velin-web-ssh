@@ -54,8 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/install.sh
 | --- | --- | --- |
 | **Docker Web** | [容器镜像](https://github.com/ttyob/velin-web-ssh/pkgs/container/velin-web-ssh) | `amd64` / `arm64`，浏览器访问 |
 | **飞牛 fnOS** | [下载 `.fpk`](https://github.com/ttyob/velin-web-ssh/releases/latest) | 原生应用，NAS 无需安装 Docker |
-| **Windows 桌面** | [下载 `windows-gui` EXE](https://github.com/ttyob/velin-web-ssh/releases/latest) | 单文件桌面版，需要 WebView2 Runtime |
-| **Windows 服务** | [下载 `windows-server` EXE](https://github.com/ttyob/velin-web-ssh/releases/latest) | 无 GUI，内嵌网页，浏览器访问 `http://127.0.0.1:8377` |
+| **Windows** | [下载 `.exe`](https://github.com/ttyob/velin-web-ssh/releases/latest) | 启动时选择窗口 / 服务模式，需要 WebView2 Runtime |
 
 Docker 镜像：`ghcr.io/ttyob/velin-web-ssh:latest`。固定版本可使用对应版本标签，开发构建使用 `edge`。
 

@@ -13,11 +13,12 @@ type NativeRDPBridge = {
 };
 
 type WailsWindow = typeof globalThis & {
-  go?: { main?: { App?: Partial<NativeRDPBridge> } };
+  go?: { main?: { App?: Partial<NativeRDPBridge>; desktopApp?: Partial<NativeRDPBridge> } };
 };
 
 function nativeRDPBridge() {
-  return (globalThis as WailsWindow).go?.main?.App;
+  const main = (globalThis as WailsWindow).go?.main;
+  return main?.desktopApp || main?.App;
 }
 
 export function nativeRDPAvailable() {

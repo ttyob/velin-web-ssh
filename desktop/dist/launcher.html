@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VelinWebSSH</title>
+  <style>
+    :root { color-scheme:dark; font:13px/1.5 "Segoe UI","Microsoft YaHei",sans-serif; color:#ececf0; background:#101216; }
+    * { box-sizing:border-box; } [hidden] { display:none !important; }
+    body { margin:0; padding:26px; min-width:320px; }
+    button,input { font:inherit; } button { cursor:pointer; }
+    button { min-height:36px; border:1px solid #ffffff20; border-radius:9px; padding:7px 14px; color:inherit; background:#ffffff04; }
+    button:hover:not(:disabled) { background:#ffffff0d; border-color:#ffffff35; }
+    button:disabled { opacity:.45; cursor:default; }
+    button:focus-visible,input:focus-visible,summary:focus-visible { outline:2px solid #acbcd7; outline-offset:3px; }
+    button.primary { background:#ececf0; border-color:#ececf0; color:#17191e; font-weight:600; }
+    button.primary:hover:not(:disabled) { background:white; }
+    button.quiet { border-color:transparent; background:transparent; color:#a4aab5; }
+    .brand { margin:0 0 5px; color:#9aA2af; font-size:12px; letter-spacing:1.6px; }
+    h1 { font-size:23px; line-height:1.35; margin:0; font-weight:600; letter-spacing:-.5px; }
+    p { margin:0; } .muted { color:#929aa8; font-size:12px; }
+    .intro { margin:8px 0 24px; }
+    .modes { display:grid; gap:12px; }
+    .mode { display:flex; align-items:center; gap:16px; width:100%; text-align:left; padding:21px 19px; background:#191c23; border-color:#ffffff14; border-radius:13px; }
+    .mode svg { width:26px; height:26px; flex-shrink:0; color:#b9c4d6; }
+    .mode strong { display:block; font-size:15px; font-weight:550; margin-bottom:4px; }
+    .mode span { display:block; color:#929aa8; font-size:12px; }
+    .mode .arrow { margin-left:auto; font-size:20px; color:#737e90; }
+    .footnote { margin-top:23px; color:#737d8c; font-size:12px; }
+    .heading,.row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .heading { margin-bottom:22px; }
+    .badge { display:flex; align-items:center; gap:6px; padding:4px 9px; border:1px solid #ffffff18; border-radius:20px; font-size:11px; color:#9ba3af; white-space:nowrap; }
+    .badge::before { content:""; width:6px; height:6px; background:currentColor; border-radius:50%; }
+    .badge.running { color:#b1c8ed; } .badge.error { color:#e5a8ac; }
+    .badge.starting::before,.badge.stopping::before { animation:pulse 1.1s ease-in-out infinite; }
+    .card { padding:17px; border:1px solid #ffffff13; border-radius:12px; background:#191c23; margin-top:12px; }
+    .address { margin:8px 0 15px; gap:8px; }
+    code { font:13px Consolas,monospace; overflow-wrap:anywhere; }
+    .copy { min-height:28px; padding:3px 8px; font-size:11px; flex-shrink:0; }
+    .actions { display:flex; gap:8px; } .actions .primary { flex:1; }
+    #uptime { margin-top:11px; font-size:11px; color:#788292; min-height:16px; }
+    .autostart { align-items:flex-start; padding:14px 17px; }
+    .autostart label { display:flex; align-items:center; gap:9px; cursor:pointer; font-size:13px; }
+    input[type=checkbox] { accent-color:#b6c5dd; width:15px; height:15px; margin:3px 0; }
+    .autostart p { margin:5px 0 0 24px; font-size:11px; color:#7f8999; }
+    details.card { padding:0; } summary { padding:15px 17px; cursor:pointer; list-style:none; display:flex; justify-content:space-between; align-items:center; }
+    summary::-webkit-details-marker { display:none; } summary::after { content:"⌄"; color:#828b9b; }
+    details[open] summary::after { content:"⌃"; } summary .muted { margin-left:auto; margin-right:13px; }
+    .account { padding:0 17px 17px; }
+    .account .row { margin-top:10px; } .account .row > label { white-space:nowrap; color:#929aa8; font-size:12px; }
+    input:not([type=checkbox]) { min-width:0; width:100%; background:#11141a; color:inherit; border:1px solid #ffffff20; border-radius:8px; padding:9px 11px; outline:none; }
+    #initial-password { font-family:Consolas,monospace; }
+    .account-actions { justify-content:flex-end; gap:2px; }
+    .account-actions button { font-size:12px; min-height:30px; padding:4px 8px; }
+    #credential-unavailable { margin-top:7px; }
+    footer { display:flex; justify-content:space-between; align-items:center; margin-top:18px; gap:8px; }
+    footer button { padding:5px 9px; font-size:12px; } footer > div { display:flex; gap:4px; }
+    #message { margin-top:13px; min-height:18px; font-size:12px; color:#aebed8; overflow-wrap:anywhere; }
+    #message.error { color:#e5a8ac; }
+    dialog { max-width:calc(100% - 40px); width:390px; padding:24px; border:1px solid #ffffff24; border-radius:15px; color:inherit; background:#1b1f27; box-shadow:0 20px 70px #0009; }
+    dialog::backdrop { background:#05070bb3; backdrop-filter:blur(5px); }
+    dialog h2 { margin:0 0 9px; font-size:18px; font-weight:600; }
+    dialog label { display:block; margin:15px 0 6px; color:#adb6c5; font-size:12px; }
+    dialog .actions { justify-content:flex-end; margin-top:22px; }
+    dialog .actions .primary { flex:0 0 auto; }
+    .dialog-error { color:#e5a8ac; font-size:12px; margin-top:13px; min-height:18px; }
+    @keyframes pulse { 50% { opacity:.3; } }
+    @media(prefers-reduced-motion:reduce) { * { animation:none !important; } dialog::backdrop { backdrop-filter:none; } }
+    @media(max-width:420px) { body { padding:20px; } .actions { flex-wrap:wrap; } .mode { padding:18px 15px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section id="chooser">
+      <p class="brand">VELIN</p>
+      <h1>启动方式</h1>
+      <p class="intro muted">选择本次如何打开工作台。</p>
+      <div class="modes">
+        <button class="mode" id="window-mode" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18m-12 0v11"/></svg>
+          <div><strong>窗口模式</strong><span>在当前窗口打开终端工作区</span></div><span class="arrow" aria-hidden="true">›</span>
+        </button>
+        <button class="mode" id="service-mode" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="3" width="16" height="8" rx="2"/><rect x="4" y="13" width="16" height="8" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h4m-4 10h4"/></svg>
+          <div><strong>服务模式</strong><span>浏览器访问，保留服务管理小窗口</span></div><span class="arrow" aria-hidden="true">›</span>
+        </button>
+      </div>
+      <p class="footnote">两种模式共用当前目录中的账户、主机和会话数据。</p>
+    </section>
+
+    <section id="service-panel" hidden>
+      <div class="heading"><div><p class="brand">VELIN</p><h1>服务管理</h1></div><span id="status" class="badge" role="status">未启动</span></div>
+      <section class="card" aria-label="服务状态">
+        <p class="muted">访问地址</p>
+        <div class="row address"><code id="service-url">启动后显示</code><button class="copy" id="copy-url" type="button" disabled>复制</button></div>
+        <div class="actions"><button class="primary" id="open-browser" type="button" disabled>在浏览器打开</button><button id="toggle-service" type="button">启动服务</button><button id="restart-service" type="button" disabled>重启</button></div>
+        <p id="uptime"></p>
+      </section>
+      <section class="card autostart"><label><input id="auto-start" type="checkbox" />开机自启</label><p>登录 Windows 后，以服务模式启动并最小化。</p></section>
+      <details class="card" id="account-details">
+        <summary>管理员账户<span id="admin-username" class="muted">admin</span></summary>
+        <div class="account">
+          <div id="initial-credentials" hidden><div class="row"><label for="initial-password">初始密码</label><input id="initial-password" type="password" readonly /></div><div class="row account-actions"><button class="quiet" id="reveal-password" type="button">显示密码</button><button class="quiet" id="copy-password" type="button">复制密码</button></div></div>
+          <p id="credential-unavailable" class="muted">展开后检查初始凭据。</p>
+          <div class="row account-actions"><button id="change-password" type="button">修改密码</button></div>
+        </div>
+      </details>
+      <footer><button class="quiet" id="switch-mode" type="button">切换模式</button><div><button class="quiet" id="minimize" type="button">最小化</button><button class="quiet" id="quit" type="button">退出</button></div></footer>
+    </section>
+    <p id="message" aria-live="polite"></p>
+  </main>
+
+  <dialog id="password-dialog" aria-labelledby="password-title">
+    <form id="password-form">
+      <h2 id="password-title">修改管理员密码</h2><p class="muted">修改后，该管理员的所有登录会话将退出。</p>
+      <label for="new-password">新密码</label><input id="new-password" type="password" autocomplete="new-password" required maxlength="1024" />
+      <label for="confirm-password">确认新密码</label><input id="confirm-password" type="password" autocomplete="new-password" required maxlength="1024" />
+      <p id="password-error" class="dialog-error" role="alert"></p>
+      <div class="actions"><button id="cancel-password" type="button">取消</button><button class="primary" id="save-password" type="submit">保存密码</button></div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title"></h2><p id="confirm-description" class="muted"></p>
+    <div class="actions"><button id="cancel-confirm" type="button">取消</button><button id="confirm-minimize" type="button" hidden>最小化</button><button class="primary" id="confirm-action" type="button">确认</button></div>
+  </dialog>
+  <script>
+    const $ = id => document.getElementById(id);
+    let state = { state:'stopped', mode:'', url:'' }, busy = false, initialized = false, polling, pendingConfirmation;
+    const bridge = () => window.go?.main?.desktopApp || window.go?.main?.App;
+    function invoke(name, ...args) {
+      const fn = bridge()?.[name];
+      return typeof fn === 'function' ? fn(...args) : Promise.reject(new Error('桌面服务尚未就绪，请稍后重试'));
+    }
+    function message(text = '', error = false) { $('message').textContent = text; $('message').className = error ? 'error' : ''; }
+    function errorText(error) { return error?.message || String(error); }
+    function render() {
+      const running = state.state === 'running';
+      const labels = { stopped:'已停止', starting:'正在启动', running:'运行中', stopping:'正在停止', error:'启动异常' };
+      $('status').textContent = labels[state.state] || '未启动';
+      $('status').className = 'badge ' + state.state;
+      $('service-url').textContent = state.url || '启动后显示';
+      $('toggle-service').textContent = running ? '停止服务' : state.state === 'starting' ? '正在启动…' : '启动服务';
+      $('window-mode').disabled = $('service-mode').disabled = !initialized || busy;
+      ['toggle-service','switch-mode','change-password'].forEach(id => $(id).disabled = busy);
+      ['open-browser','restart-service','copy-url'].forEach(id => $(id).disabled = busy || !running);
+      $('auto-start').disabled = busy;
+      const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(state.startedAt)) / 1000));
+      $('uptime').textContent = running && Number.isFinite(seconds) ? `已运行 ${seconds < 60 ? seconds + ' 秒' : Math.floor(seconds / 60) + ' 分钟'} · 最小化后继续运行` : '服务停止后，浏览器与终端连接将断开。';
+    }
+    async function perform(task) {
+      if (busy) return;
+      busy = true; message(); render();
+      try { await task(); } catch (error) { message(errorText(error), true); }
+      finally { busy = false; render(); }
+    }
+    function showService() { $('chooser').hidden = true; $('service-panel').hidden = false; }
+    async function startMode(mode, minimized = false) {
+      await perform(async () => {
+        if (mode === 'service') { showService(); state = { ...state, state:'starting', mode }; render(); }
+        try { state = await invoke('StartMode', mode); }
+        catch (error) { state = await invoke('GetServiceStatus').catch(() => ({ ...state, state:'error' })); throw error; }
+        if (mode === 'window') { window.location.replace('/window.html'); return; }
+        showService();
+        if (minimized) await invoke('Minimize');
+      });
+    }
+    function confirmAction(title, description, action, closing = false) {
+      if ($('confirm-dialog').open || busy) return;
+      pendingConfirmation = action;
+      $('confirm-title').textContent = title; $('confirm-description').textContent = description;
+      $('confirm-action').textContent = closing ? '停止并退出' : '确认';
+      $('confirm-minimize').hidden = !closing;
+      $('confirm-dialog').showModal();
+      (closing ? $('confirm-minimize') : $('cancel-confirm')).focus();
+    }
+    $('window-mode').onclick = () => startMode('window');
+    $('service-mode').onclick = () => startMode('service');
+    $('toggle-service').onclick = () => state.state === 'running'
+      ? confirmAction('停止服务？','当前浏览器和终端连接将断开。', () => perform(async () => { state = await invoke('StopService'); }))
+      : startMode('service');
+    $('restart-service').onclick = () => confirmAction('重启服务？','当前连接将断开，服务启动后可重新连接。', () => perform(async () => { state = await invoke('RestartService'); }));
+    $('open-browser').onclick = () => perform(() => invoke('OpenBrowser'));
+    $('copy-url').onclick = () => perform(async () => { await invoke('SetClipboardText', state.url); message('访问地址已复制'); });
+    $('auto-start').onchange = () => { const enabled = $('auto-start').checked; perform(async () => { try { await invoke('SetAutoStart', enabled); message(enabled ? '已开启开机自启' : '已关闭开机自启'); } catch (error) { $('auto-start').checked = !enabled; throw error; } }); };
+    $('account-details').ontoggle = async () => {
+      if (!$('account-details').open) return;
+      try {
+        const credentials = await invoke('GetInitialCredentials');
+        $('initial-credentials').hidden = !credentials;
+        $('initial-password').value = credentials?.password || '';
+        $('initial-password').type = 'password'; $('reveal-password').textContent = '显示密码';
+        $('credential-unavailable').hidden = !!credentials;
+        $('credential-unavailable').textContent = '初始密码已修改或不再可用，可在此设置新密码。';
+      } catch (error) { $('credential-unavailable').textContent = errorText(error); }
+    };
+    $('reveal-password').onclick = () => { const hidden = $('initial-password').type === 'password'; $('initial-password').type = hidden ? 'text' : 'password'; $('reveal-password').textContent = hidden ? '隐藏密码' : '显示密码'; };
+    $('copy-password').onclick = () => perform(async () => { await invoke('SetClipboardText', $('initial-password').value); message('密码已复制'); });
+    $('change-password').onclick = () => { $('password-form').reset(); $('password-error').textContent = ''; $('password-dialog').showModal(); $('new-password').focus(); };
+    $('cancel-password').onclick = () => $('password-dialog').close();
+    $('password-dialog').onclose = () => $('password-form').reset();
+    $('password-form').onsubmit = async event => {
+      event.preventDefault(); if (busy) return;
+      const password = $('new-password').value, confirmation = $('confirm-password').value;
+      if (password !== confirmation) { $('password-error').textContent = '两次输入的密码不一致'; return; }
+      busy = true; $('save-password').disabled = true; $('cancel-password').disabled = true;
+      try {
+        await invoke('ChangeAdminPassword', password, confirmation);
+        $('password-form').reset(); $('password-dialog').close(); $('initial-password').value = ''; $('initial-credentials').hidden = true;
+        $('credential-unavailable').hidden = false; $('credential-unavailable').textContent = '密码已修改，初始密码已失效。';
+        message('密码已更新，请使用新密码重新登录');
+      } catch (error) { $('password-error').textContent = errorText(error); }
+      finally { busy = false; $('save-password').disabled = false; $('cancel-password').disabled = false; render(); }
+    };
+    $('minimize').onclick = () => invoke('Minimize').catch(error => message(errorText(error), true));
+    const quit = () => state.state === 'running' ? confirmAction('退出并停止服务？','如需保持浏览器连接，请将管理窗口最小化。', () => invoke('QuitService'), true) : invoke('QuitService');
+    $('quit').onclick = quit;
+    $('switch-mode').onclick = () => confirmAction('切换启动模式？','当前服务将停止，返回启动方式选择。', () => perform(async () => { await invoke('SelectStartupMode'); state = await invoke('GetServiceStatus'); $('service-panel').hidden = true; $('chooser').hidden = false; $('account-details').open = false; $('initial-password').value = ''; }));
+    $('cancel-confirm').onclick = () => $('confirm-dialog').close();
+    $('confirm-minimize').onclick = () => { $('confirm-dialog').close(); invoke('Minimize').catch(error => message(errorText(error), true)); };
+    $('confirm-action').onclick = () => { const action = pendingConfirmation; pendingConfirmation = null; $('confirm-dialog').close(); Promise.resolve(action?.()).catch(error => message(errorText(error), true)); };
+    async function boot() {
+      for (let attempt = 0; attempt < 50 && !bridge(); attempt++) await new Promise(resolve => setTimeout(resolve, 100));
+      try {
+        const startup = await invoke('GetStartup');
+        initialized = true; $('admin-username').textContent = startup.username; $('auto-start').checked = startup.autoStart;
+        window.runtime?.EventsOn?.('service:close-request', quit);
+        render();
+        if (startup.mode) await startMode(startup.mode, startup.minimized);
+        polling = setInterval(async () => {
+          if (busy || $('service-panel').hidden) return;
+          try { state = await invoke('GetServiceStatus'); render(); if (state.lastError) message(state.lastError, true); }
+          catch (error) { message(errorText(error), true); }
+        }, 2000);
+      } catch (error) { message(errorText(error), true); }
+    }
+    window.addEventListener('pagehide', () => clearInterval(polling));
+    boot();
+  </script>
+</body>
+</html>

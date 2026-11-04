@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/ttyob/velin-web-ssh/internal/agent"
 	"github.com/ttyob/velin-web-ssh/internal/api"
 	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/desktopservice"
 	"github.com/ttyob/velin-web-ssh/internal/forward"
 	"github.com/ttyob/velin-web-ssh/internal/security"
 	"github.com/ttyob/velin-web-ssh/internal/store"
@@ -43,17 +46,31 @@ import (
 //go:embed desktop/dist/index.html
 var desktopIndexHTML string
 
+//go:embed desktop/dist/launcher.html
+var desktopLauncherHTML []byte
+
 //go:embed all:web/dist
 var desktopWebAssets embed.FS
 
 type desktopServer struct {
-	server *http.Server
-	store  *store.Store
-	agent  *agent.Manager
-	once   sync.Once
+	server    *http.Server
+	store     *store.Store
+	agent     *agent.Manager
+	terminal  *terminal.Manager
+	tailscale *tailnet.Manager
+	done      chan error
+	once      sync.Once
 }
 
-type desktopApp struct{}
+type desktopApp struct {
+	ctx             context.Context
+	cfg             config.Config
+	executable      string
+	explicitAddress bool
+	manager         *desktopservice.Manager
+	resetOnStart    atomic.Bool
+	quitting        atomic.Bool
+}
 
 func (d *desktopApp) LaunchRDP(address string, port int, username, domain, password string) error {
 	address = strings.TrimSpace(address)
@@ -97,11 +114,11 @@ func (d *desktopApp) LaunchRDP(address string, port int, username, domain, passw
 }
 
 func (d *desktopApp) GetClipboardText() (string, error) {
-	return wailsruntime.ClipboardGetText(context.Background())
+	return wailsruntime.ClipboardGetText(d.ctx)
 }
 
 func (d *desktopApp) SetClipboardText(text string) error {
-	return wailsruntime.ClipboardSetText(context.Background(), text)
+	return wailsruntime.ClipboardSetText(d.ctx, text)
 }
 
 type desktopCredentialNotice struct {
@@ -118,6 +135,12 @@ func (d *desktopServer) close(ctx context.Context) {
 		if d.agent != nil {
 			d.agent.Close()
 		}
+		if d.terminal != nil {
+			d.terminal.CloseAll()
+		}
+		if d.tailscale != nil {
+			_ = d.tailscale.Close()
+		}
 		if d.store != nil {
 			_ = d.store.Close()
 		}
@@ -131,15 +154,12 @@ func main() {
 }
 
 func runDesktop() (runErr error) {
-	const defaultDesktopAddr = "127.0.0.1:0"
-
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find desktop executable: %w", err)
 	}
-	executableDir := filepath.Dir(executable)
-	logPath := filepath.Join(executableDir, "velin-web-ssh.log")
-	closeLog, err := configureDesktopLogging(executableDir)
+	directory := filepath.Dir(executable)
+	closeLog, err := configureDesktopLogging(directory)
 	if err != nil {
 		return fmt.Errorf("configure desktop logging: %w", err)
 	}
@@ -149,25 +169,24 @@ func runDesktop() (runErr error) {
 		}
 		closeLog()
 	}()
-	slog.Info("VelinWebSSH starting", "executable", executable, "log_file", logPath)
-
-	if err = os.Chdir(executableDir); err != nil {
-		return fmt.Errorf("set desktop working directory: %w", err)
+	if err = os.Chdir(directory); err != nil {
+		return err
 	}
 	if err = godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("load desktop .env: %w", err)
+		return err
 	}
-	if os.Getenv("VELIN_DATA_DIR") == "" {
-		_ = os.Setenv("VELIN_DATA_DIR", executableDir)
+	explicitAddress := strings.TrimSpace(os.Getenv("VELIN_ADDR")) != ""
+	for key, value := range map[string]string{
+		"VELIN_DATA_DIR":      directory,
+		"VELIN_COOKIE_SECURE": "false",
+		"VELIN_RDP_DRIVE_DIR": filepath.Join(os.TempDir(), "velin-rdp-drives"),
+	} {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			if err = os.Setenv(key, value); err != nil {
+				return err
+			}
+		}
 	}
-	if os.Getenv("VELIN_ADDR") == "" {
-		_ = os.Setenv("VELIN_ADDR", defaultDesktopAddr)
-	}
-	if os.Getenv("VELIN_COOKIE_SECURE") == "" {
-		// The desktop WebView talks to the local HTTP listener.
-		_ = os.Setenv("VELIN_COOKIE_SECURE", "false")
-	}
-
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -175,136 +194,171 @@ func runDesktop() (runErr error) {
 	if strings.TrimSpace(os.Getenv("VELIN_WEB_DIST")) == "" {
 		cfg.WebFS, err = fs.Sub(desktopWebAssets, "web/dist")
 		if err != nil {
-			return fmt.Errorf("load embedded desktop frontend: %w", err)
+			return err
 		}
 	}
-	slog.Info("desktop configuration loaded", "data_dir", cfg.DataDir, "database", cfg.DatabasePath, "log_file", logPath)
-	s, err := store.Open(cfg.DatabasePath)
+	if desktopArgumentPresent("--service-worker") {
+		return runDesktopWorker(cfg)
+	}
+	releaseInstance, owned, err := desktopInstance(cfg.DataDir)
 	if err != nil {
 		return err
+	}
+	if !owned {
+		return nil
+	}
+	defer releaseInstance()
+	app := &desktopApp{cfg: cfg, executable: executable, explicitAddress: explicitAddress}
+	app.resetOnStart.Store(desktopArgumentPresent("--reset-admin-password"))
+	app.manager = desktopservice.New(desktopservice.Options{Command: app.workerCommand})
+	defer app.manager.Close()
+	return wails.Run(&options.App{
+		Title: "VelinWebSSH", Width: 560, Height: 440, MinWidth: 480, MinHeight: 440,
+		BackgroundColour: options.NewRGB(16, 18, 22),
+		AssetServer:      &assetserver.Options{Handler: http.HandlerFunc(app.servePage)},
+		Windows:          &windows.Options{Theme: windows.Dark},
+		Bind:             []interface{}{app},
+		OnStartup:        func(ctx context.Context) { app.ctx = ctx },
+		OnBeforeClose: func(ctx context.Context) bool {
+			status := app.manager.Status()
+			if !app.quitting.Load() && status.Mode == "service" && status.State == "running" {
+				wailsruntime.EventsEmit(ctx, "service:close-request")
+				return true
+			}
+			return false
+		},
+		OnShutdown: func(ctx context.Context) { app.manager.Close() },
+	})
+}
+
+func startDesktopServer(cfg config.Config, allowFallback bool) (*desktopServer, *desktopCredentialNotice, string, error) {
+	s, err := store.Open(cfg.DatabasePath)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	backend := &desktopServer{store: s, done: make(chan error, 1)}
+	fail := func(err error) (*desktopServer, *desktopCredentialNotice, string, error) {
+		backend.close(context.Background())
+		return nil, nil, "", err
 	}
 	vault, err := security.LoadVault(cfg.MasterKeyPath)
 	if err != nil {
-		_ = s.Close()
-		return err
+		return fail(err)
 	}
 	count, err := s.UserCount()
 	if err != nil {
-		_ = s.Close()
-		return err
+		return fail(err)
 	}
-	var credentialNotice *desktopCredentialNotice
+	var notice *desktopCredentialNotice
 	if count == 0 {
 		password := cfg.AdminPassword
 		if password == "" {
 			password, err = security.RandomToken(12)
 			if err != nil {
-				_ = s.Close()
-				return err
+				return fail(err)
 			}
 		}
-		hash, hashErr := security.HashPassword(password)
-		if hashErr != nil {
-			_ = s.Close()
-			return hashErr
+		hash, err := security.HashPassword(password)
+		if err != nil {
+			return fail(err)
 		}
 		if err = s.CreateUser(uuid.NewString(), cfg.AdminUser, hash, "admin"); err != nil {
-			_ = s.Close()
-			return err
+			return fail(err)
 		}
-		created, _, lookupErr := s.UserByUsername(cfg.AdminUser)
-		if lookupErr != nil {
-			_ = s.Close()
-			return lookupErr
+		user, _, err := s.UserByUsername(cfg.AdminUser)
+		if err != nil {
+			return fail(err)
 		}
-		if err = s.SetForcePasswordChange(created.ID, true); err != nil {
-			_ = s.Close()
-			return err
+		if err = s.SetForcePasswordChange(user.ID, true); err != nil {
+			return fail(err)
 		}
-		credentialNotice = &desktopCredentialNotice{username: cfg.AdminUser, password: password}
-		slog.Warn("GUI administrator created; credentials are shown in the application", "username", cfg.AdminUser)
+		notice = &desktopCredentialNotice{username: user.Username, password: password}
 	} else if desktopArgumentPresent("--reset-admin-password") {
-		result, resetErr := adminreset.Reset(s, cfg.AdminUser, cfg.AdminPassword)
-		if resetErr != nil {
-			_ = s.Close()
-			return resetErr
+		result, err := adminreset.Reset(s, cfg.AdminUser, cfg.AdminPassword)
+		if err != nil {
+			return fail(err)
 		}
-		credentialNotice = &desktopCredentialNotice{username: result.Username, password: result.Password, reset: true}
-		slog.Warn("GUI administrator password reset; credentials are shown in the application", "username", result.Username)
+		notice = &desktopCredentialNotice{username: result.Username, password: result.Password, reset: true}
 	}
-	tailscaleSettings, err := tailnet.LoadSettings(s, vault)
+	if notice != nil {
+		content := fmt.Sprintf("username=%s\npassword=%s\n", notice.username, notice.password)
+		if err = os.WriteFile(filepath.Join(cfg.DataDir, "initial-admin-credentials.txt"), []byte(content), 0o600); err != nil {
+			return fail(err)
+		}
+	}
+	settings, err := tailnet.LoadSettings(s, vault)
 	if err != nil {
-		return err
+		return fail(err)
 	}
-	tailscaleManager, err := tailnet.New(cfg)
+	backend.tailscale, err = tailnet.New(cfg)
 	if err != nil {
-		return err
+		return fail(err)
 	}
-	if err = tailscaleManager.Apply(tailscaleSettings); err != nil {
-		return err
+	if err = backend.tailscale.Apply(settings); err != nil {
+		return fail(err)
 	}
-	defer tailscaleManager.Close()
-	manager := terminal.NewManager(s, vault, cfg.DeploymentID, tailscaleManager)
-	forwardManager := forward.NewManager(s, manager)
-	agentManager := agent.NewManager(manager, agent.AIConfig{BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey, Model: cfg.AIModel})
-	appServer := &desktopServer{store: s, agent: agentManager}
-	appServer.server = &http.Server{Addr: cfg.Addr, Handler: api.NewWithTailnet(cfg, s, vault, manager, forwardManager, agentManager, tailscaleManager).Router(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	backend.terminal = terminal.NewManager(s, vault, cfg.DeploymentID, backend.tailscale)
+	forwards := forward.NewManager(s, backend.terminal)
+	backend.agent = agent.NewManager(backend.terminal, agent.AIConfig{BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey, Model: cfg.AIModel})
+	handler := api.NewWithTailnet(cfg, s, vault, backend.terminal, forwards, backend.agent, backend.tailscale).Router()
+	backend.server = &http.Server{Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	listener, err := net.Listen("tcp4", cfg.Addr)
-	if err != nil && errors.Is(err, syscall.EADDRINUSE) {
-		slog.Warn("configured desktop port is in use, selecting a free loopback port", "addr", cfg.Addr)
+	if err != nil && allowFallback && errors.Is(err, syscall.EADDRINUSE) {
+		slog.Warn("desktop port is in use, selecting a free loopback port", "addr", cfg.Addr)
 		listener, err = net.Listen("tcp4", "127.0.0.1:0")
 	}
 	if err != nil {
-		appServer.close(context.Background())
-		return err
+		return fail(fmt.Errorf("监听 %s 失败: %w", cfg.Addr, err))
 	}
-	go func() {
-		if serveErr := appServer.server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
-			slog.Error("desktop web server stopped", "error", serveErr)
-		}
-	}()
-	defer appServer.close(context.Background())
-	// Use the address assigned by the listener. This is important when the
-	// configured port is 0, and also avoids pointing the WebView at a stale
-	// configured port after address normalization.
-	serviceURL, err := desktopServiceURL(listener.Addr().String())
+	url, err := desktopServiceURL(listener.Addr().String())
 	if err != nil {
-		return err
+		_ = listener.Close()
+		return fail(err)
 	}
-	slog.Info("desktop web service listening", "configured_addr", cfg.Addr, "service_url", serviceURL)
-	if err = waitForDesktopServer(serviceURL); err != nil {
-		return err
+	go func() { backend.done <- backend.server.Serve(listener) }()
+	if err = waitForDesktopServer(url); err != nil {
+		return fail(err)
 	}
-	slog.Info("desktop web service ready", "service_url", serviceURL)
-	page, err := buildDesktopPage(serviceURL, credentialNotice)
-	if err != nil {
-		return err
-	}
+	slog.Info("desktop web service ready", "configured_addr", cfg.Addr, "service_url", url)
+	return backend, notice, url, nil
+}
 
-	return wails.Run(&options.App{
-		Title:            "VelinWebSSH",
-		Width:            1440,
-		Height:           900,
-		MinWidth:         980,
-		MinHeight:        640,
-		BackgroundColour: options.NewRGB(16, 20, 24),
-		AssetServer: &assetserver.Options{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || (r.URL.Path != "/" && r.URL.Path != "/index.html") {
-				http.NotFound(w, r)
-				return
+func runDesktopWorker(cfg config.Config) error {
+	backend, notice, url, err := startDesktopServer(cfg, desktopArgumentPresent("--worker-window"))
+	if err != nil {
+		_ = json.NewEncoder(os.Stdout).Encode(desktopservice.Ready{Error: err.Error()})
+		return err
+	}
+	defer backend.close(context.Background())
+	ready := desktopservice.Ready{URL: url}
+	if notice != nil {
+		ready.Credentials = &desktopservice.Credentials{Username: notice.username, Password: notice.password, Reset: notice.reset}
+	}
+	if err = json.NewEncoder(os.Stdout).Encode(ready); err != nil {
+		return err
+	}
+	stop := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			if scanner.Text() == "stop" {
+				break
 			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(page)
-		})},
-		Windows: &windows.Options{Theme: windows.Dark},
-		Bind:    []interface{}{&desktopApp{}},
-		OnStartup: func(ctx context.Context) {
-			copyDesktopCredential(ctx, credentialNotice)
-		},
-		OnShutdown: func(ctx context.Context) {
-			appServer.close(ctx)
-		},
-	})
+		}
+		close(stop)
+	}()
+	select {
+	case <-stop:
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		backend.close(ctx)
+		return nil
+	case err := <-backend.done:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
 }
 
 func desktopArgumentPresent(name string) bool {

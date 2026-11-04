@@ -77,18 +77,16 @@ wails build -platform windows/amd64 -clean -m -s -skipbindings -skipembedcreate
 
 产物为 `build/bin/velin-web-ssh.exe`。
 
-无 GUI 服务版复用 `cmd/velin` 服务入口，Windows 配置读取 EXE 同目录的 `.env`，默认使用同目录数据和内嵌网页。无需 Wails，在 Windows PowerShell 中构建：
+Windows 客户端使用同一个 EXE：启动选择页及服务管理面板位于 `desktop/dist/launcher.html`，完整工作区继续使用现有网页，初始凭据页保留在 `desktop/dist/index.html`。服务管理逻辑在 `internal/desktopservice`，Wails 绑定及当前用户开机自启在 `desktop_launcher_windows.go`。
+
+服务由同一 EXE 的内部工作进程运行，管理窗口通过专用管道获知就绪、停止服务。管理窗口退出或意外消失时，管道关闭，工作进程随之停止。服务重启会重新初始化后端并释放旧监听端口；监听失败会直接显示错误。窗口模式继续使用回环地址和空闲端口。
 
 ```powershell
-npm --prefix web ci
-npm --prefix web run build
-$env:CGO_ENABLED = "0"
-go test ./cmd/velin ./web
-go build -trimpath -ldflags "-s -w" -o build/bin/velin-web-ssh-windows-server-amd64.exe ./cmd/velin
-.\packaging\windows\smoke-server.ps1 -Executable (Get-Item build/bin/velin-web-ssh-windows-server-amd64.exe).FullName
+go test -tags desktop,production .
+.\packaging\windows\smoke-desktop-worker.ps1 -Executable (Get-Item build/bin/velin-web-ssh.exe).FullName
 ```
 
-跨平台构建时指定 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`。Windows 构建必须先生成 `web/dist`，才能内嵌网页资源。CI 在 Windows runner 上验证配置覆盖和独立 EXE 启动，从无网页文件的目录检查内嵌资源、数据位置、HTTP 登录与密码重置。服务版使用控制台子系统，保留日志输出和 Ctrl+C；桌面版继续使用 Wails。
+`go test -race ./internal/desktopservice` 验证进程启停、重启、启动超时、异常退出、退出清理、初始凭据失效、密码策略与登录会话撤销。`npm --prefix web run test:launcher` 验证实际管理页面的模式选择、启停、失败重试、自启设置回滚、密码表单、最小化和退出确认。Windows CI 使用实际 GUI EXE 以内部工作进程模式检查内嵌网页、HTTP 登录、端口冲突、密码重置和管道退出，同时验证 Windows 启动项的保存与删除。
 
 fnOS 原生包构建见 [fnOS 打包说明](../packaging/fnos/README.md)。
 
@@ -111,6 +109,6 @@ unset VELIN_SCREENSHOT_PASSWORD
 
 ## 发布
 
-[GitHub Actions](../.github/workflows/container.yml) 在 `main` 更新后执行测试、构建并验证 Windows 无 GUI 服务版，发布 Docker `edge` 镜像。推送 `v*` 版本标签后，执行测试、构建双架构 Docker 镜像及 fnOS 安装包、构建 Windows 桌面和无 GUI 服务两种单 EXE，最后统一创建 GitHub Release 和校验文件。
+[GitHub Actions](../.github/workflows/container.yml) 在 `main` 更新后执行测试、构建并验证 Windows 客户端，发布 Docker `edge` 镜像。推送 `v*` 版本标签后，执行测试、构建双架构 Docker 镜像及 fnOS 安装包、构建支持窗口 / 服务两种模式的 Windows 单 EXE，最后统一创建 GitHub Release 和校验文件。
 
 正式镜像的 `latest` 跟随版本标签，发行版同时提供固定版本镜像地址。

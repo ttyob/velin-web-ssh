@@ -102,6 +102,17 @@ func TestBridgeRealTmuxCapturePreservesViewAndSSH(t *testing.T) {
 	}
 	tmux("-f", "/dev/null", "new-session", "-d", "-s", "test", "-x", "80", "-y", "12", "printf '真实中文输出\\n'; exec sleep 30")
 	t.Cleanup(func() { _ = exec.Command("tmux", "-L", socket, "kill-server").Run() })
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		capture := tmux("capture-pane", "-p", "-t", "test")
+		if strings.Contains(capture, "真实中文输出") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tmux pane output was not ready: %q", capture)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	tmux("copy-mode", "-t", "test")
 	state := func() string {
 		return tmux("display-message", "-p", "-t", "test", "#{pane_width}|#{pane_height}|#{pane_in_mode}|#{scroll_position}")
@@ -121,7 +132,7 @@ func TestBridgeRealTmuxCapturePreservesViewAndSSH(t *testing.T) {
 	if _, _, err = bridgeCommand(ctx, s.sshClient, "fixture-block"); err == nil {
 		t.Fatal("blocked capture was not cancelled")
 	}
-	checkCtx, checkCancel := context.WithTimeout(context.Background(), time.Second)
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer checkCancel()
 	data, _, err := bridgeCommand(checkCtx, s.sshClient, "printf alive")
 	if err != nil || string(data) != "alive" {

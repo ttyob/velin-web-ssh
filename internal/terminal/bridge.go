@@ -27,6 +27,25 @@ type BridgeSnapshot struct {
 	Source       string
 }
 
+// BridgeDirectory uses a private, cancellable command channel. File transfers
+// never interrupt the shared terminal connection to stop a directory query.
+func (s *Session) BridgeDirectory(ctx context.Context) (string, error) {
+	s.mu.RLock()
+	client, meta, closed := s.sshClient, s.meta, s.closed
+	s.mu.RUnlock()
+	if closed || client == nil || meta.SessionMode == "normal" {
+		return "", errors.New("文件传输需要已连接的 tmux 会话")
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	command := fmt.Sprintf("tmux -L %s display-message -p -t %s '#{pane_current_path}'", shellQuote(meta.TmuxSocket), shellQuote(meta.TmuxName))
+	data, truncated, err := bridgeCommand(queryCtx, client, command)
+	if err != nil || truncated {
+		return "", errors.New("无法获取 tmux 项目目录，请检查会话连接")
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 func (s *Session) BridgeSnapshot(ctx context.Context, maxLines int) (BridgeSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return BridgeSnapshot{}, err

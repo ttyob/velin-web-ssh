@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { sessionLinkQuery } from "../sessionLink";
 import { ArrowRight, LockKeyhole, RefreshCw, ShieldCheck, UserRound } from "@lucide/vue";
 import { ElMessage } from "element-plus";
 import { useAuthStore } from "../stores/auth";
@@ -9,6 +10,7 @@ import AuthShell from "../components/AuthShell.vue";
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
 const username = ref("");
 const password = ref("");
 const remember = ref(true);
@@ -64,7 +66,7 @@ async function submit() {
       captchaAnswer.value.trim(),
     );
     await router.replace(
-      auth.user?.forcePasswordChange ? "/change-password" : "/workspace",
+      { path: auth.user?.forcePasswordChange ? "/change-password" : "/workspace", query: sessionLinkQuery(route.query.session) },
     );
   } catch (error) {
     if (error instanceof ApiError) {

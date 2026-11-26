@@ -41,6 +41,7 @@ import (
 	"github.com/ttyob/velin-web-ssh/internal/sessionbridge"
 	"github.com/ttyob/velin-web-ssh/internal/store"
 	"github.com/ttyob/velin-web-ssh/internal/tailnet"
+	"github.com/ttyob/velin-web-ssh/internal/telegram"
 	"github.com/ttyob/velin-web-ssh/internal/terminal"
 )
 
@@ -53,6 +54,7 @@ type API struct {
 	vault           *security.Vault
 	terminals       *terminal.Manager
 	sessionBridge   *sessionbridge.Module
+	telegram        *telegram.Module
 	forwards        *forward.Manager
 	agents          *agent.Manager
 	webProxies      *webProxyManager
@@ -120,6 +122,7 @@ func newAPI(cfg config.Config, s *store.Store, v *security.Vault, t *terminal.Ma
 	a := &API{cfg: cfg, store: s, vault: v, terminals: t, forwards: forwards, agents: agents, tailscale: tailscale, webProxies: newWebProxyManager(t, cfg.HostPortAddr), desktops: desktops, started: time.Now(), taskQueue: make(chan commandTaskRequest, 100), captchas: make(map[string]loginCaptcha), updateClient: &http.Client{Timeout: 10 * time.Second}, updateURL: defaultReleaseURL, shareViewers: make(map[string]map[string]*shareViewerConnection), shareFailures: make(map[string]shareFailure)}
 	a.restoreAIModelConfig()
 	a.initSessionBridge()
+	a.initTelegram()
 	a.restoreHostPortWebServices()
 	go a.commandTaskWorker()
 	go a.expireTerminalShares()
@@ -146,6 +149,7 @@ func (a *API) Router() http.Handler {
 		r.Use(a.requireUnlocked)
 		a.registerMobileRoutes(r)
 		a.registerSessionBridgeRoutes(r)
+		a.registerTelegramRoutes(r)
 		r.Get("/api/auth/me", a.me)
 		r.Post("/api/auth/lock", a.lockSession)
 		r.Post("/api/auth/unlock", a.unlockSession)

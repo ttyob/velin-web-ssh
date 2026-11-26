@@ -53,6 +53,7 @@ var desktopLauncherHTML []byte
 var desktopWebAssets embed.FS
 
 type desktopServer struct {
+	api       *api.API
 	server    *http.Server
 	store     *store.Store
 	agent     *agent.Manager
@@ -129,6 +130,9 @@ type desktopCredentialNotice struct {
 
 func (d *desktopServer) close(ctx context.Context) {
 	d.once.Do(func() {
+		if d.api != nil {
+			d.api.Close()
+		}
 		if d.server != nil {
 			_ = d.server.Shutdown(ctx)
 		}
@@ -300,7 +304,8 @@ func startDesktopServer(cfg config.Config, allowFallback bool) (*desktopServer, 
 	backend.terminal = terminal.NewManager(s, vault, cfg.DeploymentID, backend.tailscale)
 	forwards := forward.NewManager(s, backend.terminal)
 	backend.agent = agent.NewManager(backend.terminal, agent.AIConfig{BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey, Model: cfg.AIModel})
-	handler := api.NewWithTailnet(cfg, s, vault, backend.terminal, forwards, backend.agent, backend.tailscale).Router()
+	backend.api = api.NewWithTailnet(cfg, s, vault, backend.terminal, forwards, backend.agent, backend.tailscale)
+	handler := backend.api.Router()
 	backend.server = &http.Server{Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	listener, err := net.Listen("tcp4", cfg.Addr)
 	if err != nil && allowFallback && errors.Is(err, syscall.EADDRINUSE) {
@@ -320,6 +325,7 @@ func startDesktopServer(cfg config.Config, allowFallback bool) (*desktopServer, 
 		return fail(err)
 	}
 	slog.Info("desktop web service ready", "configured_addr", cfg.Addr, "service_url", url)
+	backend.api.StartIntegrations()
 	return backend, notice, url, nil
 }
 

@@ -2,11 +2,9 @@ package sessionbridge
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ttyob/velin-web-ssh/internal/version"
@@ -109,107 +107,19 @@ func (m *Module) server(token Token) *mcp.Server {
 		return m.readSession(ctx, token, args)
 	})
 	addTool(m, server, token, Input, "velin_send_input", "Send text or one named key to an authorized running terminal. submit=true appends Enter; multiline text uses bracketed paste. This may execute commands. Inspect output afterward. requestID must be a UUID.", func(ctx context.Context, args inputArgs) (mutationResult, error) {
-		session, err := m.session(ctx, token, args.SessionID)
-		if err != nil {
-			return mutationResult{}, err
-		}
-		data, err := inputBytes(args)
-		if err != nil {
-			return mutationResult{}, err
-		}
-		return m.mutation(ctx, token, "input", args.RequestID, args, func() mutationResult {
-			if err := m.revalidate(token, Input, &session); err != nil {
-				return failed(err)
-			}
-			n, err := m.backend.WriteInput(ctx, token.UserID, session.ID, data)
-			if err != nil {
-				if errors.Is(err, ErrInputRejected) {
-					return mutationResult{Status: "rejected", Message: err.Error()}
-				}
-				return mutationResult{Status: "uncertain", Bytes: n, Message: "终端写入未确认，请先读取会话再决定下一步；勿自动补发。"}
-			}
-			return mutationResult{Status: "written", Bytes: n, Message: "输入已写入终端；请读取会话输出确认执行结果。"}
-		})
+		return m.SendInput(ctx, token, args)
 	})
 	addTool(m, server, token, Create, "velin_create_session", "Open a new SSH/tmux terminal on an explicitly authorized host using saved credentials. Creation is asynchronous; poll the returned session. Fingerprints are never auto-trusted.", func(ctx context.Context, args createArgs) (mutationResult, error) {
-		if !contains(token.HostIDs, args.HostID) {
-			return mutationResult{}, errors.New("主机未授权创建会话")
-		}
-		args.Name = strings.TrimSpace(args.Name)
-		if args.Name == "" || len([]rune(args.Name)) > 120 {
-			return mutationResult{}, errors.New("会话名称须为 1～120 个字符")
-		}
-		if args.Mode == "" {
-			args.Mode = "tmux"
-		}
-		if args.Mode != "tmux" && args.Mode != "normal" {
-			return mutationResult{}, errors.New("mode 须为 tmux 或 normal")
-		}
-		return m.mutation(ctx, token, "create", args.RequestID, args, func() mutationResult {
-			if err := m.revalidate(token, Create, &Session{HostID: args.HostID}); err != nil {
-				return failed(err)
-			}
-			session, err := m.backend.Create(ctx, token.UserID, args.HostID, args.Name, args.Mode)
-			if err != nil {
-				return failed(err)
-			}
-			return mutationResult{Status: "accepted", Session: &session}
-		})
+		return m.CreateSession(ctx, token, args)
 	})
 	addTool(m, server, token, Create, "velin_restore_session", "Restore an authorized disconnected tmux session with saved credentials. Ended ordinary SSH processes cannot be restored.", func(ctx context.Context, args restoreArgs) (mutationResult, error) {
-		session, err := m.session(ctx, token, args.SessionID)
-		if err != nil {
-			return mutationResult{}, err
-		}
-		return m.mutation(ctx, token, "restore", args.RequestID, args, func() mutationResult {
-			if err := m.revalidate(token, Create, &session); err != nil {
-				return failed(err)
-			}
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			value, err := m.backend.Restore(ctx, token.UserID, session.ID)
-			if err != nil {
-				return failed(err)
-			}
-			return mutationResult{Status: "restored", Session: &value}
-		})
+		return m.RestoreSession(ctx, token, args)
 	})
 	addTool(m, server, token, Manage, "velin_rename_session", "Change an authorized terminal's display title without affecting its running process.", func(ctx context.Context, args renameArgs) (Session, error) {
-		session, err := m.session(ctx, token, args.SessionID)
-		if err != nil {
-			return Session{}, err
-		}
-		args.Name = strings.TrimSpace(args.Name)
-		if args.Name == "" || len([]rune(args.Name)) > 120 {
-			return Session{}, errors.New("会话名称须为 1～120 个字符")
-		}
-		if err := m.revalidate(token, Manage, &session); err != nil {
-			return Session{}, err
-		}
-		value, err := m.backend.Rename(ctx, token.UserID, session.ID, args.Name)
-		if err == nil {
-			_ = m.store.Audit(token.UserID, "session_bridge.rename", "terminal_session", session.ID, "", map[string]string{"tokenID": token.ID})
-		}
-		return value, err
+		return m.RenameSession(ctx, token, args)
 	})
 	addTool(m, server, token, Manage, "velin_terminate_session", "Permanently terminate an authorized terminal session and its remote tmux session. Requires explicit confirm=true.", func(ctx context.Context, args terminateArgs) (mutationResult, error) {
-		session, err := m.session(ctx, token, args.SessionID)
-		if err != nil {
-			return mutationResult{}, err
-		}
-		if !args.Confirm {
-			return mutationResult{}, errors.New("终止会话需要 confirm=true")
-		}
-		return m.mutation(ctx, token, "terminate", args.RequestID, args, func() mutationResult {
-			if err := m.revalidate(token, Manage, &session); err != nil {
-				return failed(err)
-			}
-			value, err := m.backend.Terminate(ctx, token.UserID, session.ID)
-			if err != nil {
-				return failed(err)
-			}
-			return mutationResult{Status: "terminated", Termination: &value}
-		})
+		return m.TerminateSession(ctx, token, args)
 	})
 	return server
 }

@@ -47,6 +47,7 @@ import CredentialsPanel from "./CredentialsPanel.vue";
 import TaskPanel from "./TaskPanel.vue";
 import SecurityPanel from "./SecurityPanel.vue";
 import SessionBridgePanel from "../features/session-bridge/SessionBridgePanel.vue";
+import TelegramPanel from "../features/telegram/TelegramPanel.vue";
 import {
   accentPresets,
   findInterfaceTheme,
@@ -87,6 +88,7 @@ const tabMetaMap: Record<string, { title: string; desc: string }> = {
   data: { title: "数据", desc: "加密备份、导出与导入" },
   tasks: { title: "任务队列", desc: "查看后台任务与执行进度" },
   "session-bridge": { title: "外部 Agent", desc: "授权 OpenClaw 等 Agent 访问你的终端会话" },
+  telegram: { title: "Telegram", desc: "随时查看会话进度，发送需求和接收通知" },
   updates: { title: "版本更新", desc: "检查并获取新版本" },
 };
 const tab = ref("terminal"),
@@ -783,6 +785,9 @@ function forwardBatch(text: string, sessionIDs: string[]) {
               </button>
             </template>
             <span class="sp-nav-group">工具</span>
+            <button :class="{ active: tab === 'telegram' }" @click="tab = 'telegram'">
+              <Bot :size="15" /><span>Telegram</span>
+            </button>
             <button :class="{ active: tab === 'session-bridge' }" @click="tab = 'session-bridge'">
               <Bot :size="15" /><span>外部 Agent</span>
             </button>
@@ -1064,6 +1069,7 @@ function forwardBatch(text: string, sessionIDs: string[]) {
             <!-- ============ 凭据 / 任务 ============ -->
             <SecurityPanel v-else-if="tab === 'security'" />
             <SessionBridgePanel v-else-if="tab === 'session-bridge'" />
+            <TelegramPanel v-else-if="tab === 'telegram'" />
             <CredentialsPanel
               v-else-if="tab === 'credentials'"
               :credentials="credentials"

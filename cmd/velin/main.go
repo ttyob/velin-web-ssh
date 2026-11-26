@@ -103,13 +103,16 @@ func main() {
 	forwardManager := forward.NewManager(s, manager)
 	agentManager := agent.NewManager(manager, agent.AIConfig{BaseURL: cfg.AIBaseURL, APIKey: cfg.AIAPIKey, Model: cfg.AIModel})
 	defer agentManager.Close()
-	handler := api.NewWithTailnet(cfg, s, vault, manager, forwardManager, agentManager, tailscaleManager).Router()
+	apiService := api.NewWithTailnet(cfg, s, vault, manager, forwardManager, agentManager, tailscaleManager)
+	defer apiService.Close()
+	handler := apiService.Router()
 	server := &http.Server{Addr: cfg.Addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	listener, err := net.Listen("tcp4", cfg.Addr)
 	if err != nil {
 		log.Fatal(err)
 	}
 	slog.Info("VelinWebSSH listening", "addr", cfg.Addr, "pid", os.Getpid())
+	apiService.StartIntegrations()
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {

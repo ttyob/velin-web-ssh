@@ -24,10 +24,39 @@ for (let top = 21; top <= 40; top++) assert(tui.scroll(pinned(top), 1));
 tui.move({ row: 7, column: 30 });
 assert.equal(tui.text(), Array.from({ length: 24 }, (_, i) => `line-${String(21 + i).padStart(3, '0')} text`).join('\n'));
 assert(!tui.scroll(pinned(40), 1), 'A scroll at the boundary must not duplicate rows');
+// An incremental redraw can temporarily leave several top rows unchanged.
+// They must not become a permanently growing, unselectable header.
+const changingHeader = new ScrollingSelection([
+  line('fixed'), line('same-a'), line('same-b'), line('body-10'),
+  line('body-11'), line('body-12'), line('body-13'), line('body-14'),
+], { row: 1, column: 0 });
+assert(changingHeader.scroll([
+  line('fixed'), line('same-a'), line('same-b'), line('body-11'),
+  line('body-12'), line('body-13'), line('body-14'), line('body-15'),
+], 1));
+assert.equal(changingHeader.header, 3);
+assert(changingHeader.scroll([
+  line('fixed'), line('changed'), line('body-13'), line('body-14'),
+  line('body-15'), line('body-16'), line('body-17'), line('body-18'),
+], 1));
+assert.equal(changingHeader.header, 1);
+assert(changingHeader.scroll([
+  line('fixed'), line('changed'), line('body-13'), line('body-14'),
+  line('body-15'), line('body-17'), line('body-18'), line('body-19'),
+], 1));
+assert.equal(changingHeader.header, 1, 'a transient partial redraw must not grow the fixed header again');
+changingHeader.move({ row: 1, column: 8 });
+assert.ok(changingHeader.text(), 'shrinking a temporary fixed header must not leave holes in the copied range');
 const unicode = new ScrollingSelection([
   { cells: ['中', '', '文', '', '🙂', '', 'e\u0301', ' '], wrapped: false },
   { cells: ['w','r','a','p','p','e','d',' '], wrapped: true },
 ], { row: 0, column: 1 });
 unicode.move({ row: 1, column: 7 });
 assert.equal(unicode.text(), '中文🙂e\u0301wrapped');
+const applicationWrap = new ScrollingSelection([
+  line('paragraph begins'),
+  { ...line('  visual continuation', true), trimWrappedIndent: true },
+], { row: 0, column: 0 });
+applicationWrap.move({ row: 1, column: 21 });
+assert.equal(applicationWrap.text(), 'paragraph beginsvisual continuation');
 console.log('Scrolling selection unit checks passed: both directions, range shrink, fixed CLI areas, boundaries, Unicode and wrapped lines.');

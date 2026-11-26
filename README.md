@@ -28,6 +28,7 @@
 | **文件与内网** | SFTP、在线编辑、Web 代理、端口转发、Tailscale |
 | **会话分享** | 限时链接、密码保护、只读或可操作权限 |
 | **运维扩展** | 资源监控、Docker / Git、可选 AI Agent 与专用代理 |
+| **Telegram** | 会话进度、需求回复、状态通知与项目文件传输，按用户授权 |
 | **安全与备份** | TOTP、PIN 锁屏、主机指纹、加密备份 |
 
 ## 快速安装
@@ -62,6 +63,7 @@ Docker 镜像：`ghcr.io/ttyob/velin-web-ssh:latest`。固定版本可使用对�
 
 - [安装与配置](docs/deployment.md)：Docker / fnOS / Windows、环境变量、密码重置与备份
 - [开发与构建](docs/development.md)：本地开发、测试、打包与发布
+- [Telegram 配置与使用](docs/telegram-bot-development.md)
 - [fnOS 打包说明](packaging/fnos/README.md)
 - [问题反馈](https://github.com/ttyob/velin-web-ssh/issues)
 

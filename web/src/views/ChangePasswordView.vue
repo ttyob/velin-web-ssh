@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { sessionLinkQuery } from "../sessionLink";
 import { LockKeyhole, Save } from "@lucide/vue";
 import { ElMessage } from "element-plus";
 import { ApiError, api, json } from "../api";
@@ -9,6 +10,7 @@ import AuthShell from "../components/AuthShell.vue";
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
 const currentPassword = ref("");
 const newPassword = ref("");
 const confirmPassword = ref("");
@@ -31,7 +33,7 @@ async function submit() {
     });
     if (auth.user) auth.user.forcePasswordChange = false;
     ElMessage.success("密码已修改");
-    await router.replace("/workspace");
+    await router.replace({ path:"/workspace", query:sessionLinkQuery(route.query.session) });
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       auth.user = null;

@@ -11,6 +11,10 @@ async function loadModule(path) {
   return import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`)
 }
 
+const { sessionLinkQuery } = await loadModule(new URL('../src/sessionLink.ts', import.meta.url))
+assert.deepEqual(sessionLinkQuery('session-1'), {session:'session-1'})
+for (const value of ['https://example.com','../other','x?token=secret', ['session-1'], null, '', 'a'.repeat(129)]) assert.deepEqual(sessionLinkQuery(value), {})
+
 const { reconnectDelay } = await loadModule(new URL('../src/reconnect.ts', import.meta.url))
 assert.equal(reconnectDelay(0, 0.5), 1000)
 assert.equal(reconnectDelay(1, 0.5), 2000)

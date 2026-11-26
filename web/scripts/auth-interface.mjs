@@ -11,6 +11,18 @@ const server = await createServer({
   cacheDir: 'node_modules/.vite-auth-interface',
   server: { host: '127.0.0.1', port: 0, open: false },
   optimizeDeps: { esbuildOptions: { target: 'esnext' } },
+  plugins: [{
+    name: 'auth-terminal-fixture', enforce: 'pre',
+    resolveId(id) { if (id.endsWith('/SplitPaneNode.vue')) return '\0auth-terminal' },
+    load(id) {
+      if (id === '\0auth-terminal') return `import {h} from 'vue'
+        export default {props:['node'],setup(props,{expose}){
+          expose({resize(){},focusLeaf(){}})
+          const leaves=node=>node.type==='leaf'?[node]:[...leaves(node.first),...leaves(node.second)]
+          return ()=>h('div',leaves(props.node).map(leaf=>h('div',{'data-linked-session':leaf.sessionID},leaf.sessionID)))
+        }}`
+    },
+  }],
 })
 const shots = new URL('../../artifacts/auth-redesign-20261031/', import.meta.url)
 await mkdir(shots, { recursive: true })
@@ -23,6 +35,7 @@ try {
   const page = await context.newPage()
   const errors = [], unlocks = []
   let user, locked = false, passwordChanges = 0, loseLoginSession = false
+  let linkedSessions = []
   const protectedWhileLocked = []
   page.on('pageerror', e => errors.push(e.message))
   await page.route('**/api/**', async route => {
@@ -60,7 +73,8 @@ try {
     if (path === '/api/auth/devices') return ok([])
     if (path === '/api/preferences') return ok({ lockEnabled: true, autoLockMinutes: 1 })
     if (path === '/api/workspace') return ok({ layout: { tabs: [] }, version: 1 })
-    if (['/api/hosts', '/api/credentials', '/api/sessions', '/api/web-services'].includes(path)) return ok([])
+    if (path === '/api/sessions') return ok(linkedSessions)
+    if (['/api/hosts', '/api/credentials', '/api/web-services'].includes(path)) return ok([])
     return ok({})
   })
   const shot = async name => {
@@ -68,7 +82,8 @@ try {
     await page.screenshot({ path: new URL(`${name}.png`, shots).pathname })
   }
   const waitForLockStage = () => page.waitForFunction(() => !document.querySelector('.lock-stage-enter-active, .lock-stage-leave-active'))
-  await page.goto(`${base}/login`)
+  await page.goto(`${base}/workspace?session=telegram-target`)
+  await page.waitForURL('**/login?session=telegram-target')
   await page.getByRole('heading', { name: '登录', exact: true }).waitFor()
   assert.equal(await page.getByRole('button', { name: '登录', exact: true }).evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(236, 236, 240)')
   await shot('web-login')
@@ -85,7 +100,7 @@ try {
   await page.getByText('双因素验证码无效').waitFor()
   await page.getByLabel('双因素验证码', { exact: true }).fill('123456')
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  await page.waitForURL('**/change-password')
+  await page.waitForURL('**/change-password?session=telegram-target')
   await shot('web-password-setup')
   await page.getByLabel('当前密码', { exact: true }).fill('fixture-password')
   await page.getByLabel('新密码', { exact: true }).fill('fixture-new-password')
@@ -96,6 +111,7 @@ try {
   await page.getByLabel('确认新密码', { exact: true }).fill('fixture-new-password')
   await page.getByRole('button', { name: '修改并进入工作区' }).click()
   await page.waitForURL('**/workspace')
+  await page.getByText('该会话不存在或当前账号无权访问',{exact:true}).waitFor()
   await page.getByRole('heading', { name: '没有打开的终端' }).waitFor()
   await page.locator('.workspace-lock-button').click()
   const cover = page.getByRole('dialog', { name: '工作区已锁定' })
@@ -254,8 +270,14 @@ try {
   await page.waitForURL('**/login')
   await page.getByText('登录已失效，请重新登录后修改密码', { exact: true }).waitFor()
   assert.equal(passwordChanges, changesBeforeExpiry)
+  // A valid session link opens the matching terminal after authentication.
+  user = { id:'fixture',username:'开发者',role:'user',forcePasswordChange:false }
+  linkedSessions = [{id:'telegram-target',hostID:'fixture-host',name:'Telegram 开发',sessionMode:'tmux',status:'attached',updatedAt:new Date().toISOString()}]
+  await page.goto(`${base}/workspace?session=telegram-target`)
+  await page.locator('[data-linked-session="telegram-target"]').waitFor()
+  await page.waitForURL('**/workspace')
   assert.deepEqual(errors, [])
-  console.log('Auth UI passed: captcha, TOTP, password confirmation, analog clock, time advancement and wake calibration, looping unlock hint, animated PIN transition and successful unlock reveal, manual/idle/restored lock, PIN errors, focus isolation, keyboard, full-screen click, reduced motion, logout, responsive layout, Windows bootstrap, blocked login cookies and expired setup sessions.')
+  console.log('Auth UI passed: captcha, TOTP, password confirmation, analog clock, time advancement and wake calibration, looping unlock hint, animated PIN transition and successful unlock reveal, manual/idle/restored lock, PIN errors, focus isolation, keyboard, full-screen click, reduced motion, logout, responsive layout, Windows bootstrap, blocked login cookies, expired setup sessions and terminal links through login/password setup.')
 } finally {
   await browser?.close()
   await server.close()

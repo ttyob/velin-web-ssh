@@ -9,6 +9,7 @@ clipboard/
 !/docs/mobile-app-requirements.md
 !/docs/mobile-app-development-plan.md
 !/docs/session-agent-integration.md
+!/docs/telegram-bot-development.md
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import { sessionLinkQuery } from './sessionLink'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -18,10 +19,11 @@ router.beforeEach(async (to) => {
   if (to.meta.nativeTools) return
   const auth = useAuthStore()
   if (!auth.checked) await auth.check()
-  if (!to.meta.public && !auth.user) return '/login'
-  if (auth.user?.forcePasswordChange && to.path !== '/change-password') return '/change-password'
-  if (!auth.user?.forcePasswordChange && to.path === '/change-password') return '/workspace'
-  if (to.path === '/login' && auth.user) return '/workspace'
+  const query = sessionLinkQuery(to.query.session)
+  if (!to.meta.public && !auth.user) return { path:'/login', query }
+  if (auth.user?.forcePasswordChange && to.path !== '/change-password') return { path:'/change-password', query }
+  if (!auth.user?.forcePasswordChange && to.path === '/change-password') return { path:'/workspace', query }
+  if (to.path === '/login' && auth.user) return { path:'/workspace', query }
 })
 
 export default router

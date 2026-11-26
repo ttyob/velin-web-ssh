@@ -20,6 +20,7 @@ import '/src/styles.css'
 import '/src/styles-refresh.css'
 import '/src/styles-polish.css'
 import '@xterm/xterm/css/xterm.css'
+import { createTerminalLinkProvider } from '/src/terminalLinks'
 
 window.messages = []
 class TestSocket {
@@ -52,6 +53,14 @@ window.preferences = reactive({
   letterSpacing: 0, background: '#111318', cursorStyle: 'block', cursorBlink: false,
 })
 window.terminalThemes = terminalThemePresets
+window.provideTerminalLinks = lineNumber => new Promise(resolve => {
+  createTerminalLinkProvider(window.testTerminal, (_event, value, kind) => {
+    window.activatedTerminalLink = { value, kind }
+  }).provideLinks(lineNumber, links => resolve(links.map(link => ({
+    text: link.text, range: link.range,
+    activate: () => link.activate(new MouseEvent('click'), link.text),
+  }))))
+})
 createApp({ render: () => h(TerminalPane, {
   session: window.session, visible: true,
   preferences: window.preferences,
@@ -236,6 +245,47 @@ try {
   }
   console.log('All 7 themes: indexed gray composer, divider and ramp repaint; color cube, RGB and text preserved')
   await page.evaluate(() => Object.assign(window.preferences, { terminalTheme: 'velin', background: '#111318' }))
+  await output('\x1bc')
+
+  // Codex repaints formatted output onto separate physical rows instead of
+  // setting xterm's native isWrapped flag. Both rows must still expose the
+  // complete URL to the click handler.
+  const longURL = 'https://www.example.com/terminal-preview/2026/11/26/demo?source=codex&campaign=click-test&format=long-url&lang=zh-CN&session=123456789'
+  const firstURLPart = '(https://www.example.com/terminal-preview/2026/11/26/demo?source=codex&campaign=click-test&format='
+  const secondURLPart = 'long-url&lang=zh-CN&session=123456789)'
+  await output(`\x1b[2J\x1b[H  ${firstURLPart}\r\n  ${secondURLPart}`)
+  for (const lineNumber of [1, 2]) {
+    const links = await page.evaluate(lineNumber => window.provideTerminalLinks(lineNumber), lineNumber)
+    const link = links.find(item => item.text.startsWith('https://www.example.com/terminal-preview/'))
+    assert.ok(link, `visual URL continuation must be clickable on row ${lineNumber}`)
+    assert.equal(link.text, longURL)
+    assert.deepEqual(link.range, { start: { x: 4, y: 1 }, end: { x: 39, y: 2 } })
+    await page.evaluate(({ lineNumber, text }) => window.provideTerminalLinks(lineNumber).then(links => {
+      links.find(link => link.text === text).activate()
+    }), { lineNumber, text: longURL })
+    assert.deepEqual(await page.evaluate(() => window.activatedTerminalLink), { value: longURL, kind: 'url' })
+  }
+  for (const { column, row } of [{ column: 20, row: 0 }, { column: 20, row: 1 }]) {
+    const point = await page.locator('.terminal-canvas .xterm-screen').evaluate((element, { column, row }) => {
+      const box = element.getBoundingClientRect()
+      return {
+        x: box.left + (column + 0.5) * box.width / window.testTerminal.cols,
+        y: box.top + (row + 0.5) * box.height / window.testTerminal.rows,
+      }
+    }, { column, row })
+    await page.mouse.move(point.x, point.y)
+    await page.waitForTimeout(100)
+    await page.mouse.click(point.x, point.y)
+    await page.locator('.terminal-link-dialog').waitFor({ state: 'visible' })
+    assert.equal(await page.locator('.terminal-link-preview code').textContent(), longURL)
+    if (row === 1) {
+      await page.getByRole('button', { name: '复制链接' }).click()
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), longURL)
+    }
+    await page.locator('.terminal-link-dialog .el-dialog__headerbtn').click()
+    await page.locator('.terminal-link-dialog').waitFor({ state: 'hidden' })
+  }
+  console.log('Codex visual URL continuation: both rows activate the complete URL')
   await output('\x1bc')
 
   // The browser owns Ctrl+V. Sending its control byte to Codex makes the
@@ -549,6 +599,137 @@ try {
   await selectText(true)
   await expectClipboard('copy-one')
   assert.equal(await page.evaluate(() => window.messages.some(m => m.type === 'input')), false, 'forced selection must not send mouse input to the CLI')
+
+  // A long logical line is stored as wrapped buffer rows without a newline.
+  // Copying it must preserve that logical line even when xterm's raw selection
+  // happens to omit a newline between the visual rows.
+  const wrappedLine = 'wrap-START-abcdefghijklmnopqrstuvwxyz-0123456789-TAIL'
+  await page.evaluate(async text => {
+    window.session.sessionMode = 'normal'
+    window.testTerminal.reset()
+    window.testTerminal.resize(20, 5)
+    window.output(text)
+    await new Promise(resolve => window.testTerminal.write('', () => requestAnimationFrame(resolve)))
+    window.testTerminal.select(0, 0, text.length)
+  }, wrappedLine)
+  const wrappedCopy = await page.evaluate(() => {
+    const data = new DataTransfer()
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', {
+      bubbles: true, cancelable: true, clipboardData: data,
+    }))
+    return {
+      raw: window.testTerminal.getSelection(),
+      copied: data.getData('text/plain'),
+      rows: Array.from({ length: 4 }, (_, row) => ({
+        text: window.testTerminal.buffer.active.getLine(row)?.translateToString(true),
+        wrapped: window.testTerminal.buffer.active.getLine(row)?.isWrapped,
+      })),
+    }
+  })
+  assert.ok(wrappedCopy.rows.some(row => row.wrapped), 'fixture must contain a visual wrapped row')
+  assert.equal(wrappedCopy.copied, wrappedLine)
+  assert.equal(wrappedCopy.copied.includes('\n'), false, `visual wrap leaked into clipboard: ${JSON.stringify(wrappedCopy)}`)
+
+  // Codex redraws its alternate-screen composer rows with cursor movement,
+  // which means the visual continuation does not have xterm's isWrapped flag.
+  const alternateWrappedLine = 'X'.repeat(30)
+  await page.evaluate(async text => {
+    window.session.sessionMode = 'normal'
+    window.testTerminal.reset()
+    window.testTerminal.resize(20, 5)
+    window.output(`\x1b[?1049h\x1b[1;1H${'X'.repeat(20)}\x1b[2;1H${text.slice(20)}`)
+    await new Promise(resolve => window.testTerminal.write('', () => requestAnimationFrame(resolve)))
+    window.testTerminal.select(0, 0, text.length)
+  }, alternateWrappedLine)
+  const alternateWrappedCopy = await page.evaluate(() => {
+    const data = new DataTransfer()
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', {
+      bubbles: true, cancelable: true, clipboardData: data,
+    }))
+    return data.getData('text/plain')
+  })
+  assert.equal(alternateWrappedCopy, alternateWrappedLine)
+  assert.equal(alternateWrappedCopy.includes('\n'), false, 'alternate-screen soft wrap leaked into clipboard')
+
+  const indentedAlternateWrappedLine = 'Y'.repeat(30)
+  await page.evaluate(async text => {
+    window.session.sessionMode = 'normal'
+    window.testTerminal.reset()
+    window.testTerminal.resize(20, 5)
+    window.output(`\x1b[?1049h\x1b[1;1H${'Y'.repeat(20)}\x1b[2;1H  ${text.slice(20)}`)
+    await new Promise(resolve => window.testTerminal.write('', () => requestAnimationFrame(resolve)))
+    window.testTerminal.select(0, 0, text.length + 2)
+  }, indentedAlternateWrappedLine)
+  const indentedAlternateWrappedCopy = await page.evaluate(() => {
+    const data = new DataTransfer()
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', {
+      bubbles: true, cancelable: true, clipboardData: data,
+    }))
+    return data.getData('text/plain')
+  })
+  assert.equal(indentedAlternateWrappedCopy, indentedAlternateWrappedLine)
+
+  // Codex constrains answer prose to a narrower content column than the
+  // terminal. These rows are redrawn independently and are not xterm wraps.
+  const answerLine = 'The answer continues across the content column without a hard line break'
+  await page.evaluate(async text => {
+    window.session.sessionMode = 'normal'
+    window.testTerminal.reset()
+    window.testTerminal.resize(80, 8)
+    window.output(`\x1b[?1049h\x1b[1;1H• first item\x1b[4;1H${text}\x1b[5;3Hand keeps going here\x1b[6;1Hdone.`)
+    await new Promise(resolve => window.testTerminal.write('', () => requestAnimationFrame(resolve)))
+    window.testTerminal.select(0, 3, 80 + 2 + 'and keeps going here'.length)
+  }, answerLine)
+  const answerCopy = await page.evaluate(() => {
+    const data = new DataTransfer()
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', {
+      bubbles: true, cancelable: true, clipboardData: data,
+    }))
+    return data.getData('text/plain')
+  })
+  assert.equal(answerCopy, `${answerLine}and keeps going here`)
+
+  // Codex prefixes an answer block with a bullet. The bullet belongs to the
+  // first visual row of the paragraph; it must not force a newline before the
+  // continuation row.
+  const bulletedAnswerLine = '• The answer begins here and continues across the content column'
+  await page.evaluate(async text => {
+    window.testTerminal.reset()
+    window.testTerminal.resize(80, 8)
+    window.output(`\x1b[?1049h\x1b[2;1H${text}\x1b[3;3Hand continues on the next visual row\x1b[5;1HWorked for 2s`)
+    await new Promise(resolve => window.testTerminal.write('', () => requestAnimationFrame(resolve)))
+    window.testTerminal.select(0, 1, 80 + 2 + 'and continues on the next visual row'.length)
+  }, bulletedAnswerLine)
+  const bulletedAnswerCopy = await page.evaluate(() => {
+    const data = new DataTransfer()
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', {
+      bubbles: true, cancelable: true, clipboardData: data,
+    }))
+    return data.getData('text/plain')
+  })
+  assert.equal(bulletedAnswerCopy, `${bulletedAnswerLine}and continues on the next visual row`)
+
+  // Terminal width is measured in cells. Wide Chinese characters occupy two
+  // cells, so an ASCII status row must not make wrapped Chinese prose look
+  // shorter than the content column.
+  const chineseAnswerFirst = `• ${'中文内容'.repeat(15)}`
+  const chineseAnswerNext = `  ${'继续测试'.repeat(15)}`
+  await page.evaluate(async ({ first, next }) => {
+    window.testTerminal.reset()
+    window.testTerminal.resize(132, 8)
+    window.output(`\x1b[?1049h\x1b[2;1H${first}\x1b[3;1H${next}\x1b[5;1H${'Worked for 24s '.repeat(8)}`)
+    await new Promise(resolve => window.testTerminal.write('', () => requestAnimationFrame(resolve)))
+    const nextCells = 2 + (next.length - 2) * 2
+    window.testTerminal.select(0, 1, 132 + nextCells)
+  }, { first: chineseAnswerFirst, next: chineseAnswerNext })
+  const chineseAnswerCopy = await page.evaluate(() => {
+    const data = new DataTransfer()
+    window.testTerminal.textarea.dispatchEvent(new ClipboardEvent('copy', {
+      bubbles: true, cancelable: true, clipboardData: data,
+    }))
+    return data.getData('text/plain')
+  })
+  assert.equal(chineseAnswerCopy, `${chineseAnswerFirst}${chineseAnswerNext.trimStart()}`)
 
   // Programmatic selection (for example search) must not overwrite clipboard.
   await page.evaluate(() => {

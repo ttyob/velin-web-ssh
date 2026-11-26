@@ -9,7 +9,8 @@ import {
   ref,
   watch,
 } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { sessionLinkQuery } from "../sessionLink";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   Activity,
@@ -116,6 +117,7 @@ const RemoteDesktopPane = defineAsyncComponent(
 
 const router = useRouter(),
   auth = useAuthStore();
+const route = useRoute();
 const hosts = ref<Host[]>([]),
   credentials = ref<Credential[]>([]),
   sessions = ref<TerminalSession[]>([]),
@@ -753,6 +755,14 @@ async function load() {
         (id) => valid.has(id),
       );
       applyLayout(normalizeLayout(savedLayout, valid));
+    }
+    const targetID = sessionLinkQuery(route.query.session).session;
+    if (targetID) {
+      const target = s.find((item) => item.id === targetID);
+      if (target) openSession(target);
+      else ElMessage.warning("该会话不存在或当前账号无权访问");
+      const query = { ...route.query }; delete query.session;
+      await router.replace({ path:route.path, query });
     }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : "加载工作区失败");

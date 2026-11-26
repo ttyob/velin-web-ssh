@@ -21,7 +21,8 @@
     "test:session-bridge": "node scripts/session-bridge.mjs",
     "test:e2e": "node scripts/smoke.mjs",
     "generate:fnos-icons": "node scripts/fnos-icons.mjs",
-    "screenshot:readme": "node scripts/readme-screenshot.mjs"
+    "screenshot:readme": "node scripts/readme-screenshot.mjs",
+    "test:telegram": "node scripts/telegram.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",

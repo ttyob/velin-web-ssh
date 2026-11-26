@@ -12,7 +12,6 @@ import { Terminal } from "@xterm/xterm";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import QrcodeVue from "qrcode.vue";
 import {
   ArrowDown,
@@ -39,7 +38,10 @@ import {
 import { normalizeTerminalWheelDelta } from "../terminalWheel";
 import { terminalClipboardFiles, terminalFileReference, terminalUploadName } from "../terminalClipboard";
 import { handleTerminalKeyEvent, terminalNewlineInput } from "../terminalKeyboard";
-import { attachScrollingSelection } from "../terminalSelection";
+import { normalizeTerminalSelection, attachScrollingSelection } from "../terminalSelection";
+import { createTerminalLinkProvider } from "../terminalLinks";
+import { detectTerminalImagePanel } from "../terminalImagePreview";
+import ImagePreviewDialog from "./ImagePreviewDialog.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -76,6 +78,16 @@ const remoteHistorySize = ref(0);
 const remoteHistoryPosition = ref(0);
 const linkPreviewOpen = ref(false);
 const linkPreviewURL = ref("");
+const imagePreviewOpen = ref(false);
+const imagePreviewSource = ref("");
+const imagePreviewFile = ref<{ name: string; path: string }>();
+const inlineImagePreview = ref<{
+  path: string;
+  name: string;
+  source: string;
+  style: Record<string, string>;
+}>();
+const inlineImagePreviewLoaded = ref(false);
 const linkPreviewHost = computed(() => {
   try {
     return new URL(linkPreviewURL.value).host;
@@ -148,6 +160,11 @@ let applicationHoverEvent: MouseEvent | undefined;
 const applicationButtonHovered = ref(false);
 let remoteSelectionText = "";
 let scrollingSelection: ReturnType<typeof attachScrollingSelection> | undefined;
+let terminalLinkProvider: { dispose(): void } | undefined;
+let inlineImagePreviewFrame: number | undefined;
+let inlineImagePreviewGeneration = 0;
+let inlineImagePreviewFailedPath = "";
+let inlineImageDirectoryPending = false;
 let clipboardWarningShown = false;
 let resizeAfterWrite = false;
 let scrollFrame: number | undefined;
@@ -722,6 +739,7 @@ function writeTerminal(data: Uint8Array, callback?: () => void, isReplay = false
   if (isReplay) pendingReplayWrites++;
   terminal.write(data, () => {
     updateConversationMode();
+    scheduleInlineImagePreview();
     pendingWrites = Math.max(0, pendingWrites - 1);
     if (isReplay) pendingReplayWrites = Math.max(0, pendingReplayWrites - 1);
     callback?.();
@@ -758,6 +776,15 @@ function updateConversationMode() {
   if (detected === conversationMode) return;
   conversationMode = detected;
   emit("conversation", props.session.id, detected);
+}
+
+function conversationSelectionMode() {
+  if (applicationAlternateScreen.value || conversationMode) return true;
+  if (!terminal) return false;
+  const buffer = terminal.buffer.active;
+  return Array.from({ length: Math.min(terminal.rows, 12) }, (_, row) =>
+    buffer.getLine(buffer.viewportY + row)?.translateToString(true) || "",
+  ).some((line) => /(?:OpenAI Codex|Claude Code|Aider|Gemini CLI|OpenCode)/i.test(line));
 }
 
 function resetTerminalForReplay() {
@@ -1523,6 +1550,101 @@ function previewTerminalLink(event: MouseEvent, value: string) {
     ElMessage.warning("无法识别此链接");
   }
 }
+function remoteImagePath(value: string) {
+  const trimmed = value.trim().replace(/^['"`]|['"`]$/g, "");
+  if (trimmed.startsWith("file://")) {
+    try {
+      return decodeURIComponent(new URL(trimmed).pathname);
+    } catch {
+      return "";
+    }
+  }
+  if (trimmed.startsWith("/")) return trimmed;
+  if (trimmed.startsWith("~/")) return trimmed;
+  const base = currentDirectory.replace(/\/+$/, "");
+  return base ? `${base}/${trimmed}` : trimmed;
+}
+function clearInlineImagePreview() {
+  inlineImagePreview.value = undefined;
+  inlineImagePreviewLoaded.value = false;
+}
+function updateInlineImagePreview() {
+  inlineImagePreviewFrame = undefined;
+  if (!terminal || !container.value || !props.visible) return clearInlineImagePreview();
+  const panel = detectTerminalImagePanel(terminal);
+  if (!panel) {
+    inlineImagePreviewFailedPath = "";
+    return clearInlineImagePreview();
+  }
+  if (!panel.path.startsWith("/") && !panel.path.startsWith("~/") &&
+      !currentDirectory && !inlineImageDirectoryPending) {
+    inlineImageDirectoryPending = true;
+    api<{ path: string }>(`/api/sessions/${encodeURIComponent(props.session.id)}/directory`)
+      .then((result) => { currentDirectory = result.path; })
+      .catch(() => {})
+      .finally(() => {
+        inlineImageDirectoryPending = false;
+        scheduleInlineImagePreview();
+      });
+  }
+  const path = remoteImagePath(panel.path);
+  if (!path || inlineImagePreviewFailedPath === path) return clearInlineImagePreview();
+  const screen = terminal.element?.querySelector<HTMLElement>(".xterm-screen");
+  if (!screen) return clearInlineImagePreview();
+  const canvasBox = container.value.getBoundingClientRect();
+  const screenBox = screen.getBoundingClientRect();
+  if (!screenBox.width || !screenBox.height) return clearInlineImagePreview();
+  const cellWidth = screenBox.width / terminal.cols;
+  const cellHeight = screenBox.height / terminal.rows;
+  const changed = inlineImagePreview.value?.path !== path;
+  if (changed) {
+    inlineImagePreviewGeneration++;
+    inlineImagePreviewLoaded.value = false;
+  }
+  const source = changed
+    ? `/api/sftp/${encodeURIComponent(props.session.hostID)}/preview-image?path=${encodeURIComponent(path)}&session=${encodeURIComponent(props.session.id)}&preview=${inlineImagePreviewGeneration}`
+    : inlineImagePreview.value!.source;
+  inlineImagePreview.value = {
+    path,
+    name: panel.name,
+    source,
+    style: {
+      left: `${screenBox.left - canvasBox.left + panel.startColumn * cellWidth}px`,
+      top: `${screenBox.top - canvasBox.top + panel.startRow * cellHeight}px`,
+      width: `${Math.max(cellWidth, (panel.endColumn - panel.startColumn) * cellWidth)}px`,
+      height: `${Math.max(cellHeight, (panel.endRow - panel.startRow) * cellHeight)}px`,
+      "--inline-image-background": terminalXtermTheme(props.preferences.terminalTheme).background || props.preferences.background,
+    },
+  };
+}
+function scheduleInlineImagePreview() {
+  if (inlineImagePreviewFrame !== undefined) return;
+  inlineImagePreviewFrame = requestAnimationFrame(updateInlineImagePreview);
+}
+function handleInlineImageError() {
+  if (inlineImagePreview.value) inlineImagePreviewFailedPath = inlineImagePreview.value.path;
+  clearInlineImagePreview();
+}
+async function previewTerminalImage(event: MouseEvent, value: string) {
+  event.preventDefault();
+  if (!currentDirectory && props.session.sessionMode === "tmux") {
+    try {
+      const result = await api<{ path: string }>(
+        `/api/sessions/${encodeURIComponent(props.session.id)}/directory`,
+      );
+      currentDirectory = result.path;
+    } catch {}
+  }
+  const path = remoteImagePath(value);
+  if (!path) return ElMessage.warning("无法识别图片路径");
+  imagePreviewFile.value = { name: path.split("/").pop() || value, path };
+  imagePreviewSource.value = `/api/sftp/${encodeURIComponent(props.session.hostID)}/preview-image?path=${encodeURIComponent(path)}&session=${encodeURIComponent(props.session.id)}`;
+  imagePreviewOpen.value = true;
+}
+function activateTerminalLink(event: MouseEvent, value: string, kind: "url" | "image") {
+  if (kind === "image") void previewTerminalImage(event, value);
+  else previewTerminalLink(event, value);
+}
 async function copyTerminalLink() {
   try {
     await navigator.clipboard.writeText(linkPreviewURL.value);
@@ -1713,7 +1835,13 @@ async function pasteTerminalFiles(files: File[]) {
   }
 }
 async function copySelection() {
-  const selected = scrollingSelection?.text() ?? (terminal?.getSelection() || remoteSelectionText);
+  const native = terminal?.getSelection() || "";
+  const selected = scrollingSelection?.text() ??
+    (terminal && native ? normalizeTerminalSelection(
+      terminal,
+      native,
+      conversationSelectionMode(),
+    ) : native || remoteSelectionText);
   if (!selected) return ElMessage.info("请先选中终端内容");
   await copyTerminalText(selected);
 }
@@ -1771,12 +1899,31 @@ function finishSelectionCopy(event: MouseEvent) {
   queueMicrotask(() => {
     if (disposed || !props.visible) return;
     if (scrollingSelection?.text() !== undefined) return;
-    const selected = terminal?.getSelection();
+    const native = terminal?.getSelection() || "";
+    const selected = terminal && native ? normalizeTerminalSelection(
+      terminal,
+      native,
+      conversationSelectionMode(),
+    ) : native;
     if (selected) void copyTerminalText(selected, true);
     else if (click && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
       sendApplicationMouse("click_application", { row: click.row, column: click.column });
     }
   });
+}
+function handleTerminalCopy(event: ClipboardEvent) {
+  if (!event.clipboardData || !terminal) return;
+  const scrolling = scrollingSelection?.text();
+  const native = terminal.getSelection();
+  const selected = scrolling ?? (native ? normalizeTerminalSelection(
+    terminal,
+    native,
+    conversationSelectionMode(),
+  ) : "");
+  if (!selected) return;
+  event.clipboardData.setData("text/plain", selected);
+  event.preventDefault();
+  event.stopImmediatePropagation();
 }
 function handleTerminalClipboard(value: string) {
   // OSC 52 is used by Claude Code and tmux for their own highlighted selection.
@@ -1908,14 +2055,18 @@ onMounted(() => {
   terminal.loadAddon(fit);
   if (!nativeTerminalText) terminal.loadAddon(new CanvasAddon());
   terminal.loadAddon(search);
-  terminal.loadAddon(new WebLinksAddon(previewTerminalLink));
   terminal.open(container.value!);
+  terminalLinkProvider = terminal.registerLinkProvider(
+    createTerminalLinkProvider(terminal, activateTerminalLink),
+  );
   scrollingSelection = attachScrollingSelection(terminal, {
-    canScroll: () => connected.value && controller.value && !replaying &&
+    selectable: () => connected.value && !replaying,
+    canScroll: () => connected.value && !replaying &&
       socket?.readyState === WebSocket.OPEN &&
-      (props.session.sessionMode === "tmux" || applicationAlternateScreen.value),
+      (props.session.sessionMode === "normal" || controller.value),
     visible: () => props.visible && !disposed,
     tmuxHistory: () => props.session.sessionMode === "tmux" && remoteHistoryMode.value,
+    applicationScreen: conversationSelectionMode,
     copy: (text) => { void copyTerminalText(text, true); },
     newline: nativeTerminalText ? "\r\n" : "\n",
     scroll: (lines) => {
@@ -1923,7 +2074,11 @@ onMounted(() => {
         socket?.send(JSON.stringify({ type: "scroll_application", lines,
           row: Math.max(1, Math.floor(terminal!.rows / 3)),
           column: Math.max(1, Math.floor(terminal!.cols / 2)) }));
-      } else sendRemoteHistoryScroll(lines);
+      } else if (props.session.sessionMode === "tmux") sendRemoteHistoryScroll(lines);
+      else {
+        terminal?.scrollLines(lines);
+        return true;
+      }
     },
   });
   terminal.attachCustomKeyEventHandler((event) => {
@@ -1946,6 +2101,7 @@ onMounted(() => {
 	terminalTextarea = terminal.textarea || undefined;
 	terminalTextarea?.addEventListener("paste", handleTerminalPaste, true);
   container.value?.addEventListener("mousedown", startSelectionCopy, true);
+  container.value?.addEventListener("copy", handleTerminalCopy, true);
   container.value?.addEventListener("mousemove", updateApplicationButtonHover);
   container.value?.addEventListener("mouseleave", clearApplicationButtonHover);
   document.addEventListener("mouseup", finishSelectionCopy);
@@ -1968,12 +2124,16 @@ onMounted(() => {
     if (!historyLocked.value) hasNewOutput.value = false;
   });
   terminal.buffer.onBufferChange(buffer => {
-    scrollingSelection?.clear();
+    // Alternate-screen applications redraw the viewport before xterm invokes
+    // terminal.write's completion callback. Keep a scrolling selection alive
+    // until that callback has given it the complete new screen.
+    if (!scrollingSelection?.dragging && !scrollingSelection?.waiting) scrollingSelection?.clear();
     localAlternateScreen.value = buffer.type === "alternate";
   });
   terminal.onResize(({ cols, rows }) => {
     scrollingSelection?.clear();
     rememberTerminalDimensions(cols, rows);
+    scheduleInlineImagePreview();
   });
   terminal.attachCustomWheelEventHandler(handleTerminalWheel);
   terminal.onTitleChange((title) => {
@@ -1998,6 +2158,7 @@ watch(
   () => {
     if (!props.visible) clearApplicationButtonHover();
     else updateApplicationButtonHover();
+    scheduleInlineImagePreview();
   },
 );
 
@@ -2050,6 +2211,7 @@ watch(
     }
     if (replayPreviewHost) replayPreviewHost.style.backgroundColor = theme.background;
     sendTerminalTheme();
+    scheduleInlineImagePreview();
   },
 );
 onBeforeUnmount(() => {
@@ -2057,6 +2219,7 @@ onBeforeUnmount(() => {
   scrollingSelection?.dispose();
   filePasteAbort?.abort();
   container.value?.removeEventListener("mousedown", startSelectionCopy, true);
+  container.value?.removeEventListener("copy", handleTerminalCopy, true);
   container.value?.removeEventListener("mousemove", updateApplicationButtonHover);
   container.value?.removeEventListener("mouseleave", clearApplicationButtonHover);
   clearApplicationButtonHover();
@@ -2078,9 +2241,12 @@ onBeforeUnmount(() => {
 	disposeHistoryTransitionSnapshot();
 	disposeResizeSnapshot();
   if (scrollFrame !== undefined) cancelAnimationFrame(scrollFrame);
+	if (inlineImagePreviewFrame !== undefined) cancelAnimationFrame(inlineImagePreviewFrame);
 	observer?.disconnect();
 	disposeReplayPreview();
 	terminalTextarea?.removeEventListener("paste", handleTerminalPaste, true);
+  terminalLinkProvider?.dispose();
+  terminalLinkProvider = undefined;
 	socket?.close();
   terminal?.dispose();
 });
@@ -2175,6 +2341,20 @@ defineExpose({
 				}"
 			></div>
 			<div
+				v-if="inlineImagePreview"
+				class="terminal-inline-image-preview"
+				:class="{ loaded: inlineImagePreviewLoaded }"
+				:style="inlineImagePreview.style"
+				aria-hidden="true"
+			>
+				<img
+					:src="inlineImagePreview.source"
+					:alt="inlineImagePreview.name"
+					@load="inlineImagePreviewLoaded = true"
+					@error="handleInlineImageError"
+				/>
+			</div>
+			<div
 				v-if="showRemoteHistoryScrollbar"
 				class="terminal-history-scrollbar"
 				role="scrollbar"
@@ -2245,6 +2425,13 @@ defineExpose({
         >
       </template>
     </el-dialog>
+    <ImagePreviewDialog
+      v-model="imagePreviewOpen"
+      :source="imagePreviewSource"
+      :host-id="session.hostID"
+      :session-id="session.id"
+      :file="imagePreviewFile"
+    />
   </section>
 </template>
 
@@ -2253,5 +2440,27 @@ defineExpose({
 .terminal-canvas.application-button-hover :deep(.xterm-screen),
 .terminal-canvas.application-button-hover :deep(.xterm-viewport) {
   cursor: pointer;
+}
+.terminal-inline-image-preview {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  background: transparent !important;
+}
+.terminal-inline-image-preview.loaded {
+  background: var(--inline-image-background) !important;
+}
+.terminal-inline-image-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+}
+.terminal-inline-image-preview.loaded img {
+  opacity: 1;
 }
 </style>

@@ -42,6 +42,11 @@ jobs:
         env:
           CHROMIUM_PATH: /usr/bin/google-chrome
         run: npm run test:launcher
+      - name: Test Telegram settings
+        working-directory: web
+        env:
+          CHROMIUM_PATH: /usr/bin/google-chrome
+        run: npm run test:telegram
 
   publish:
     needs: test

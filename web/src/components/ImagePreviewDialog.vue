@@ -7,19 +7,25 @@ import type { Host } from "../types";
 const props = defineProps<{
   modelValue: boolean;
   host?: Host;
+  hostId?: string;
   sessionId?: string;
+  source?: string;
   file?: { name: string; path: string; size?: number };
 }>();
 const emit = defineEmits<{ "update:modelValue": [boolean] }>();
 const loaded = ref(false);
 const failed = ref(false);
+const dimensions = ref<{ width: number; height: number }>();
+
+const hostID = computed(() => props.host?.id || props.hostId || "");
 
 const source = computed(() => {
-  if (!props.host || !props.file) return "";
+  if (props.source) return props.source;
+  if (!hostID.value || !props.file) return "";
   const session = props.sessionId
     ? `&session=${encodeURIComponent(props.sessionId)}`
     : "";
-  return `/api/sftp/${props.host.id}/preview-image?path=${encodeURIComponent(props.file.path)}${session}`;
+  return `/api/sftp/${hostID.value}/preview-image?path=${encodeURIComponent(props.file.path)}${session}`;
 });
 
 watch(
@@ -27,15 +33,28 @@ watch(
   () => {
     loaded.value = false;
     failed.value = false;
+    dimensions.value = undefined;
   },
 );
 
 function download() {
-  if (!props.host || !props.file) return;
+  if (!hostID.value || !props.file) return;
   const session = props.sessionId
     ? `&session=${encodeURIComponent(props.sessionId)}`
     : "";
-  downloadToolFile(`/api/sftp/${props.host.id}/download?path=${encodeURIComponent(props.file.path)}${session}`);
+  downloadToolFile(`/api/sftp/${hostID.value}/download?path=${encodeURIComponent(props.file.path)}${session}`);
+}
+
+function handleLoad(event: Event) {
+  const image = event.currentTarget as HTMLImageElement;
+  loaded.value = true;
+  dimensions.value = { width: image.naturalWidth, height: image.naturalHeight };
+}
+
+function formatType() {
+  const name = props.file?.name || source.value;
+  const extension = name.split(/[?#]/, 1)[0]?.split(".").pop();
+  return extension ? extension.toUpperCase() : "图片";
 }
 
 function formatBytes(size?: number) {
@@ -58,7 +77,7 @@ function formatBytes(size?: number) {
       <div class="image-preview-heading">
         <strong>{{ file?.name || "图片预览" }}</strong>
         <small>
-          {{ file?.path }}<template v-if="file?.size"> · {{ formatBytes(file.size) }}</template>
+          {{ formatType() }}<template v-if="dimensions"> · {{ dimensions.width }} × {{ dimensions.height }}</template><template v-if="file?.size"> · {{ formatBytes(file.size) }}</template>
         </small>
       </div>
     </template>
@@ -70,7 +89,7 @@ function formatBytes(size?: number) {
         v-if="source && !failed"
         :src="source"
         :alt="file?.name || '图片预览'"
-        @load="loaded = true"
+        @load="handleLoad"
         @error="failed = true"
       />
     </div>

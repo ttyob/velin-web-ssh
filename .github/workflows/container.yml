@@ -30,8 +30,22 @@ jobs:
       - name: Test backend
         shell: bash
         run: |
-          set -o pipefail
+          set +e
           go test -count=1 -timeout=15m -json ./... | tee backend-tests.json
+          test_status=${PIPESTATUS[0]}
+          set -e
+          if (( test_status != 0 )); then
+            while IFS=$'\t' read -r package test_name; do
+              echo "::error title=Go test failed::package=${package} test=${test_name}"
+            done < <(jq -r 'select(.Action == "fail" and .Test != null) | [.Package, .Test] | @tsv' backend-tests.json)
+            {
+              echo "## Backend test failure"
+              echo '```text'
+              jq -rj 'select(.Action == "output") | .Output' backend-tests.json | tail -n 120
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$test_status"
       - name: Upload backend test report
         if: always()
         uses: actions/upload-artifact@v7

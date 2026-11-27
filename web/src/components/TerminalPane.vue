@@ -21,8 +21,6 @@ import {
   Eye,
   Keyboard,
   KeyboardOff,
-  Unplug,
-  Wifi,
   X,
 } from "@lucide/vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -42,6 +40,7 @@ import { normalizeTerminalSelection, attachScrollingSelection } from "../termina
 import { createTerminalLinkProvider } from "../terminalLinks";
 import { detectTerminalImagePanel } from "../terminalImagePreview";
 import ImagePreviewDialog from "./ImagePreviewDialog.vue";
+import TerminalResourceStrip from "./TerminalResourceStrip.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -1867,7 +1866,7 @@ async function copyTerminalText(selected: string, automatic = false) {
       if (!automatic) ElMessage.error("浏览器禁止访问剪贴板");
       else if (!clipboardWarningShown) {
         clipboardWarningShown = true;
-        ElMessage.warning("自动复制受限，请点击终端上方的复制按钮");
+        ElMessage.warning("自动复制受限，请使用终端右键菜单中的复制");
       }
       return;
     }
@@ -2284,14 +2283,9 @@ defineExpose({
         >
       </div>
       <div class="terminal-tools">
-        <el-tooltip content="复制选中内容">
-          <button class="icon-btn" aria-label="复制选中内容" @click="copySelection">
-            <Copy :size="15" />
-          </button>
-        </el-tooltip>
         <el-tooltip :content="controller ? '释放控制权' : '请求控制权'"
           ><button
-            class="icon-btn"
+            class="icon-btn terminal-control-button"
             :class="{ active: controller }"
             @click="toggleControl"
           >
@@ -2301,21 +2295,13 @@ defineExpose({
             /></button
         ></el-tooltip>
         <el-tooltip content="搜索终端"
-          ><button class="icon-btn" @click="searchOpen = !searchOpen">
+          ><button class="icon-btn terminal-search-button" aria-label="搜索终端" @click="searchOpen = !searchOpen">
             <Search :size="15" /></button
         ></el-tooltip>
         <el-tooltip v-if="closable" content="终止并关闭"
           ><button class="icon-btn pane-close" @click="emit('close')">
             <X :size="15" /></button
         ></el-tooltip>
-        <el-tooltip :content="connected ? '连接正常' : '连接断开'">
-          <component
-            :is="connected ? Wifi : Unplug"
-            :size="14"
-            class="connection-icon"
-            :class="{ disconnected: !connected }"
-          />
-        </el-tooltip>
       </div>
     </div>
     <div v-if="searchOpen" class="terminal-search">
@@ -2330,6 +2316,7 @@ defineExpose({
       <Eye :size="14" /> 只读观看，点击键盘图标请求控制
     </div>
 		<div class="terminal-stage">
+      <TerminalResourceStrip :hostID="session.hostID" :sessionID="session.id" :active="visible && connected" />
 			<div
 				ref="container"
 				class="terminal-canvas"

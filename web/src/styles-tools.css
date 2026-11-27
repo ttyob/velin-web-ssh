@@ -4,9 +4,9 @@
  * Prefixed with .el-dialog so they win over component-scoped rules.
  * ==================================================================== */
 .el-dialog.file-manager-dialog { width: min(760px, calc(100vw - 24px)) !important; }
-.el-dialog.docker-dialog { width: min(900px, calc(100vw - 24px)) !important; }
-.el-dialog.git-dialog { width: min(900px, calc(100vw - 24px)) !important; }
-.el-dialog.host-monitor-dialog { width: min(900px, calc(100vw - 24px)) !important; }
+.el-dialog.docker-dialog { width: min(1000px, calc(100vw - 24px)) !important; }
+.el-dialog.git-dialog { width: min(960px, calc(100vw - 24px)) !important; }
+.el-dialog.host-monitor-dialog { width: min(1000px, calc(100vw - 24px)) !important; }
 .el-dialog.git-diff-dialog,
 .el-dialog.docker-logs-dialog { width: min(860px, calc(100vw - 24px)) !important; }
 .el-dialog.text-editor-dialog { width: min(900px, calc(100vw - 24px)) !important; }
@@ -95,6 +95,168 @@
 .el-dialog.host-monitor-dialog .monitor-metric { padding: 12px 14px; }
 .el-dialog.host-monitor-dialog .monitor-charts > * { min-height: 0; }
 
+/* Shared compact tool frame. */
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) {
+  padding: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  box-shadow: 0 14px 42px #0005 !important;
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) > .el-dialog__header {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  height: 43px;
+  min-height: 43px;
+  margin: 0;
+  padding: 12px 42px 11px 16px !important;
+  border-bottom: 1px solid var(--line-strong, var(--line));
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px color-mix(in srgb, var(--line-strong, var(--line)) 45%, transparent);
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) > .el-dialog__header .el-dialog__title {
+  font-size: 13px;
+  font-weight: 520;
+  color: var(--text-strong, var(--text));
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) > .el-dialog__header .el-dialog__headerbtn {
+  top: 0;
+  right: 0;
+  width: 42px;
+  height: 43px;
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) > .el-dialog__body {
+  max-height: min(700px, calc(100dvh - 92px));
+  padding: 10px 14px 14px !important;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) .el-button {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) .el-button + .el-button { margin-left: 4px; }
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) :is(.el-input__wrapper, .el-select__wrapper, .el-textarea__inner) {
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--line) inset;
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) .el-tabs__header { margin: 0 0 8px; }
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) .el-tabs__item { height: 34px !important; padding: 0 14px; font-size: 12px !important; font-weight: 500 !important; }
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) .el-tabs__nav-wrap::after { height: 1px; background: var(--line); }
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) :is(.git-change-row, .git-commit-row, .git-branch-row, .git-remote-row, .docker-row, .docker-subrow) {
+  transition: background-color .12s ease;
+}
+.el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) :is(.git-change-row, .git-commit-row, .git-branch-row, .git-remote-row, .docker-row, .docker-subrow):hover {
+  background: var(--surface-hover);
+}
+
+/* Git manager: toolbar first, dense rows, commit actions anchored to the right. */
+.el-dialog.git-dialog .git-heading { min-height: 31px; gap: 8px; margin-bottom: 7px; }
+.el-dialog.git-dialog .git-path-form { gap: 7px; }
+.el-dialog.git-dialog .git-path-form > svg { width: 15px; height: 15px; }
+.el-dialog.git-dialog .git-path-form .el-input { max-width: none; }
+.el-dialog.git-dialog .git-heading-actions { flex-wrap: nowrap; gap: 3px; }
+.el-dialog.git-dialog .git-heading-actions .el-button + .el-button { margin-left: 0; }
+.el-dialog.git-dialog .git-remote-select { width: 112px; }
+.el-dialog.git-dialog .git-repo-meta {
+  min-height: 30px;
+  gap: 8px;
+  margin: 0 -14px 6px;
+  padding: 5px 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 11px;
+}
+.el-dialog.git-dialog .git-branch-pill { padding: 2px 6px; border-color: var(--line); border-radius: 3px; background: transparent; }
+.el-dialog.git-dialog .git-tabs { margin-top: 0; }
+.el-dialog.git-dialog .git-status-summary { gap: 12px; padding: 2px 1px 8px; font-size: 11px; }
+.el-dialog.git-dialog .git-toolbar { min-height: 32px; margin-bottom: 5px; }
+.el-dialog.git-dialog .git-selection-tools { gap: 3px; }
+.el-dialog.git-dialog .git-changes,
+.el-dialog.git-dialog .git-change-tree { min-height: 120px; max-height: min(38vh, 320px); overflow: auto; border-color: var(--line); }
+.el-dialog.git-dialog .git-change-row { min-height: 35px; padding: 3px 6px; border-color: var(--line); }
+.el-dialog.git-dialog .git-change-code,
+.el-dialog.git-dialog .git-change-path { font-size: 11px; }
+.el-dialog.git-dialog .git-commit-form { grid-template-columns: minmax(0, 1fr) 116px; gap: 7px; margin-top: 9px; }
+.el-dialog.git-dialog textarea.el-textarea__inner { min-height: 54px !important; padding: 8px 10px; }
+.el-dialog.git-dialog .git-commit-actions { gap: 4px; }
+.el-dialog.git-dialog .git-history-list { min-height: 200px; max-height: min(54vh, 470px); overflow: auto; border-color: var(--line); }
+.el-dialog.git-dialog .git-commit-row { min-height: 45px; padding: 6px 8px; border-color: var(--line); }
+.el-dialog.git-dialog .git-section { margin-top: 8px; border-color: var(--line); }
+.el-dialog.git-dialog .git-section-heading { padding: 8px 6px 5px; font-size: 12px; }
+.el-dialog.git-dialog .git-branch-row,
+.el-dialog.git-dialog .git-remote-row { min-height: 39px; padding: 4px 6px; border-color: var(--line); }
+.el-dialog.git-dialog .git-branch-create,
+.el-dialog.git-dialog .git-remote-form { margin: 5px 0 10px; }
+.el-dialog.git-dialog .git-conflicts { margin-bottom: 8px; border-color: color-mix(in srgb, var(--icon-warm) 45%, var(--line)); background: color-mix(in srgb, var(--icon-warm) 7%, var(--surface)); }
+
+/* Docker manager: slim header, compact resource rows and restrained panels. */
+.el-dialog.docker-dialog .docker-heading { min-height: 31px; gap: 10px; margin-bottom: 2px; }
+.el-dialog.docker-dialog .docker-summary { gap: 7px; font-size: 12px; font-weight: 550; }
+.el-dialog.docker-dialog .docker-summary > svg { width: 16px; height: 16px; }
+.el-dialog.docker-dialog .docker-heading-actions { flex-wrap: nowrap; gap: 3px; }
+.el-dialog.docker-dialog .docker-heading-actions .el-button + .el-button { margin-left: 0; }
+.el-dialog.docker-dialog .docker-tabs { margin-top: 0; }
+.el-dialog.docker-dialog .docker-list { min-height: 180px; max-height: min(57vh, 500px); overflow: auto; border-color: var(--line); }
+.el-dialog.docker-dialog .docker-row { min-height: 52px; gap: 9px; padding: 6px 5px; border-color: var(--line); }
+.el-dialog.docker-dialog .docker-subrow { min-height: 48px; padding: 5px 8px; border-color: var(--line); }
+.el-dialog.docker-dialog .docker-row-status { width: 6px; height: 6px; }
+.el-dialog.docker-dialog .docker-row-status.running { box-shadow: none; }
+.el-dialog.docker-dialog .docker-row-main { gap: 2px; }
+.el-dialog.docker-dialog .docker-row-main strong { font-size: 12px; font-weight: 550; }
+.el-dialog.docker-dialog .docker-row-main span,
+.el-dialog.docker-dialog .docker-row-main small { font-size: 10.5px; }
+.el-dialog.docker-dialog .docker-row-main :is(strong, span, small) { line-height: 1.2; }
+.el-dialog.docker-dialog .docker-row-actions { flex-wrap: nowrap; gap: 0; }
+.el-dialog.docker-dialog .docker-row-actions .el-button { padding: 0 6px; }
+.el-dialog.docker-dialog .docker-row-actions .el-button + .el-button { margin-left: 0; }
+.el-dialog.docker-dialog .docker-inline-form,
+.el-dialog.docker-dialog .docker-config-toolbar { gap: 5px; margin: 4px 0 9px; }
+.el-dialog.docker-dialog .docker-config-grid { gap: 9px; }
+.el-dialog.docker-dialog .docker-config-panel { gap: 9px; padding: 10px; border-color: var(--line); background: transparent; }
+.el-dialog.docker-dialog .docker-panel-heading { padding-bottom: 7px; border-color: var(--line); }
+.el-dialog.docker-dialog .docker-monitor { gap: 9px; }
+.el-dialog.docker-dialog .docker-monitor-cards { gap: 6px; }
+.el-dialog.docker-dialog .docker-monitor-card { gap: 3px; padding: 9px 10px; border-color: var(--line); background: transparent; }
+.el-dialog.docker-dialog .docker-monitor-card strong { font-size: 16px; color: var(--text); }
+.el-dialog.docker-dialog .docker-monitor-grid { gap: 8px; }
+.el-dialog.docker-dialog .docker-monitor-panel { border-color: var(--line); background: transparent; }
+
+/* Host monitor: information-dense summary without oversized cards. */
+.el-dialog.host-monitor-dialog .monitor-toolbar { min-height: 31px; margin-bottom: 6px; }
+.el-dialog.host-monitor-dialog .monitor-actions { flex-wrap: nowrap; gap: 5px; }
+.el-dialog.host-monitor-dialog .monitor-interval { width: 82px; }
+.el-dialog.host-monitor-dialog .monitor-body { min-height: 410px; }
+.el-dialog.host-monitor-dialog .monitor-system-strip { min-height: 43px; padding: 7px 9px; border-color: var(--line); }
+.el-dialog.host-monitor-dialog .monitor-system-strip strong { font-size: 12px; }
+.el-dialog.host-monitor-dialog .monitor-tabs { margin-top: 0; }
+.el-dialog.host-monitor-dialog .monitor-metrics { gap: 6px; padding: 7px 0; }
+.el-dialog.host-monitor-dialog .monitor-metric { min-height: 88px; gap: 3px 7px; padding: 8px 9px; border-color: var(--line); border-radius: 3px; background: transparent; }
+.el-dialog.host-monitor-dialog .monitor-metric > strong { font-size: 16px; }
+.el-dialog.host-monitor-dialog .monitor-metric > small { min-height: 14px; font-size: 10px; }
+.el-dialog.host-monitor-dialog .monitor-metric .el-progress { margin-top: 2px; }
+.el-dialog.host-monitor-dialog .monitor-charts { gap: 6px; }
+.el-dialog.host-monitor-dialog .monitor-chart { gap: 4px; padding: 8px 9px; border-color: var(--line); border-radius: 3px; background: transparent; }
+.el-dialog.host-monitor-dialog .monitor-chart svg { height: 62px; }
+.el-dialog.host-monitor-dialog .monitor-section { margin-top: 6px; border-color: var(--line); }
+.el-dialog.host-monitor-dialog .monitor-section > header { min-height: 38px; }
+.el-dialog.host-monitor-dialog .monitor-disk-row { padding: 5px 7px; }
+.el-dialog.host-monitor-dialog .ssh-summary { gap: 6px; padding: 7px 0; }
+.el-dialog.host-monitor-dialog .ssh-summary section { gap: 3px 7px; padding: 8px 9px; border-color: var(--line); border-radius: 3px; background: transparent; }
+.el-dialog.host-monitor-dialog .ssh-summary section > strong { font-size: 18px; }
+.el-dialog.host-monitor-dialog .el-table { --el-table-row-hover-bg-color: var(--surface-hover) !important; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .dialog-fade-enter-active .el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) { animation-duration: .18s; }
+  .el-dialog:is(.git-dialog, .docker-dialog, .host-monitor-dialog) :is(.el-button, .el-tabs__item) { transition: color .12s ease, background-color .12s ease, border-color .12s ease; }
+}
+
 /* ---- Share ---- */
 .el-dialog .share-session-heading { padding-bottom: 12px; }
 .el-dialog .share-row { padding: 10px 12px; border-radius: var(--radius-md); }
@@ -104,17 +266,27 @@
   .docker-dialog .el-dialog__body,
   .git-dialog .el-dialog__body,
   .host-monitor-dialog .el-dialog__body { max-height: calc(100dvh - 96px); padding: 12px 14px 14px !important; }
+  .el-dialog.docker-dialog :is(.docker-row, .docker-subrow) { flex-wrap: wrap; }
+  .el-dialog.docker-dialog .docker-row-main { flex: 1 1 calc(100% - 18px); }
+  .el-dialog.docker-dialog .docker-row-actions {
+    flex: 1 0 100%;
+    max-width: none;
+    margin-left: 15px;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 1px;
+  }
 }
 
 /* Monitor: shorter charts; tables follow the theme instead of hard-coded greens. */
-.el-dialog.host-monitor-dialog .monitor-chart svg { height: 68px; }
-.el-dialog.host-monitor-dialog .monitor-charts { gap: 10px; }
+.el-dialog.host-monitor-dialog .monitor-chart svg { height: 62px; }
+.el-dialog.host-monitor-dialog .monitor-charts { gap: 6px; }
 .el-dialog.host-monitor-dialog .el-table {
   --el-table-header-bg-color: var(--surface-2) !important;
   --el-table-row-hover-bg-color: var(--surface-hover) !important;
   --el-table-border-color: var(--line) !important;
 }
-.el-dialog.git-dialog textarea.el-textarea__inner { min-height: 60px !important; }
+.el-dialog.git-dialog textarea.el-textarea__inner { min-height: 54px !important; }
 
 /* ---- Session manager ---- */
 .el-dialog.sessions-dialog { width: min(760px, calc(100vw - 24px)) !important; }

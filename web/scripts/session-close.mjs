@@ -244,14 +244,14 @@ try {
   // Right-clicking an inactive tab must target that tab without switching away.
   rejectRename = true
   await tab('开发主机').click({ button: 'right' })
-  await page.getByRole('navigation', { name: '标签操作' }).getByRole('button', { name: '重命名会话' }).click()
+  await page.getByRole('navigation', { name: '标签操作' }).getByRole('button', { name: '重命名', exact: true }).click()
   await nameInput.fill('后端开发')
   await saveName()
   await page.getByText('保存会话名称失败，请重试', { exact: true }).waitFor()
   assert.equal(await tab('开发主机').count(), 1, 'Failed persistence must preserve the original label')
   rejectRename = false
   await tab('开发主机').click({ button: 'right' })
-  await page.getByRole('navigation', { name: '标签操作' }).getByRole('button', { name: '重命名会话' }).click()
+  await page.getByRole('navigation', { name: '标签操作' }).getByRole('button', { name: '重命名', exact: true }).click()
   await nameInput.fill('后端开发')
   await saveName()
   await tab('后端开发').waitFor()
@@ -260,7 +260,7 @@ try {
 
   // The terminal menu targets the clicked split, independently of its tab name.
   await page.locator('[data-leaf="leaf-background"]:visible').click({ button: 'right' })
-  await page.locator('.pane-context-menu:not(.tab-context-menu)').getByRole('button', { name: '重命名会话' }).click()
+  await page.locator('.pane-context-menu:not(.tab-context-menu)').getByRole('button', { name: '重命名', exact: true }).click()
   await nameInput.fill('日志排查')
   await saveName()
   await prompt.waitFor({ state: 'hidden' })

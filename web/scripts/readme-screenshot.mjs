@@ -38,7 +38,7 @@ try {
   await page.waitForFunction(() => {
     const panes = [...document.querySelectorAll('.terminal-pane')]
     return panes.length > 0 && panes.every(pane =>
-      pane.querySelector('.connection-icon:not(.disconnected)') &&
+      pane.querySelector('.status-dot.attached') &&
       !pane.querySelector('.terminal-resize-snapshot'))
   })
   await page.evaluate(() => document.fonts.ready)

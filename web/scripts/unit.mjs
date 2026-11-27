@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import ts from 'typescript'
 
 await import('./api-csrf.mjs')
+await import('./workspace-unit.mjs')
 await import('./terminal-selection-unit.mjs')
 
 async function loadModule(path) {
@@ -14,6 +15,13 @@ async function loadModule(path) {
 const { sessionLinkQuery } = await loadModule(new URL('../src/sessionLink.ts', import.meta.url))
 assert.deepEqual(sessionLinkQuery('session-1'), {session:'session-1'})
 for (const value of ['https://example.com','../other','x?token=secret', ['session-1'], null, '', 'a'.repeat(129)]) assert.deepEqual(sessionLinkQuery(value), {})
+
+const { gitAIContentMaxBytes, truncateGitAIContent } = await loadModule(new URL('../src/gitAI.ts', import.meta.url))
+assert.equal(truncateGitAIContent('short diff'), 'short diff')
+const longGitAIContent = truncateGitAIContent('中文改动\n'.repeat(30000))
+assert(Buffer.byteLength(longGitAIContent, 'utf8') <= gitAIContentMaxBytes)
+assert(longGitAIContent.endsWith('[差异过长，已截断]'))
+assert(!longGitAIContent.includes('\ufffd'))
 
 const { reconnectDelay } = await loadModule(new URL('../src/reconnect.ts', import.meta.url))
 assert.equal(reconnectDelay(0, 0.5), 1000)

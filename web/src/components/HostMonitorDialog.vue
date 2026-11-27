@@ -325,6 +325,7 @@ onBeforeUnmount(() => {
     width="min(1060px, calc(100vw - 28px))"
     append-to-body
     destroy-on-close
+    :close-on-click-modal="false"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="monitor-toolbar">

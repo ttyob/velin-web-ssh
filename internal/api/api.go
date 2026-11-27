@@ -184,8 +184,12 @@ func (a *API) Router() http.Handler {
 		r.Post("/api/hosts/{id}/agent/ssh-sessions/unban", a.agentUnbanSSHAddress)
 		r.Get("/api/agent/models", a.agentModels)
 		r.Get("/api/agent/backends", a.agentBackends)
+		r.Post("/api/agent/git-assist", a.agentGitAssist)
+		r.Post("/api/agent/file-analysis", a.analyzeEditorFile)
 		r.Post("/api/hosts/{id}/agent/chat", a.agentChat)
 		r.Post("/api/hosts/{id}/agent/command", a.agentCommand)
+		r.Get("/api/hosts/{id}/agent/git-text", a.agentGitText)
+		r.Post("/api/hosts/{id}/agent/git-index", a.agentGitIndexEdit)
 		r.Get("/ws/hosts/{id}/agent", a.agentWS)
 		r.Post("/api/hosts/{id}/docker/login", a.dockerLogin)
 		r.Delete("/api/hosts/{id}/agent", a.disconnectAgent)
@@ -198,6 +202,7 @@ func (a *API) Router() http.Handler {
 		r.Post("/api/sessions/cleanup", a.cleanupSessions)
 		r.Post("/api/sessions/{id}/restore", a.restoreSession)
 		r.Get("/api/sessions/{id}/directory", a.sessionDirectory)
+		r.Get("/api/sessions/{id}/resources", a.sessionResources)
 		r.Get("/api/sessions/{id}/foreground", a.sessionForeground)
 		r.Get("/api/sessions/{id}/docker/status", a.sessionDockerStatus)
 		r.Patch("/api/sessions/{id}", a.updateSession)
@@ -220,6 +225,8 @@ func (a *API) Router() http.Handler {
 		r.Put("/api/snippets/{id}", a.saveSnippet)
 		r.Delete("/api/snippets/{id}", a.deleteSnippet)
 		r.Get("/api/sftp/{hostID}/list", a.sftpList)
+		r.Post("/api/sftp/{hostID}/search", a.workspaceSearch)
+		r.Post("/api/sftp/{hostID}/copy", a.workspaceCopy)
 		r.Get("/api/sftp/{hostID}/download", a.sftpDownload)
 		r.Get("/api/sftp/{hostID}/preview-image", a.sftpPreviewImage)
 		r.Get("/api/sftp/{hostID}/text", a.sftpReadText)
@@ -1437,6 +1444,20 @@ func (a *API) sessionDirectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"path": directory})
+}
+
+func (a *API) sessionResources(w http.ResponseWriter, r *http.Request) {
+	session, err := a.terminals.Get(currentUser(r).ID, chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, 404, "session_not_attached", "终端当前未连接")
+		return
+	}
+	value, err := session.Resources(r.Context())
+	if err != nil {
+		writeError(w, 502, "resources_unavailable", "主机暂不提供资源数据")
+		return
+	}
+	writeJSON(w, 200, value)
 }
 
 func (a *API) sessionForeground(w http.ResponseWriter, r *http.Request) {

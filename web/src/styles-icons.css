@@ -1,0 +1,81 @@
+/* Quiet semantic colors for navigation, menus, dialogs and toolbars.
+ * Most controls stay neutral; color is reserved for useful category cues.
+ */
+:root,
+.terminal-statusbar,
+.auth-surface,
+.system-lock-panel {
+  --icon-neutral: #9299a5;
+  --icon-cool: #7f9db5;
+  --icon-warm: #b39a72;
+  --icon-positive: #789b83;
+  --icon-danger: #bd7373;
+}
+
+:root[data-interface-theme="light"] {
+  --icon-neutral: #66717d;
+  --icon-cool: #496f8b;
+  --icon-warm: #826b45;
+  --icon-positive: #4f7759;
+  --icon-danger: #a54f55;
+}
+
+/* Only target UI icons; charts, QR codes and distribution logos keep their
+ * own drawing colors. A single override wins over old monochrome hover rules.
+ */
+svg.lucide {
+  color: var(--icon-color, var(--icon-neutral)) !important;
+}
+
+.lucide:is(
+  .lucide-folder, .lucide-folder-open, .lucide-folder-plus,
+  .lucide-folder-input, .lucide-folder-tree, .lucide-archive,
+  .lucide-file, .lucide-file-text, .lucide-file-diff,
+  .lucide-key-round, .lucide-lock-keyhole, .lucide-history,
+  .lucide-clock-3, .lucide-git-branch, .lucide-git-commit-horizontal,
+  .lucide-git-merge, .lucide-package-open
+) { --icon-color: var(--icon-warm); }
+
+.lucide:is(
+  .lucide-box, .lucide-database,
+  .lucide-hard-drive, .lucide-hard-drive-download,
+  .lucide-monitor-cog, .lucide-server,
+  .lucide-server-cog, .lucide-smartphone, .lucide-download,
+  .lucide-square-terminal, .lucide-network,
+  .lucide-globe, .lucide-earth, .lucide-wifi, .lucide-plug-zap,
+  .lucide-upload, .lucide-shield, .lucide-shield-check
+) { --icon-color: var(--icon-cool); }
+
+.lucide:is(
+  .lucide-activity, .lucide-cpu, .lucide-memory-stick,
+  .lucide-gauge, .lucide-play, .lucide-circle-play,
+  .lucide-save, .lucide-check, .lucide-square-check-big,
+  .lucide-circle-check, .lucide-monitor
+) { --icon-color: var(--icon-positive); }
+
+.lucide:is(
+  .lucide-trash-2, .lucide-ban, .lucide-circle-stop,
+  .lucide-square, .lucide-shield-x, .lucide-unplug, .lucide-wifi-off,
+  .lucide-circle-alert, .lucide-triangle-alert, .lucide-shield-alert
+),
+.lucide.disconnected,
+:is(.danger, .git-danger, .docker-danger, .el-button--danger) .lucide {
+  --icon-color: var(--icon-danger);
+}
+
+/* Built-in UI arrows and controls use the same palette. */
+.el-icon > svg:not(.lucide) { color: var(--icon-neutral); }
+:is(.el-message__icon, .el-alert__icon, .el-notification__icon, .el-message-box__status) > svg {
+  color: inherit;
+}
+
+/* Solid buttons need their foreground contrast; disabled actions stay muted. */
+.el-button:is(.el-button--primary, .el-button--success, .el-button--warning, .el-button--danger):not(.is-plain, .is-text, .is-link) :is(svg.lucide, .el-icon > svg) {
+  color: inherit !important;
+}
+.el-radio-button.is-active svg.lucide {
+  color: inherit !important;
+}
+:is(button:disabled, [aria-disabled="true"], .el-button.is-disabled, .el-dropdown-menu__item.is-disabled) :is(svg.lucide, .el-icon > svg) {
+  color: var(--muted) !important;
+}

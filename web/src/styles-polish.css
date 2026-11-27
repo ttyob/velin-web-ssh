@@ -695,12 +695,9 @@ body {
 }
 @container pane-bar (max-width: 330px) {
   .terminal-statusbar .terminal-latency { display: none; }
-  .terminal-statusbar .terminal-tools > button:first-child,
-  .terminal-statusbar .terminal-tools > button:nth-child(4) { display: none; }
 }
 @container pane-bar (max-width: 230px) {
-  .terminal-statusbar .terminal-tools > button:nth-child(3) { display: none; }
-  .terminal-statusbar .connection-icon { display: none; }
+  .terminal-statusbar .terminal-tools > .terminal-search-button { display: none; }
 }
 
 /* ---- Dialog / form density: shorter, tighter, still touch-friendly ---- */

@@ -7,6 +7,7 @@ import {
   onMounted,
   reactive,
   ref,
+  shallowReactive,
   watch,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -23,6 +24,7 @@ import {
   ClipboardPaste,
   CircleCheck,
   CircleStop,
+  CodeXml,
   Columns2,
   Copy,
   FolderOpen,
@@ -42,7 +44,6 @@ import {
   Settings,
   Share2,
   TerminalSquare,
-  TextSelect,
   Trash2,
   TriangleAlert,
   X,
@@ -110,6 +111,9 @@ const DockerDialog = defineAsyncComponent(
 );
 const GitDialog = defineAsyncComponent(
   () => import("../components/GitDialog.vue"),
+);
+const CodeWorkspace = defineAsyncComponent(
+  () => import("../components/CodeWorkspace.vue"),
 );
 const RemoteDesktopPane = defineAsyncComponent(
   () => import("../components/RemoteDesktopPane.vue"),
@@ -181,6 +185,18 @@ let tmuxInstallRetry: (() => Promise<void>) | undefined;
 let tmuxNormalFallback: (() => Promise<void>) | undefined;
 const sessionDirectories = reactive<Record<string, string>>({});
 const terminalTitles = reactive<Record<string, string>>({});
+const codeTabs = reactive<Record<string, { host: Host; sessionID: string; path: string; terminalTabID: string; dirty: boolean }>>({});
+const codeTabOrder = ref<string[]>([]);
+const activeCodeTabID = ref("");
+const openingCode = ref(false);
+type CodeWorkspaceHandle = { confirmClose: () => Promise<boolean>; focus: () => void; refresh: () => Promise<void> };
+const codeWorkspaceRefs = new Map<string, CodeWorkspaceHandle>();
+const codeFileManagerTabID = ref("");
+const codeTerminalTargets = shallowReactive<Record<string, HTMLElement | undefined>>({});
+const activeCodeTerminal = computed(() => {
+  const id = activeCodeTabID.value, project = codeTabs[id], target = codeTerminalTargets[id];
+  return project && target && !locked.value ? { sessionID: project.sessionID, target } : undefined;
+});
 const conversationSessions = reactive<Record<string, boolean>>({});
 const sessionAttention = reactive<Record<string, TerminalAttentionNotice>>({});
 const pendingTerminalCommands = reactive<Record<string, string>>({});
@@ -253,9 +269,13 @@ const dockerMenuDisabled = computed(
 const splitDialog = reactive({
   open: false,
   direction: "horizontal" as "horizontal" | "vertical",
+  tabID: "",
   leafID: "",
-  choice: "",
+  hostID: "",
 });
+const splitHosts = computed(() =>
+  hosts.value.filter((host) => !host.protocol || host.protocol === "ssh"),
+);
 
 const visibleHosts = computed(() => {
   const q = search.value.toLowerCase();
@@ -316,12 +336,6 @@ const currentSessionIDs = computed(
 const backgroundSessions = computed(() =>
   sessions.value.filter(
     (s) => !visibleSessionIDs.value.has(s.id) && s.status !== "ended",
-  ),
-);
-const splitSessions = computed(() =>
-  sessions.value.filter(
-    (session) =>
-      session.status !== "ended" && !visibleSessionIDs.value.has(session.id),
   ),
 );
 const currentPaneCount = computed(() =>
@@ -949,6 +963,7 @@ async function startNativeRDP(host: Host, secret = "") {
   return launchNativeRDP(host, session.password || "");
 }
 function openDesktop(host: Host) {
+  activeCodeTabID.value = "";
   const tabID = `desktop-${nodeID()}`;
   desktopTabs[tabID] = { host: { ...host }, status: "connecting" };
   layout.tabs.push(tabID);
@@ -966,6 +981,7 @@ function updateDesktopStatus(
 }
 
 function openSession(session: TerminalSession) {
+  activeCodeTabID.value = "";
   const existing = tabForSession(session.id);
   if (existing) return activate(existing);
   const tabID = layout.tabs.includes(session.id)
@@ -986,6 +1002,7 @@ function activePaneTree() {
   return layout.active ? paneTreeRefs.get(layout.active) : undefined;
 }
 function activate(id: string) {
+  activeCodeTabID.value = "";
   layout.active = id;
   clearTabAttention(id);
   mobileSidebar.value = false;
@@ -1014,6 +1031,7 @@ function addSplitSession(
   scheduleSave();
 }
 function focusPane(leafID: string) {
+  if (activeCodeTabID.value && codeTabs[activeCodeTabID.value]) layout.active = codeTabs[activeCodeTabID.value].terminalTabID;
   if (!layout.active) return;
   layout.focused![layout.active] = leafID;
   const tree = layout.trees?.[layout.active];
@@ -1078,28 +1096,30 @@ function updateConversation(id: string, active: boolean) {
   if (dockerContext.sessionID === id && !dockerContext.checking)
     dockerContext.conversation = active;
 }
-function requestSplit(direction: "horizontal" | "vertical") {
+function requestSplit(direction: "horizontal" | "vertical" = "horizontal") {
+  const tabID = layout.active;
+  const tree = tabID && layout.trees?.[tabID];
+  if (!tabID || !tree) return;
   splitDialog.direction = direction;
-  splitDialog.leafID = contextMenu.leafID;
-  splitDialog.choice = "";
+  splitDialog.tabID = tabID;
+  splitDialog.leafID = contextMenu.open
+    ? contextMenu.leafID
+    : layout.focused?.[tabID] || collectLeafIDs(tree)[0];
+  splitDialog.hostID = "";
   splitDialog.open = true;
   contextMenu.open = false;
 }
 async function confirmSplit() {
-  if (!layout.active || !splitDialog.choice) return;
+  const host = splitHosts.value.find((item) => item.id === splitDialog.hostID);
+  const tree = layout.trees?.[splitDialog.tabID];
+  if (!host || !tree || !collectLeafIDs(tree).includes(splitDialog.leafID)) return;
   const placement = {
-    tabID: layout.active,
+    tabID: splitDialog.tabID,
     leafID: splitDialog.leafID,
     direction: splitDialog.direction,
   };
   splitDialog.open = false;
-  const [kind, id] = splitDialog.choice.split(":");
-  if (kind === "session")
-    addSplitSession(placement.tabID, placement.leafID, placement.direction, id);
-  else {
-    const host = hosts.value.find((item) => item.id === id);
-    if (host) await connect(host, "", undefined, placement);
-  }
+  await connect(host, "", undefined, placement);
 }
 function sessionForLeaf(
   node: PaneNode,
@@ -1236,18 +1256,11 @@ function pasteIntoPane() {
   activePaneTree()?.pasteClipboard?.(contextMenu.leafID);
   contextMenu.open = false;
 }
-function selectPaneAll() {
-  activePaneTree()?.selectAll?.(contextMenu.leafID);
-  contextMenu.open = false;
-}
-function clearPane() {
-  activePaneTree()?.clearTerminal?.(contextMenu.leafID);
-  contextMenu.open = false;
-}
 function updateSessionDirectory(sessionID: string, path: string) {
   if (path.startsWith("/")) sessionDirectories[sessionID] = path;
 }
 async function openPaneFiles() {
+  codeFileManagerTabID.value = "";
   if (!layout.active) return;
   const tree = layout.trees?.[layout.active];
   const session = tree && sessionForLeaf(tree, contextMenu.leafID);
@@ -1269,6 +1282,82 @@ async function openPaneFiles() {
   }
   fileManagerPath.value = current || host.initialDirectory || ".";
   fileManagerOpen.value = true;
+}
+function setCodeWorkspaceRef(id: string, value: unknown) {
+  if (value) codeWorkspaceRefs.set(id, value as CodeWorkspaceHandle);
+  else codeWorkspaceRefs.delete(id);
+}
+function openCodeFiles(id: string, path: string) {
+  const project = codeTabs[id];
+  if (!project) return;
+  codeFileManagerTabID.value = id;
+  fileManagerHost.value = project.host;
+  fileManagerSessionID.value = project.sessionID;
+  fileManagerPath.value = path;
+  fileManagerOpen.value = true;
+}
+function refreshCodeFiles(open: boolean) {
+  if (!open && codeFileManagerTabID.value) {
+    void codeWorkspaceRefs.get(codeFileManagerTabID.value)?.refresh();
+    codeFileManagerTabID.value = "";
+  }
+}
+function activateCodeTab(id: string) {
+  closeContextMenus();
+  activeCodeTabID.value = id;
+  mobileSidebar.value = false;
+  nextTick(() => codeWorkspaceRefs.get(id)?.focus());
+}
+async function closeCodeTab(id: string) {
+  const workbench = codeWorkspaceRefs.get(id);
+  if (workbench && !(await workbench.confirmClose())) return;
+  const source = codeTabs[id]?.terminalTabID;
+  delete codeTerminalTargets[id];
+  await nextTick();
+  delete codeTabs[id];
+  codeTabOrder.value = codeTabOrder.value.filter(tab => tab !== id);
+  if (activeCodeTabID.value === id) {
+    activeCodeTabID.value = "";
+    if (source && layout.tabs.includes(source)) activate(source);
+    else if (codeTabOrder.value.length) activateCodeTab(codeTabOrder.value.at(-1)!);
+    else if (layout.active) activate(layout.active);
+  }
+}
+function returnToCodeTerminal(id: string) {
+  const source = codeTabs[id]?.terminalTabID;
+  if (source && layout.tabs.includes(source)) activate(source);
+  else if (layout.active) activate(layout.active);
+  else ElMessage.info("原终端标签已关闭，可以从主机列表重新连接");
+}
+async function openPaneCode() {
+  if (openingCode.value || !layout.active) return;
+  const terminalTabID = layout.active;
+  const tree = layout.trees?.[terminalTabID];
+  const session = tree && sessionForLeaf(tree, contextMenu.leafID);
+  const host = session && hosts.value.find(item => item.id === session.hostID);
+  closeContextMenus();
+  if (!session || !host) return ElMessage.warning("当前终端没有可用的主机信息");
+  openingCode.value = true;
+  try {
+    // Always query the clicked pane, even when an earlier SFTP directory is cached.
+    let path = "";
+    try { path = (await api<{ path: string }>(`/api/sessions/${session.id}/directory`)).path; }
+    catch {
+      // Normal shells can report OSC 7; a failed tmux query must not reuse an old cwd.
+      if (session.sessionMode === "normal") path = sessionDirectories[session.id] || "";
+      else throw new Error("无法读取终端当前目录，请检查连接后重试");
+    }
+    if (!path.startsWith("/")) throw new Error("无法读取当前目录，请确认终端已连接；普通 SSH 需要 Shell 上报当前目录");
+    path = path.replace(/\/+$/, "") || "/";
+    sessionDirectories[session.id] = path;
+    const existing = codeTabOrder.value.find(id => codeTabs[id].host.id === host.id && codeTabs[id].sessionID === session.id && codeTabs[id].path === path);
+    if (existing) { activateCodeTab(existing); return; }
+    const id = `code-${nodeID()}`;
+    codeTabs[id] = { host: { ...host }, sessionID: session.id, path, terminalTabID, dirty: false };
+    codeTabOrder.value.push(id);
+    activateCodeTab(id);
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : "无法打开代码编辑器"); }
+  finally { openingCode.value = false; }
 }
 function openPaneAgent() {
   if (!layout.active) return;
@@ -1475,11 +1564,12 @@ function removeLocal(id: string) {
   scheduleSave();
 }
 function cycleTab(offset: number) {
-  if (layout.tabs.length < 2) return;
-  const index = Math.max(0, layout.tabs.indexOf(layout.active || ""));
-  activate(
-    layout.tabs[(index + offset + layout.tabs.length) % layout.tabs.length],
-  );
+  const tabs = [...layout.tabs, ...codeTabOrder.value];
+  if (tabs.length < 2) return;
+  const index = Math.max(0, tabs.indexOf(activeCodeTabID.value || layout.active || ""));
+  const id = tabs[(index + offset + tabs.length) % tabs.length];
+  if (codeTabs[id]) activateCodeTab(id);
+  else activate(id);
 }
 function cyclePane(offset: number) {
   if (!layout.active || !activeTree.value) return;
@@ -1529,6 +1619,7 @@ function updateStatus(id: string, status: string, message?: string) {
   }
 }
 function updateAttention(id: string, event: TerminalAttentionEvent) {
+  if (event === "settled") for (const [tabID, project] of Object.entries(codeTabs)) if (project.sessionID === id) void codeWorkspaceRefs.get(tabID)?.refresh();
   if (event === "clear") delete sessionAttention[id];
   else sessionAttention[id] = event;
 }
@@ -2227,6 +2318,7 @@ function handleKeyboard(event: KeyboardEvent) {
     event.code === "ArrowRight" ||
     event.code === "ArrowDown"
   ) {
+    if (activeCodeTabID.value) return;
     event.preventDefault();
     event.stopPropagation();
     cyclePane(
@@ -2509,7 +2601,7 @@ onBeforeUnmount(() => {
               v-for="id in layout.tabs"
               :key="id"
               class="terminal-tab"
-              :class="{ active: layout.active === id }"
+              :class="{ active: !activeCodeTabID && layout.active === id }"
               @click="activate(id)"
               @contextmenu.prevent.stop="openTabContext($event, id)"
             >
@@ -2541,8 +2633,11 @@ onBeforeUnmount(() => {
                 @click.stop="closeTab(id)"
               >
                 <X :size="13" />
-              </button></div></transition-group
-          ><button class="new-tab" title="新建终端" @click="openNewTabDialog">
+              </button></div></transition-group>
+          <div v-for="id in codeTabOrder" :key="id" class="terminal-tab code-workspace-tab" :class="{ active: activeCodeTabID === id }" :title="`${codeTabs[id].host.name} · ${codeTabs[id].path}`" @click="activateCodeTab(id)">
+            <CodeXml :size="14" /><span class="tab-title">{{ codeTabs[id].path.split('/').at(-1) || '/' }}</span><span v-if="codeTabs[id].dirty" class="code-tab-dirty" aria-label="存在未保存文件">•</span><button class="tab-close" title="关闭代码编辑器" aria-label="关闭代码编辑器" @click.stop="closeCodeTab(id)"><X :size="13" /></button>
+          </div>
+          <button class="new-tab" title="新建终端" @click="openNewTabDialog">
             <Plus :size="16" />
           </button>
         </div>
@@ -2555,7 +2650,7 @@ onBeforeUnmount(() => {
           <Monitor :size="15" /><span>{{ layout.tabs.length }}</span>
         </button>
         <div class="workspace-actions">
-          <span v-if="currentPaneCount > 1" class="pane-count"
+          <span v-if="!activeCodeTabID && currentPaneCount > 1" class="pane-count"
             ><Columns2 :size="14" />{{ currentPaneCount }}</span
           >
           <button
@@ -2571,7 +2666,7 @@ onBeforeUnmount(() => {
       </header>
       <template v-if="!locked && layout.tabs.length"
         ><nav
-          v-if="activePaneSessions.length > 1"
+          v-if="!activeCodeTabID && activePaneSessions.length > 1"
           class="mobile-pane-switcher"
           aria-label="切换当前标签内的终端"
         >
@@ -2593,7 +2688,7 @@ onBeforeUnmount(() => {
         </nav
         ><div
           v-for="id in layout.tabs"
-          v-show="layout.active === id"
+          v-show="!activeCodeTabID && layout.active === id"
           :key="id"
           class="terminal-workspace"
         >
@@ -2605,7 +2700,7 @@ onBeforeUnmount(() => {
           <RemoteDesktopPane
             v-else-if="desktopTabs[id]"
             :host="desktopTabs[id].host"
-            :visible="layout.active === id"
+            :visible="!activeCodeTabID && layout.active === id"
             @status="updateDesktopStatus(id, $event)"
           />
           <SplitPaneNode
@@ -2615,11 +2710,13 @@ onBeforeUnmount(() => {
             :sessions="sessions"
             :preferences="preferences"
             :root="layout.trees![id].type === 'leaf'"
-            :visible="layout.active === id"
+            :visible="!activeCodeTabID && layout.active === id"
             :focused-leaf-id="layout.focused?.[id]"
             :maximized-leaf-id="layout.maximized?.[id]"
             :mobile-ctrl="mobileCtrl"
             :mobile-alt="mobileAlt"
+            :dock-sessionID="activeCodeTerminal?.sessionID"
+            :dock-target="activeCodeTerminal?.target"
             @focus="focusPane"
             @context="openContext"
             @close="terminatePane"
@@ -2632,7 +2729,7 @@ onBeforeUnmount(() => {
             @modifiers-used="clearMobileModifiers"
           /></div
       ></template>
-      <div v-else-if="!locked" class="workspace-empty">
+      <div v-else-if="!locked && !codeTabOrder.length" class="workspace-empty">
         <div class="empty-terminal-mark"><TerminalSquare :size="34" /></div>
         <h2>没有打开的终端</h2>
         <p>从左侧主机列表双击连接，或新建一台主机。</p>
@@ -2640,8 +2737,9 @@ onBeforeUnmount(() => {
           >新增主机</el-button
         >
       </div>
+      <CodeWorkspace v-for="id in codeTabOrder" v-show="!locked && activeCodeTabID === id" :key="id" :ref="value => setCodeWorkspaceRef(id, value)" :host="codeTabs[id].host" :session-id="codeTabs[id].sessionID" :root-path="codeTabs[id].path" :visible="activeCodeTabID === id" :locked="locked" @dirty="codeTabs[id].dirty = $event" @terminal="returnToCodeTerminal(id)" @files="openCodeFiles(id, $event)" @dock="codeTerminalTargets[id] = $event" />
       <div
-        v-if="!locked && activeTree && !desktopTabs[layout.active || '']"
+        v-if="!locked && !activeCodeTabID && activeTree && !desktopTabs[layout.active || '']"
         class="mobile-keybar"
       >
         <button
@@ -2682,7 +2780,7 @@ onBeforeUnmount(() => {
         aria-label="标签操作"
         :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }" @click.stop>
         <button v-if="tabContextSession" @click="renameTabSession(tabContextMenu.tabID)">
-          <Pencil :size="16" /><span>重命名会话</span>
+          <Pencil :size="16" /><span>重命名</span>
         </button>
         <button class="danger" @click="closeContextTab">
           <X :size="16" /><span>关闭标签</span>
@@ -2693,32 +2791,25 @@ onBeforeUnmount(() => {
       ><nav
         v-if="contextMenu.open"
         class="pane-context-menu"
+        aria-label="终端操作"
         :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
         @click.stop
       >
-        <span class="context-label">会话</span>
+        <span class="context-label">常用</span>
         <button @click="renamePaneSession">
-          <Pencil :size="16" /><span>重命名会话</span>
+          <Pencil :size="16" /><span>重命名</span>
         </button>
-        <span class="context-separator" />
-        <span class="context-label">编辑</span>
         <button @click="copyPaneSelection">
-          <Copy :size="16" /><span>复制选中内容</span></button
+          <Copy :size="16" /><span>复制</span></button
         ><button @click="pasteIntoPane">
           <ClipboardPaste :size="16" /><span>粘贴</span></button
-        ><button @click="selectPaneAll">
-          <TextSelect :size="16" /><span>全选终端内容</span></button
-        ><button @click="clearPane">
-          <BrushCleaning :size="16" /><span>清屏</span></button
         ><span class="context-separator" /><span class="context-label">工具</span
         ><button @click="openPaneFiles">
-          <FolderOpen :size="16" /><span>打开当前目录</span></button
+          <FolderOpen :size="16" /><span>SFTP</span></button
+        ><button :disabled="openingCode" @click="openPaneCode">
+          <CodeXml :size="16" /><span>代码编辑器</span></button
         ><button @click="openPaneAgent">
-          <Bot :size="16" /><span>打开 Agent</span></button
-        ><button @click="openPaneShare">
-          <Share2 :size="16" /><span>分享会话</span></button
-        ><button @click="openPaneMonitor">
-          <Activity :size="16" /><span>主机监控</span></button
+          <Bot :size="16" /><span>Agent</span></button
         ><button
           :disabled="gitMenuDisabled"
           :title="
@@ -2728,7 +2819,7 @@ onBeforeUnmount(() => {
           "
           @click="openPaneGit"
         >
-          <GitBranch :size="16" /><span>Git 管理</span></button
+          <GitBranch :size="16" /><span>Git管理</span></button
         ><button
           :disabled="dockerMenuDisabled"
           :title="
@@ -2740,16 +2831,14 @@ onBeforeUnmount(() => {
           "
           @click="openPaneDocker"
         >
-          <Box :size="16" /><span>Docker 管理</span></button
-        ><span class="context-separator" /><span class="context-label">窗格</span
-        ><button
-          @click="requestSplit('horizontal')"
-        >
-          <Columns2 :size="16" /><span>左右分屏</span></button
-        ><button @click="requestSplit('vertical')">
-          <Rows2 :size="16" /><span>上下分屏</span></button
-        ><button class="danger" @click="terminatePane(contextMenu.leafID)">
-          <Trash2 :size="16" /><span>关闭分屏</span>
+          <Box :size="16" /><span>Docker</span></button
+        ><button @click="openPaneMonitor">
+          <Activity :size="16" /><span>主机监控</span></button
+        ><span class="context-separator" /><span class="context-label">其它</span
+        ><button @click="requestSplit()">
+          <Columns2 :size="16" /><span>分屏操作</span></button
+        ><button @click="openPaneShare">
+          <Share2 :size="16" /><span>分享会话</span>
         </button>
       </nav></transition
     >
@@ -2761,51 +2850,39 @@ onBeforeUnmount(() => {
     <el-dialog
       v-model="splitDialog.open"
       class="split-dialog"
-      :title="
-        splitDialog.direction === 'horizontal' ? '添加左右分屏' : '添加上下分屏'
-      "
-      width="min(560px, calc(100vw - 28px))"
+      title="分屏操作"
+      width="min(480px, calc(100vw - 28px))"
       append-to-body
     >
-      <el-radio-group v-model="splitDialog.choice" class="split-targets">
-        <div v-if="splitSessions.length" class="split-target-section">
-          <div class="split-target-heading">
-            <Monitor :size="15" />运行中的终端
-          </div>
-          <el-radio
-            v-for="session in splitSessions"
-            :key="session.id"
-            :value="`session:${session.id}`"
-            class="split-target"
-            ><span
-              class="status-dot"
-              :class="statusColor(session.status)"
-            ></span
-            ><span
-              ><strong>{{ session.name }}</strong
-              ><small>{{
-                sessionHost(session)?.address || session.remoteUser
-              }}</small></span
-            ></el-radio
+      <el-form label-position="top" class="split-form">
+        <el-form-item label="方向">
+          <el-radio-group v-model="splitDialog.direction" aria-label="分屏方向" class="split-directions">
+            <el-radio-button value="horizontal">
+              <Columns2 :size="16" /><span>左右分屏</span>
+            </el-radio-button>
+            <el-radio-button value="vertical">
+              <Rows2 :size="16" /><span>上下分屏</span>
+            </el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="选择主机">
+          <el-select
+            v-model="splitDialog.hostID"
+            filterable
+            clearable
+            placeholder="搜索并选择主机"
+            no-data-text="暂无可用的 SSH 主机"
           >
-        </div>
-        <div class="split-target-section">
-          <div class="split-target-heading"><Server :size="15" />连接主机</div>
-          <el-radio
-            v-for="host in hosts.filter(
-              (item) => !item.protocol || item.protocol === 'ssh',
-            )"
-            :key="host.id"
-            :value="`host:${host.id}`"
-            class="split-target"
-            ><span
-              ><strong>{{ host.name }}</strong
-              ><small
-                >{{ host.username }}@{{ host.address }}:{{ host.port }}</small
-              ></span
-            ></el-radio
-          ><button
-            v-if="!hosts.length"
+            <el-option
+              v-for="host in splitHosts"
+              :key="host.id"
+              :label="`${host.groupName ? `${host.groupName} / ` : ''}${host.name} · ${host.username}@${host.address}:${host.port}`"
+              :value="host.id"
+            />
+          </el-select>
+          <button
+            v-if="!splitHosts.length"
+            type="button"
             class="dialog-empty-action"
             @click="
               splitDialog.open = false;
@@ -2814,13 +2891,13 @@ onBeforeUnmount(() => {
           >
             <Plus :size="15" />新增主机
           </button>
-        </div>
-      </el-radio-group>
+        </el-form-item>
+      </el-form>
       <template #footer
         ><el-button @click="splitDialog.open = false">取消</el-button
         ><el-button
           type="primary"
-          :disabled="!splitDialog.choice"
+          :disabled="!splitDialog.hostID"
           :loading="Boolean(connecting)"
           @click="confirmSplit"
           >打开分屏</el-button
@@ -3033,6 +3110,7 @@ onBeforeUnmount(() => {
       :host="fileManagerHost"
       :session-id="fileManagerSessionID"
       :initial-path="fileManagerPath"
+      @update:model-value="refreshCodeFiles"
     />
     <WebProxyDialog
       v-model="webProxyOpen"
@@ -3044,7 +3122,7 @@ onBeforeUnmount(() => {
     <AgentDialog
       v-model="agentOpen"
       :host="agentHost"
-      :suspended="Boolean(agentTabID && agentTabID !== layout.active)"
+      :suspended="Boolean(activeCodeTabID || (agentTabID && agentTabID !== layout.active))"
     />
     <SessionShareDialog
       v-model="sessionShareOpen"

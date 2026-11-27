@@ -99,7 +99,6 @@ const chatHistory = ref<Array<{ role: "user" | "assistant"; content: string }>>(
 const commandProposals = ref<AgentCommandProposal[]>([]);
 const expandedResultIDs = ref<Set<string>>(new Set());
 const chatLog = ref<HTMLElement>();
-const approvalConfirmButton = ref<HTMLButtonElement>();
 const conversations = ref<AgentConversation[]>([]);
 const activeConversationID = ref("");
 const historyOpen = ref(false);
@@ -222,16 +221,6 @@ watch(
 
 watch(historyOpen, () => scheduleChatScroll());
 
-watch(
-  approvalProposal,
-  async (proposal) => {
-    if (!proposal) return;
-    await nextTick();
-    approvalConfirmButton.value?.focus();
-  },
-  { flush: "post" },
-);
-
 watch([selectedModel, reasoningEffort], persistModelPreferences);
 
 onBeforeUnmount(() => {
@@ -260,19 +249,15 @@ function minWindowHeight() {
 }
 
 function handleWindowKeydown(event: KeyboardEvent) {
-  if (approvalProposal.value && event.key === "Enter") {
+  if (!props.modelValue || props.suspended || event.defaultPrevented) return;
+  if (!(event.target instanceof Element) || !event.target.closest(".agent-window")) return;
+  if (event.key !== "Escape") return;
+  if (approvalProposal.value) {
     event.preventDefault();
     event.stopPropagation();
-    confirmApproval();
     return;
   }
-  if (approvalProposal.value && event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    cancelProposal(approvalProposal.value);
-    return;
-  }
-  if (event.key === "Escape") emit("update:modelValue", false);
+  emit("update:modelValue", false);
 }
 
 function clampWindowRect() {
@@ -1163,10 +1148,40 @@ function resultCommand(content: string) {
             <div v-if="chatting" class="agent-thinking"><i></i><i></i><i></i></div>
           </div>
           <div class="agent-composer-dock">
-            <div v-if="commandProposals.length" class="agent-command-pending">
-              <ShieldAlert :size="15" />
-              <span>等待确认 {{ commandProposals.length }} 条命令</span>
-            </div>
+            <section
+              v-if="approvalProposal"
+              class="agent-command-approval"
+              role="region"
+              aria-labelledby="agent-command-approval-title"
+              aria-live="polite"
+            >
+              <div class="agent-command-approval-header">
+                <ShieldAlert :size="16" />
+                <strong id="agent-command-approval-title">需要确认执行</strong>
+                <span v-if="commandProposals.length > 1" class="agent-command-approval-count">
+                  待确认 {{ commandProposals.length }} 条
+                </span>
+              </div>
+              <div class="agent-command-approval-reason">
+                {{ approvalProposal.reason || "请检查命令内容后决定是否执行" }}
+              </div>
+              <pre class="agent-command-approval-command">{{ approvalProposal.command }}</pre>
+              <div class="agent-command-approval-actions">
+                <button
+                  type="button"
+                  class="agent-command-approval-cancel"
+                  @click="cancelProposal(approvalProposal)"
+                >取消</button>
+                <button
+                  type="button"
+                  class="agent-command-approval-confirm"
+                  :disabled="!connected"
+                  @click="confirmApproval"
+                >
+                  <Play :size="14" />确认执行
+                </button>
+              </div>
+            </section>
             <div class="agent-chat-input">
               <el-input
                 v-model="chatInput"
@@ -1248,48 +1263,6 @@ function resultCommand(content: string) {
             </div>
             </div>
           </div>
-        </div>
-        <div
-          v-if="approvalProposal"
-          class="agent-command-approval-layer"
-          role="presentation"
-          @click.self="cancelProposal(approvalProposal)"
-        >
-          <section
-            class="agent-command-approval"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="agent-command-approval-title"
-          >
-            <div class="agent-command-approval-header">
-              <span class="agent-command-approval-icon"><ShieldAlert :size="18" /></span>
-              <div>
-                <strong id="agent-command-approval-title">需要确认执行</strong>
-                <small>确认后立即后台执行，不等待命令结果</small>
-              </div>
-              <span class="agent-command-approval-count">1 / {{ commandProposals.length }}</span>
-            </div>
-            <div class="agent-command-approval-reason">
-              {{ approvalProposal.reason || "请检查命令内容后决定是否执行" }}
-            </div>
-            <pre class="agent-command-approval-command">{{ approvalProposal.command }}</pre>
-            <div class="agent-command-approval-actions">
-              <button
-                type="button"
-                class="agent-command-approval-cancel"
-                @click="cancelProposal(approvalProposal)"
-              >取消</button>
-              <button
-                ref="approvalConfirmButton"
-                type="button"
-                class="agent-command-approval-confirm"
-                :disabled="!connected"
-                @click="confirmApproval"
-              >
-                <Play :size="14" />确认执行
-              </button>
-            </div>
-          </section>
         </div>
         <div
           v-if="historyOpen"
@@ -1892,181 +1865,105 @@ function resultCommand(content: string) {
   background: transparent;
   box-shadow: none;
 }
-.agent-command-flyout {
+.agent-command-approval {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
-  left: 0;
+  right: 10px;
+  bottom: calc(100% + 2px);
+  left: 10px;
   z-index: 8;
   display: grid;
-  gap: 8px;
-  max-height: min(310px, calc(var(--ah) * 0.46));
-  padding: 11px;
-  overflow: auto;
-  border: 1px solid color-mix(in srgb, #d6a84d 48%, var(--border-subtle));
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--surface-deep, #0d1210) 94%, #d6a84d);
-  box-shadow: 0 14px 36px #050807a8;
-}
-.agent-command-pending {
-  display: inline-flex;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  margin-bottom: 7px;
-  padding: 0 4px;
-  color: #d6a84d;
-  font-size: 11px;
-}
-.agent-command-approval-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 7000;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: #05070b62;
-  pointer-events: auto;
-}
-.agent-command-approval {
-  width: min(620px, calc(100vw - 40px));
+  gap: 7px 12px;
+  max-height: min(240px, calc(var(--ah) - 180px));
   box-sizing: border-box;
-  padding: 18px;
-  border: 1px solid color-mix(in srgb, #d6a84d 58%, var(--border-subtle));
-  border-radius: 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--icon-warm, #9b8768) 46%, var(--line-strong));
+  border-radius: 9px;
   background: var(--surface, #181b22);
-  box-shadow: 0 24px 70px #05070bd9, 0 0 0 1px #ffffff08;
+  box-shadow: 0 8px 28px #05070b40;
 }
 .agent-command-approval-header {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-.agent-command-approval-icon {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  place-items: center;
-  border-radius: 7px;
-  color: #f0c56a;
-  background: #d6a84d1c;
-}
-.agent-command-approval-header > div {
-  display: grid;
-  gap: 3px;
+  flex-wrap: wrap;
   min-width: 0;
+  gap: 6px;
 }
-.agent-command-approval-header strong { color: var(--text-primary); font-size: 14px; }
-.agent-command-approval-header small { color: var(--text-muted); font-size: 11px; }
+.agent-command-approval-header svg { flex: 0 0 auto; }
+.agent-command-approval-header strong { font-size: 12px; }
 .agent-command-approval-count {
-  margin-left: auto;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
 }
 .agent-command-approval-reason {
-  margin-top: 15px;
+  grid-column: 1 / -1;
+  grid-row: 2;
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .agent-command-approval-command {
-  max-height: 180px;
-  margin: 10px 0 0;
-  padding: 11px 12px;
+  grid-column: 1 / -1;
+  grid-row: 3;
+  min-width: 0;
+  max-height: min(100px, calc(var(--ah) * 0.18));
+  margin: 0;
+  padding: 7px 9px;
   overflow: auto;
-  color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-deep, #0e1117);
-  font: 12px/1.55 "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  white-space: pre;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field-bg, #0e1117);
+  font: 12px/1.5 "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .agent-command-approval-actions {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+  gap: 6px;
 }
 .agent-command-approval-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  gap: 6px;
-  padding: 0 13px;
+  min-height: 28px;
+  gap: 5px;
+  padding: 0 10px;
   border-radius: 5px;
   font: inherit;
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
 .agent-command-approval-cancel {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--text-soft);
 }
 .agent-command-approval-confirm {
-  border: 1px solid color-mix(in srgb, var(--el-color-primary) 72%, #fff);
-  background: var(--el-color-primary);
-  color: var(--text);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
+.agent-command-approval-confirm :deep(svg) { color: inherit !important; }
 .agent-command-approval-confirm:focus-visible,
 .agent-command-approval-cancel:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--el-color-primary) 78%, #fff);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .agent-command-approval-confirm:disabled {
   cursor: not-allowed;
   opacity: .55;
-}
-.agent-command-flyout-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--text-soft);
-  font-size: 12px;
-}
-.agent-command-flyout-heading span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-}
-.agent-command-flyout-heading svg { color: #d6a84d; }
-.agent-command-flyout-heading small { color: var(--text-muted); }
-.agent-command-proposal {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-soft);
-}
-.agent-command-proposal > div {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  flex: 1;
-}
-.agent-command-proposal > div:first-child { align-self: stretch; }
-.agent-command-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 6px;
-}
-.agent-command-proposal strong { font-size: 12px; }
-.agent-command-proposal code {
-  display: block;
-  padding: 7px 8px;
-  overflow: auto;
-  color: var(--text-primary);
-  background: var(--surface-deep, #0e1117);
-  font-size: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .agent-chat-input {
   position: relative;
@@ -2154,7 +2051,7 @@ function resultCommand(content: string) {
 .agent-window.is-narrow .agent-model-control { flex: 1 1 auto; }
 .agent-window.is-narrow .agent-model-control :deep(.el-select) { width: min(180px, calc(var(--aw) * 0.42)); }
 .agent-window.is-narrow .agent-context-size { margin-left: 0; }
-.agent-window.is-narrow .agent-command-flyout { max-height: calc(var(--ah) * 0.38); }
-.agent-window.is-narrow .agent-command-proposal { align-items: stretch; flex-direction: column; }
-.agent-window.is-narrow .agent-command-actions { align-self: flex-end; }
+.agent-window.is-narrow .agent-command-approval { right: 8px; left: 8px; }
+.agent-window.is-narrow .agent-command-approval-header { grid-column: 1 / -1; }
+.agent-window.is-narrow .agent-command-approval-actions { grid-column: 1 / -1; grid-row: 4; }
 </style>

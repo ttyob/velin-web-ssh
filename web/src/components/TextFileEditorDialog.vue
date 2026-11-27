@@ -1,17 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { basicSetup } from "codemirror";
-import { json } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
-import { StreamLanguage } from "@codemirror/language";
-import { properties } from "@codemirror/legacy-modes/mode/properties";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { defaultKeymap, historyKeymap } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
-import { editorTheme } from "../editorTheme";
+import { codeLanguage, workbenchEditorTheme } from "../codeLanguages";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, api } from "../api";
 import type { Host } from "../types";
@@ -53,18 +47,6 @@ function renderMarkdown(value: string) {
   return DOMPurify.sanitize(String(html));
 }
 
-function languageFor(name: string) {
-  const lower = name.toLowerCase();
-  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return json();
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return markdown();
-  if (/\.(ya?ml)$/.test(lower)) return StreamLanguage.define(yaml);
-  if (/\.(sh|bash|zsh)$/.test(lower)) return StreamLanguage.define(shell);
-  if (/\.(ini|env|properties|conf|cfg)$/.test(lower) || /(^|\/)\.env(\.|$)/.test(lower)) {
-    return StreamLanguage.define(properties);
-  }
-  return [];
-}
-
 function destroyEditor() {
   editor?.destroy();
   editor = undefined;
@@ -102,9 +84,10 @@ async function loadFile() {
         extensions: [
           basicSetup,
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-          languageFor(props.file.name),
-          editorTheme,
+          codeLanguage(props.file.path).extension,
+          workbenchEditorTheme,
           EditorView.lineWrapping,
+          EditorView.contentAttributes.of({ "aria-label": `编辑 ${props.file.path}` }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               markdownContent.value = update.state.doc.toString();
@@ -258,3 +241,65 @@ onBeforeUnmount(destroyEditor);
     </template>
   </el-dialog>
 </template>
+
+<style>
+.el-dialog.text-editor-dialog {
+  width: min(900px, calc(100vw - 28px)) !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  margin: max(18px, calc((100dvh - 730px) / 2)) auto !important;
+}
+.el-dialog.text-editor-dialog > .el-dialog__header {
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  margin: 0;
+  padding: 8px 43px 8px 14px !important;
+  border-bottom: 1px solid var(--line);
+}
+.el-dialog.text-editor-dialog > .el-dialog__header .el-dialog__headerbtn { top: 0; right: 0; width: 42px; height: 42px; }
+.el-dialog.text-editor-dialog > .el-dialog__body { padding: 0 !important; overflow: hidden; }
+.el-dialog.text-editor-dialog > .el-dialog__footer {
+  min-height: 42px;
+  padding: 6px 10px !important;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.text-editor-heading { display: flex; min-width: 0; flex: 1; flex-direction: row; align-items: baseline; gap: 10px; }
+.text-editor-heading strong { flex: 0 0 auto; max-width: 34%; overflow: hidden; color: var(--text); font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.text-editor-heading small { min-width: 0; max-width: none; flex: 1; overflow: hidden; color: var(--muted); font: 10px/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.text-editor-mode { display: flex; min-height: 35px; align-items: center; justify-content: flex-end; padding: 4px 9px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.text-editor-mode .el-radio-button__inner { display: inline-flex; min-height: 25px; align-items: center; gap: 5px; padding: 4px 9px; border-color: var(--line) !important; background: transparent; color: var(--muted); font-size: 11px; box-shadow: none !important; }
+.text-editor-mode .el-radio-button__original-radio:checked + .el-radio-button__inner { background: var(--surface-3); color: var(--text); }
+.text-editor-shell { position: relative; height: min(68vh, 680px); min-height: 360px; overflow: hidden; border: 0; background: var(--bg); }
+.text-editor-mount, .text-editor-mount .cm-editor { height: 100%; }
+.text-editor-mount .cm-editor { color: var(--text); background: var(--bg); font: 13px var(--font-mono); }
+.text-editor-mount .cm-scroller { overflow: auto; line-height: 1.65; }
+.text-editor-mount .cm-gutters { color: var(--muted); border-right: 1px solid var(--line); background: var(--bg); }
+.text-editor-mount .cm-activeLine, .text-editor-mount .cm-activeLineGutter { background: var(--surface-2); }
+.text-editor-mount .cm-selectionBackground, .text-editor-mount .cm-content ::selection { background: var(--accent-soft) !important; }
+.text-editor-mount .cm-focused { outline: none; }
+.text-editor-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.text-editor-footer > span { color: var(--muted); font-size: 10px; }
+.text-editor-footer > div { display: flex; gap: 6px; }
+.text-editor-footer .el-button { min-height: 28px; padding: 5px 12px; font-size: 11px; }
+.text-editor-dialog .markdown-preview { height: 100%; box-sizing: border-box; overflow: auto; padding: 22px 26px 50px; color: var(--text-soft); background: var(--bg); font-size: 13px; line-height: 1.7; }
+.text-editor-dialog .markdown-preview h1, .text-editor-dialog .markdown-preview h2, .text-editor-dialog .markdown-preview h3, .text-editor-dialog .markdown-preview h4 { color: var(--text); }
+.text-editor-dialog .markdown-preview h1 { border-bottom-color: var(--line); }
+.text-editor-dialog .markdown-preview blockquote { border-left-color: var(--icon-warm); color: var(--muted); }
+.text-editor-dialog .markdown-preview code { background: var(--surface-2); }
+.text-editor-dialog .markdown-preview pre { border-color: var(--line); background: var(--surface-2); }
+.text-editor-dialog .markdown-preview a { color: var(--accent-strong); }
+.text-editor-dialog .markdown-preview th, .text-editor-dialog .markdown-preview td { border-color: var(--line); }
+@media (max-width: 760px) {
+  .el-dialog.text-editor-dialog { width: calc(100vw - 16px) !important; margin: 8px auto !important; }
+  .el-dialog.text-editor-dialog > .el-dialog__header { padding-left: 10px !important; }
+  .text-editor-heading { display: block; }
+  .text-editor-heading strong { display: block; max-width: 100%; }
+  .text-editor-heading small { display: block; margin-top: 2px; }
+  .text-editor-shell { height: calc(100dvh - 138px); min-height: 280px; }
+  .text-editor-dialog .markdown-preview { padding: 16px 14px 40px; }
+}
+</style>

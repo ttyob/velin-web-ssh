@@ -62,6 +62,7 @@ window.provideTerminalLinks = lineNumber => new Promise(resolve => {
   }))))
 })
 createApp({ render: () => h(TerminalPane, {
+  ref: instance => { window.testTerminalPane = instance },
   session: window.session, visible: true,
   preferences: window.preferences,
 }) }).use(ElementPlus).mount('#app')
@@ -759,8 +760,8 @@ try {
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), remoteText)
 
   // Browser API rejection falls back to copying during the mouse gesture and
-  // restores terminal focus. If both paths are blocked, the explicit button
-  // can retry the CLI selection after the user grants clipboard access.
+  // restores terminal focus. If both paths are blocked, the parent context
+  // menu can retry the selection after the user grants clipboard access.
   await page.evaluate(async () => {
     await navigator.clipboard.writeText('fallback-pending')
     window.originalClipboardWrite = navigator.clipboard.writeText
@@ -776,12 +777,12 @@ try {
     window.testTerminal.clearSelection()
   })
   await output(oscCopy(remoteText))
-  await page.getByText('自动复制受限，请点击终端上方的复制按钮', { exact: true }).waitFor()
+  await page.getByText('自动复制受限，请使用终端右键菜单中的复制', { exact: true }).waitFor()
   await page.evaluate(() => {
     Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: window.originalClipboardWrite })
     document.execCommand = window.originalExecCommand
   })
-  await page.getByRole('button', { name: '复制选中内容', exact: true }).click()
+  await page.evaluate(() => window.testTerminalPane.copySelection())
   await expectClipboard(remoteText)
 
   // Cross-screen mouse drags must retain all traversed rows while tmux or a
@@ -856,11 +857,11 @@ try {
       }).join(windowsRendering ? '\r\n' : '\n')
       await expectClipboard(expected)
       assert.ok(expected.split('\n').length > 48, 'Selection must exceed two viewports')
-      // Right clicks and toolbar copying must retain the full drag, even after
+      // Right clicks and the exposed copy action must retain the full drag, even after
       // the current xterm selection is cleared by the browser's context menu.
       await page.mouse.click(box.x + cell.width * 10, box.y + cell.height * 10, { button: 'right' })
       await page.evaluate(() => { window.testTerminal.clearSelection(); return navigator.clipboard.writeText('copy-again') })
-      await page.getByRole('button', { name: '复制选中内容', exact: true }).click()
+      await page.evaluate(() => window.testTerminalPane.copySelection())
       await expectClipboard(expected)
       const nativeCopy = await page.evaluate(() => {
         const data = new DataTransfer()

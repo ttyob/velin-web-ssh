@@ -16,6 +16,8 @@ const props = defineProps<{
   maximizedLeafId?: string;
   mobileCtrl?: boolean;
   mobileAlt?: boolean;
+  dockSessionID?: string;
+  dockTarget?: HTMLElement;
 }>();
 const emit = defineEmits<{
   focus: [leafID: string];
@@ -40,6 +42,7 @@ const session = computed(() => {
     ? props.sessions.find((item) => item.id === node.sessionID)
     : undefined;
 });
+const docked = computed(() => props.node.type === "leaf" && props.node.sessionID === props.dockSessionID && !!props.dockTarget);
 const leafIDs = computed(() => collectLeafIDs(props.node));
 const hiddenByMaximize = computed(() =>
   Boolean(
@@ -248,6 +251,8 @@ defineExpose({
       :maximized-leaf-id="maximizedLeafId"
       :mobile-ctrl="mobileCtrl"
       :mobile-alt="mobileAlt"
+      :dock-sessionID="dockSessionID"
+      :dock-target="dockTarget"
       @focus="(id) => emit('focus', id)"
       @context="(...args) => emit('context', ...args)"
       @close="(id) => emit('close', id)"
@@ -279,6 +284,8 @@ defineExpose({
       :maximized-leaf-id="maximizedLeafId"
       :mobile-ctrl="mobileCtrl"
       :mobile-alt="mobileAlt"
+      :dock-sessionID="dockSessionID"
+      :dock-target="dockTarget"
       @focus="(id) => emit('focus', id)"
       @context="(...args) => emit('context', ...args)"
       @close="(id) => emit('close', id)"
@@ -291,15 +298,15 @@ defineExpose({
       @modifiers-used="emit('modifiersUsed')"
     />
   </div>
+  <Teleport v-else :to="dockTarget || 'body'" :disabled="!docked">
   <div
-    v-else
     class="split-leaf"
     :class="{
       focused: node.id === focusedLeafId,
       'mobile-pane-hidden': Boolean(
-        focusedLeafId && node.id !== focusedLeafId,
+        !docked && focusedLeafId && node.id !== focusedLeafId,
       ),
-      'pane-maximized-away': hiddenByMaximize,
+      'pane-maximized-away': hiddenByMaximize && !docked,
     }"
     @pointerdown="emit('focus', node.id)"
     @contextmenu.prevent="emit('context', $event, node.id)"
@@ -309,8 +316,8 @@ defineExpose({
       ref="terminalRef"
       :session="session"
       :preferences="preferences"
-      :visible="visible && !hiddenByMaximize"
-      :closable="!root"
+      :visible="docked || (visible && !hiddenByMaximize)"
+      :closable="!root && !docked"
       :mobile-ctrl="mobileCtrl"
       :mobile-alt="mobileAlt"
       @close="emit('close', node.id)"
@@ -323,6 +330,7 @@ defineExpose({
     />
     <div v-else class="empty-pane"><span>终端会话已不可用</span></div>
   </div>
+  </Teleport>
 </template>
 
 <style scoped>

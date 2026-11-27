@@ -14,6 +14,7 @@ import 'element-plus/dist/index.css'
 import '@xterm/xterm/css/xterm.css'
 import '/src/styles.css'
 import '/src/styles-refresh.css'
+import '/src/styles-dialogs.css'
 import WorkspaceView from '/src/views/WorkspaceView.vue'
 window.testSockets = []
 class TestSocket {
@@ -123,8 +124,8 @@ async function scenario(options, verify) {
       fingerprint, hostName: host.name, hostAddress: 'test.invalid:22',
     })
     if (path === '/api/csrf') return route.fulfill({ json: { token: 'onboarding-test' } })
-    if (path === '/api/hosts') return route.fulfill({ json: [host] })
-    if (path === '/api/hosts/host-test/test') {
+    if (path === '/api/hosts') return route.fulfill({ json: fixture.hosts || [host] })
+    if (/^\/api\/hosts\/[^/]+\/test$/.test(path)) {
       probes.push(body)
       if (fixture.holdProbe) await new Promise(resolve => { fixture.releaseProbe = resolve })
       if (fixture.probeFailure) return reject(502, "connection_failed", fixture.probeFailure)
@@ -139,7 +140,7 @@ async function scenario(options, verify) {
     if (path === '/api/sessions' && request.method() === 'GET') return route.fulfill({ json: sessions })
     if (path === '/api/sessions' && request.method() === 'POST') {
       creates.push(body)
-      const session = { id: 'created-' + creates.length, hostID: host.id, name: body.name || host.name, sessionMode: body.sessionMode || 'tmux', status: fixture.creating ? 'creating' : 'attached' }
+      const session = { id: 'created-' + creates.length, hostID: body.hostID, name: body.name || host.name, sessionMode: body.sessionMode || 'tmux', status: fixture.creating ? 'creating' : 'attached' }
       sessions.push(session)
       if (fixture.holdCreate) await new Promise(resolve => { fixture.releaseCreate = resolve })
       return route.fulfill({ status: 201, json: session })
@@ -162,7 +163,7 @@ async function scenario(options, verify) {
   })
   try {
     await page.goto(baseURL)
-    await page.locator('.host-row').waitFor()
+    await page.locator('.host-row').first().waitFor()
     await verify({ page, fixture, probes, creates, restores, deletions })
     assert.deepEqual(errors, [])
   } finally {
@@ -359,16 +360,17 @@ try {
     }), Buffer.from('\x1bc' + text).toString('base64'))
     const screen = page.locator('.xterm-screen')
     const menu = page.locator('.pane-context-menu')
-    const copy = () => menu.getByRole('button', { name: '复制选中内容', exact: true }).click()
+    const copy = () => menu.getByRole('button', { name: '复制', exact: true }).click()
     const expectClipboard = text => page.waitForFunction(async text => (await navigator.clipboard.readText()) === text, text)
 
+    await page.evaluate(() => window.testTerminal.selectAll())
     await page.evaluate(() => navigator.clipboard.writeText('before right click'))
     await screen.click({ button: 'right' })
-    await menu.getByRole('button', { name: '全选终端内容', exact: true }).click()
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'before right click', 'context-menu selection must preserve explicit copying')
+    assert.deepEqual(await menu.locator('.context-label').allTextContents(), ['常用', '工具', '其它'])
+    assert.deepEqual(await menu.getByRole('button').allTextContents(), ['重命名', '复制', '粘贴', 'SFTP', '代码编辑器', 'Agent', 'Git管理', 'Docker', '主机监控', '分屏操作', '分享会话'])
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'before right click', 'right click must preserve explicit copying')
     const all = await page.evaluate(() => window.testTerminal.getSelection())
     assert.ok(all.includes('中文右键复制'))
-    await screen.click({ button: 'right' })
     await copy()
     await expectClipboard(all)
 
@@ -388,7 +390,44 @@ try {
     await expectClipboard('right-click')
   })
 
-  console.log('Connection onboarding and existing right-click selection/copy browser checks passed')
+  // Both directions create a new session on the selected SSH host in the
+  // original tab. Cancelling must leave the existing terminal untouched.
+  const otherHost = { ...host, id: 'host-other', name: 'Other SSH host', address: 'other.invalid' }
+  const desktopHost = { ...host, id: 'host-rdp', name: 'Desktop only', protocol: 'rdp' }
+  await scenario({ restore: true, trusted: true, hosts: [host, otherHost, desktopHost] }, async ({ page, creates }) => {
+    await connected(page)
+    const menu = page.getByRole('navigation', { name: '终端操作', exact: true })
+    const dialog = page.getByRole('dialog', { name: '分屏操作', exact: true })
+    const open = async () => {
+      await page.locator('.xterm-screen').first().click({ button: 'right' })
+      await menu.getByRole('button', { name: '分屏操作', exact: true }).click()
+      await dialog.waitFor()
+      assert(await dialog.getByRole('button', { name: '打开分屏', exact: true }).isDisabled())
+    }
+    await open()
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+    assert.equal(creates.length, 0)
+    assert.equal(await page.locator('.split-leaf').count(), 1)
+
+    for (const [direction, name] of [['horizontal', '左右分屏'], ['vertical', '上下分屏']]) {
+      await open()
+      await dialog.getByText(name, { exact: true }).click()
+      assert(await dialog.getByRole('radio', { name, exact: true }).isChecked())
+      await dialog.getByRole('combobox').click()
+      assert.equal(await page.getByRole('option', { name: /Desktop only/ }).count(), 0)
+      await page.getByRole('option', { name: /Other SSH host/ }).click()
+      await dialog.getByRole('button', { name: '打开分屏', exact: true }).click()
+      await page.locator(`.split-node.split-${direction}`).waitFor()
+      await page.clock.runFor(600)
+      assert.equal(creates.at(-1).hostID, otherHost.id)
+      assert.equal(await page.locator('.terminal-tab').count(), 1)
+    }
+    assert.equal(creates.length, 2)
+    assert.equal(await page.locator('.split-leaf').count(), 3)
+    await page.screenshot({ path: '/tmp/velin-context-menu-split.png' })
+  })
+
+  console.log('Connection onboarding, grouped context menu, selection/copy and split dialog browser checks passed')
 } finally {
   await browser?.close()
   await server.close()

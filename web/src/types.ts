@@ -27,6 +27,8 @@ export interface AIModelConfig {
   baseURL: string;
   model: string;
   proxyURL: string;
+  gitCommitPrompt: string;
+  gitConflictPrompt: string;
   apiKeyConfigured: boolean;
   configured: boolean;
 }

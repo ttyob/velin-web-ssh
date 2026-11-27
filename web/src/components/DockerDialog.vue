@@ -1231,6 +1231,8 @@ watch(
     :title="`Docker 管理 · ${host?.name || '当前终端'}`"
     width="min(1120px, calc(100vw - 28px))"
     append-to-body
+    :close-on-click-modal="false"
+    destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="docker-heading">

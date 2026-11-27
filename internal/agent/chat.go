@@ -16,10 +16,12 @@ import (
 )
 
 type AIConfig struct {
-	BaseURL  string
-	APIKey   string
-	Model    string
-	ProxyURL string
+	BaseURL           string
+	APIKey            string
+	Model             string
+	ProxyURL          string
+	GitCommitPrompt   string
+	GitConflictPrompt string
 }
 
 func (c AIConfig) Configured() bool {

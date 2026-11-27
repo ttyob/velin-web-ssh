@@ -155,6 +155,8 @@ const aiModel = ref<AIModelConfig>({
   baseURL: "",
   model: "",
   proxyURL: "",
+  gitCommitPrompt: "",
+  gitConflictPrompt: "",
   apiKeyConfigured: false,
   configured: false,
 });
@@ -162,6 +164,8 @@ const aiModelForm = ref({
   baseURL: "",
   model: "",
   proxyURL: "",
+  gitCommitPrompt: "",
+  gitConflictPrompt: "",
   apiKey: "",
   clearAPIKey: false,
 });
@@ -250,6 +254,8 @@ async function load() {
       baseURL: aiModel.value.baseURL,
       model: aiModel.value.model,
       proxyURL: aiModel.value.proxyURL || "",
+      gitCommitPrompt: aiModel.value.gitCommitPrompt || "",
+      gitConflictPrompt: aiModel.value.gitConflictPrompt || "",
       apiKey: "",
       clearAPIKey: false,
 		};
@@ -569,6 +575,8 @@ async function saveAIModel(showNotice = true) {
       baseURL: aiModel.value.baseURL,
       model: aiModel.value.model,
       proxyURL: aiModel.value.proxyURL || "",
+      gitCommitPrompt: aiModel.value.gitCommitPrompt || "",
+      gitConflictPrompt: aiModel.value.gitConflictPrompt || "",
       apiKey: "",
       clearAPIKey: false,
     };
@@ -1238,6 +1246,14 @@ function forwardBatch(text: string, sessionIDs: string[]) {
                       clearable
                     />
                     <p class="sx-hint">仅用于 AI Agent 的模型请求和连接测试，留空直连。支持 HTTP、HTTPS、SOCKS5，可在地址中填写账号密码。</p>
+                  </el-form-item>
+                  <el-form-item label="Git 提交说明提示词">
+                    <el-input v-model="aiModelForm.gitCommitPrompt" type="textarea" :rows="5" resize="vertical" />
+                    <p class="sx-hint">用于根据已暂存差异生成提交说明。清空后保存会恢复默认提示词。</p>
+                  </el-form-item>
+                  <el-form-item label="Git 冲突分析提示词">
+                    <el-input v-model="aiModelForm.gitConflictPrompt" type="textarea" :rows="5" resize="vertical" />
+                    <p class="sx-hint">用于分析分支合并冲突并给出手动处理建议。</p>
                   </el-form-item>
                 </el-form>
               </section>

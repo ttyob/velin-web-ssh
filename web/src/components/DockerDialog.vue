@@ -1614,6 +1614,9 @@ watch(
   font-size: 13px;
   font-weight: 560;
 }
+.docker-dialog :deep(.el-tabs__header) {
+  margin-bottom: 14px;
+}
 .docker-heading,
 .docker-summary,
 .docker-heading-actions,
@@ -1628,22 +1631,27 @@ watch(
 }
 .docker-heading {
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 2px;
+  gap: 18px;
+  margin-bottom: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--line, #35403a);
+  border-radius: 9px;
+  background: var(--surface-2, #1a211e);
 }
 .docker-heading-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 7px;
 }
 .docker-summary {
+  min-width: 0;
   gap: 9px;
   color: var(--text-strong, #e7eee9);
   font-size: 14px;
   font-weight: 620;
 }
 .docker-tabs {
-  margin-top: 4px;
+  margin-top: 0;
 }
 .docker-list {
   min-height: 210px;
@@ -1689,7 +1697,7 @@ watch(
 .docker-subrow {
   min-height: 62px;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--line, #35403a);
 }
 .docker-subrow:last-child {
@@ -1703,7 +1711,7 @@ watch(
 .docker-row {
   min-height: 82px;
   gap: 14px;
-  padding: 12px 8px;
+  padding: 14px 14px;
   border-bottom: 1px solid var(--line, #35403a);
 }
 .docker-row-status {
@@ -2110,6 +2118,15 @@ watch(
   color: #f1c0ba;
 }
 @media (max-width: 720px) {
+  .docker-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+  .docker-heading-actions {
+    justify-content: flex-start;
+  }
   .docker-config-grid {
     grid-template-columns: 1fr;
   }
@@ -2150,6 +2167,17 @@ watch(
   .docker-monitor-values {
     flex-basis: 100%;
     margin-left: 17px;
+  }
+}
+</style>
+
+<style>
+.el-dialog.docker-dialog > .el-dialog__body {
+  padding: 22px 26px 26px !important;
+}
+@media (max-width: 720px) {
+  .el-dialog.docker-dialog > .el-dialog__body {
+    padding: 16px !important;
   }
 }
 </style>

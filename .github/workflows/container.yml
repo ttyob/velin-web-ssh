@@ -100,7 +100,7 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
           labels: |
-            org.opencontainers.image.title=VelinWebSSH
+            org.opencontainers.image.title=Jeex Terminal
             org.opencontainers.image.description=Self-hosted browser SSH workspace
       - uses: docker/build-push-action@v7
         with:
@@ -226,7 +226,7 @@ jobs:
 
             飞牛 fnOS 原生应用：下载对应架构的 `.fpk` 安装包，使用 `checksums.txt` 校验文件完整性。
 
-            Windows x64：下载 `windows-gui` EXE，启动时选择窗口模式或服务模式。服务模式保留小型管理窗口，支持服务启停、开机自启和密码管理；浏览器默认访问 `http://127.0.0.1:8377`。网页资源已内嵌，需要 WebView2 Runtime。
+            Windows x64：下载 `windows-gui` EXE，启动时选择窗口模式或服务模式。管理员可在设置中一键更新；程序会校验 EXE 并在启动失败时回滚。请将 EXE 放在当前用户可写的目录。服务模式保留小型管理窗口，支持服务启停、开机自启和密码管理；浏览器默认访问 `http://127.0.0.1:8377`。网页资源已内嵌，需要 WebView2 Runtime。
           files: |
             release/velin-web-ssh-fnos-native-*.fpk
             release/velin-web-ssh-windows-gui-amd64-*.exe

@@ -8,7 +8,10 @@ import type { Host } from "../types";
 import { normalizeGitText, parseMergeConflicts } from "../gitMerge";
 import GitCompareEditor from "./GitCompareEditor.vue";
 import GitSurface from "./GitSurface.vue";
-import CodeDiffView from "./CodeDiffView.vue";
+import CodeDiffDialog from "./CodeDiffDialog.vue";
+import { createRemoteFiles } from "../remoteFiles";
+import { createRemoteGit } from "../remoteGit";
+import { canLoadDiff, emptyDiffFile, needsDiffPreview, type DiffFilePreview as FilePreview } from "../codeDiff";
 
 const props = defineProps<{
   modelValue: boolean; host?: Host; sessionId?: string; repository: string;
@@ -21,6 +24,8 @@ const error = ref("");
 const left = ref(""), right = ref(""), initialResult = ref(""), result = ref("");
 const version = ref("");
 const ready = ref(false);
+const preview = ref<FilePreview>();
+const diffStateKey = computed(() => `git-compare:${props.host?.id}:${props.repository}:${props.change?.path}`);
 const conflicts = ref(0);
 const analysis = ref("");
 const analysisOpen = ref(false);
@@ -38,10 +43,10 @@ async function blob(revision: string, path = props.change!.path) {
   const q = new URLSearchParams({ repository: props.repository, path, revision });
   return api<{ content: string; exists: boolean }>(`/api/hosts/${props.host!.id}/agent/git-text?${q}`);
 }
-async function load() {
+async function load(force = false) {
   if (!props.modelValue || !props.change || !props.host) return;
   const current = ++generation;
-  ready.value = false; loading.value = true; error.value = ""; analysis.value = "";
+  ready.value = false; preview.value = undefined; loading.value = true; error.value = ""; analysis.value = "";
   try {
     if (props.merge) {
       const [a, b, work] = await Promise.all([
@@ -55,6 +60,17 @@ async function load() {
       version.value = work.version;
       conflicts.value = parseMergeConflicts(result.value).length;
     } else {
+      const git = createRemoteGit(props.host.id), files = createRemoteFiles(props.host.id, props.sessionId || "");
+      const oldPath = props.change.originalPath || props.change.path;
+      const remotePath = `${props.repository.replace(/\/$/, "")}/${props.change.path}`;
+      const deleted = props.change.worktree === "D" || props.change.index === "D" && props.change.worktree === " ";
+      const [leftInfo, rightInfo] = await Promise.all([
+        props.change.index === "?" ? emptyDiffFile() : git.fileInfo(props.repository, oldPath, "HEAD"),
+        deleted ? emptyDiffFile() : files.info(remotePath),
+      ]);
+      if (current !== generation) return;
+      const info = { left: { ...leftInfo, imageURL: git.imageURL(props.repository, oldPath, "HEAD") }, right: { ...rightInfo, imageURL: files.imageURL(remotePath), downloadURL: files.downloadURL(remotePath) } };
+      if (needsDiffPreview(info) && (!force || !canLoadDiff(info))) { preview.value = info; return; }
       const a = props.change.index === "?" ? { content: "" } : await blob("HEAD", props.change.originalPath || props.change.path);
       let content = "";
       if (props.change.worktree !== "D" && !(props.change.index === "D" && props.change.worktree === " ")) {
@@ -126,7 +142,7 @@ async function analyze() {
   } catch (cause) { analysis.value = cause instanceof Error ? cause.message : "分析失败"; }
   finally { analyzing.value = false; }
 }
-watch(() => props.modelValue, open => {
+watch([() => props.modelValue, () => props.repository, () => props.change?.path, () => props.merge], ([open]) => {
   if (open) { savedSnapshot.value = undefined; void load(); }
   else { generation++; ready.value = false; analysisOpen.value = false; }
 }, { immediate: true });
@@ -142,14 +158,31 @@ watch(saving, value => emit("busy", value));
 </script>
 
 <template>
-  <div :class="{ 'git-compare-embedded': embedded }" v-show="modelValue">
-  <GitSurface v-show="!embedded || !analysisOpen" :embedded="embedded" :model-value="modelValue" class="git-full-compare-dialog" :title="merge ? '手动合并 · 完整文件' : '文件对比 · 完整文件'" width="calc(100vw - 40px)" top="3vh" append-to-body :close-on-click-modal="false" :before-close="beforeClose" @update:model-value="emit('update:modelValue', $event)">
+  <CodeDiffDialog
+    v-if="!merge"
+    :model-value="modelValue"
+    :path="change?.path || ''"
+    :state-key="diffStateKey"
+    :left="left"
+    :right="right"
+    left-label="HEAD · 提交版本"
+    right-label="Working Tree · 远程文件"
+    :preview="preview"
+    :loading="loading"
+    :error="error"
+    :can-edit="false"
+    :refreshable="true"
+    @update:model-value="emit('update:modelValue', $event)"
+    @refresh="load()"
+    @load="load(true)"
+  />
+  <div v-else :class="{ 'git-compare-embedded': embedded }" v-show="modelValue">
+  <GitSurface v-show="!embedded || !analysisOpen" :embedded="embedded" :model-value="modelValue" class="git-full-compare-dialog" title="手动合并 · 完整文件" width="calc(100vw - 40px)" top="3vh" append-to-body :close-on-click-modal="false" :before-close="beforeClose" @update:model-value="emit('update:modelValue', $event)">
     <div class="git-full-compare-path">{{ change?.path }}</div>
-    <p v-if="merge" class="git-full-compare-hint">左右箭头将对应块应用到中间文件。中间可修改整份文件；处理完后保存并标记已解决。</p>
-    <div v-loading="loading" class="git-full-compare-content" :class="{ 'is-diff': !merge }">
+    <p class="git-full-compare-hint">左右箭头将对应块应用到中间文件。中间可修改整份文件；处理完后保存并标记已解决。</p>
+    <div v-loading="loading" class="git-full-compare-content">
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
-      <CodeDiffView v-if="ready && !merge" :left="left" :right="right" :path="change?.path || ''" :inline="false" :visible="modelValue" />
-      <GitCompareEditor v-else-if="ready" :left="left" :right="right" :result="initialResult" :merge="merge" @change="result = $event" @conflicts="conflicts = $event" />
+      <GitCompareEditor v-if="ready" :left="left" :right="right" :result="initialResult" :merge="merge" @change="result = $event" @conflicts="conflicts = $event" />
     </div>
     <template #footer>
       <el-button v-if="merge" :icon="Sparkles" :disabled="!ready || !aiConfigured || saving" :loading="analyzing" @click="analyze">AI 分析</el-button>
@@ -186,7 +219,5 @@ watch(saving, value => emit("busy", value));
 .git-full-compare-path { color: var(--accent-strong); font: 12px/1.5 var(--font-mono, monospace); overflow-wrap: anywhere; margin-bottom: 8px; }
 .git-full-compare-hint { margin: 0 0 10px; color: var(--text-soft); font-size: 12px; }
 .git-full-compare-content { min-height: 300px; }
-.git-full-compare-content.is-diff { height: min(68dvh, 900px); }
-.git-compare-embedded .git-full-compare-content.is-diff { height: auto; }
 .git-merge-ai-result { min-height: 240px; max-height: 65vh; overflow: auto; white-space: pre-wrap; color: var(--text); font: 13px/1.6 var(--font-mono, monospace); }
 </style>

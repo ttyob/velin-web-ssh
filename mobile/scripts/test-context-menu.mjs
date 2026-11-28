@@ -32,7 +32,7 @@ try {
   await page.goto(base);
   await page.locator('flt-semantics-placeholder').waitFor({ state: 'attached' });
   await page.evaluate(() => document.querySelector('flt-semantics-placeholder').click());
-  await page.getByRole('button', { name: /^Velin · 移动端开发 / }).tap();
+  await page.getByRole('button', { name: /^Jeex Terminal · 移动端开发 / }).tap();
   await button('展开输入').waitFor();
   const root = page.frames().find(f => f.url().endsWith('/terminal/index.html'));
   await root.waitForFunction(() => document.querySelector('.xterm-rows')?.textContent.includes('/workspace/velin'));

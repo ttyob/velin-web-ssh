@@ -160,7 +160,7 @@ func (b sessionBridgeBackend) Hosts(ctx context.Context, userID string) ([]sessi
 func (b sessionBridgeBackend) Snapshot(ctx context.Context, userID, id string, maxLines int) (sessionbridge.Snapshot, error) {
 	live, err := b.api.terminals.Get(userID, id)
 	if err != nil {
-		return sessionbridge.Snapshot{}, errors.New("会话当前未附加到此服务，请先在 Velin 中连接或恢复 tmux 会话")
+		return sessionbridge.Snapshot{}, errors.New("会话当前未附加到此服务，请先在 Jeex Terminal 中连接或恢复 tmux 会话")
 	}
 	value, err := live.BridgeSnapshot(ctx, maxLines)
 	if err != nil {
@@ -188,7 +188,7 @@ func (b sessionBridgeBackend) Create(ctx context.Context, userID, hostID, name, 
 	if host.CredentialID != "" {
 		credential, err = b.api.store.Credential(userID, host.CredentialID)
 		if err != nil {
-			return sessionbridge.Session{}, errors.New("保存的凭据不可用，请在 Velin 中检查主机认证设置")
+			return sessionbridge.Session{}, errors.New("保存的凭据不可用，请在 Jeex Terminal 中检查主机认证设置")
 		}
 	}
 	meta, err := b.api.terminals.Create(ctx, userID, terminal.CreateRequest{Host: host, Credential: credential, Name: name, SessionMode: mode})

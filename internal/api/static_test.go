@@ -14,7 +14,7 @@ import (
 )
 
 func TestStaticFrontendFromEmbeddedOrDiskFiles(t *testing.T) {
-	const index = "<!doctype html><title>VelinWebSSH</title>"
+	const index = "<!doctype html><title>Jeex Terminal</title>"
 	const script = "console.log('embedded frontend');"
 	embedded := fstest.MapFS{
 		"index.html":    {Data: []byte(index)},

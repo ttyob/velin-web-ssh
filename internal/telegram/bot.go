@@ -189,7 +189,7 @@ func (m *Module) handle(ctx context.Context, c *Client, cfg config, update Updat
 	}
 	b, token, err := m.authenticate(msg.From.ID, msg.Chat.ID, cfg.Bot.ID)
 	if err != nil {
-		_, _ = c.send(ctx, msg.Chat.ID, "请在 Velin 的「设置 → Telegram」生成绑定链接，再点击链接完成绑定。", nil)
+		_, _ = c.send(ctx, msg.Chat.ID, "请在 Jeex Terminal 的「设置 → Telegram」生成绑定链接，再点击链接完成绑定。", nil)
 		return
 	}
 	command := ""

@@ -20,6 +20,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
+import type { TerminalAttentionEvent } from "../terminalAttention";
 import type {
   AgentModel,
   AgentStatus,
@@ -31,7 +32,10 @@ const props = defineProps<{
   host?: Host;
   suspended?: boolean;
 }>();
-const emit = defineEmits<{ "update:modelValue": [boolean] }>();
+const emit = defineEmits<{
+  "update:modelValue": [boolean];
+  attention: [event: TerminalAttentionEvent];
+}>();
 
 const status = ref<AgentStatus>();
 const models = ref<AgentModel[]>([]);
@@ -107,6 +111,7 @@ type ResizeEdge = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
 let pointerCleanup: (() => void) | undefined;
 let chatScrollFrame: number | undefined;
 let followChatOutput = true;
+let agentWasBusy = false;
 
 const windowStyle = computed(() => ({
   left: `${windowRect.left}px`,
@@ -210,6 +215,35 @@ watch(
     if (!wasConnected || (!props.host?.credentialID && !props.host?.hasPassword)) return;
     await loadStatus();
     if (status.value?.state !== "connected") await connect();
+  },
+);
+
+watch(
+  () =>
+    [
+      props.modelValue,
+      Boolean(props.suspended),
+      commandProposals.value.length,
+      chatting.value,
+      executingIDs.value.size,
+    ] as const,
+  ([open, suspended, proposalCount, isChatting, executingCount]) => {
+    const isBusy = isChatting || executingCount > 0;
+    if (!open || !suspended) {
+      agentWasBusy = isBusy;
+      emit("attention", "clear");
+      return;
+    }
+    if (proposalCount > 0) {
+      emit("attention", "bell");
+    } else if (
+      agentWasBusy &&
+      !isBusy &&
+      chatMessages.value.at(-1)?.role === "assistant"
+    ) {
+      emit("attention", "settled");
+    }
+    agentWasBusy = isBusy;
   },
 );
 

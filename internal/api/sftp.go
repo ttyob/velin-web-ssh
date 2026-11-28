@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/pkg/sftp"
+	"github.com/ttyob/velin-web-ssh/internal/filepreview"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -234,6 +235,34 @@ func (a *API) sftpReadText(w http.ResponseWriter, r *http.Request) {
 	}
 	defer client.Close()
 	remotePath := cleanRemotePath(r.URL.Query().Get("path"))
+	if r.URL.Query().Get("mode") == "info" {
+		info, err := client.Lstat(remotePath)
+		if os.IsNotExist(err) {
+			writeJSON(w, 200, filepreview.Info{Kind: "text"})
+			return
+		}
+		if err != nil {
+			writeError(w, 400, "file_info_unavailable", err.Error())
+			return
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			writeJSON(w, 200, filepreview.Info{Exists: true, Size: info.Size(), Kind: "unsupported"})
+			return
+		}
+		file, err := client.Open(remotePath)
+		if err != nil {
+			writeError(w, 400, "file_info_unavailable", err.Error())
+			return
+		}
+		defer file.Close()
+		header, err := io.ReadAll(io.LimitReader(file, 4096))
+		if err != nil {
+			writeError(w, 400, "file_info_unavailable", err.Error())
+			return
+		}
+		writeJSON(w, 200, filepreview.Inspect(remotePath, info.Size(), header))
+		return
+	}
 	content, info, err := readEditableRemoteFile(client.Client, remotePath)
 	if err != nil {
 		writeError(w, 400, "text_file_unavailable", err.Error())

@@ -44,10 +44,19 @@ func (d *desktopApp) workerCommand(mode string) *exec.Cmd {
 	}
 	cmd := exec.Command(d.executable, args...)
 	cmd.Dir = filepath.Dir(d.executable)
-	cmd.Env = append(withoutEnvironment(os.Environ(), "VELIN_ADDR"), "VELIN_ADDR="+address)
+	cmd.Env = withEnvironment(os.Environ(), "VELIN_ADDR", address)
+	cmd.Env = withEnvironment(cmd.Env, "VELIN_SELF_UPDATE", "true")
+	cmd.Env = withEnvironment(cmd.Env, "VELIN_DESKTOP_LAUNCHER_PID", fmt.Sprint(os.Getpid()))
+	cmd.Env = withEnvironment(cmd.Env, "VELIN_DESKTOP_LAUNCH_MODE", mode)
+	cmd.Env = withEnvironment(cmd.Env, "VELIN_DESKTOP_LAUNCH_MINIMIZED", fmt.Sprint(desktopArgumentPresent("--minimized")))
 	cmd.Stderr = log.Writer()
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	return cmd
+}
+
+func withEnvironment(values []string, key, value string) []string {
+	result := withoutEnvironment(values, key)
+	return append(result, key+"="+value)
 }
 
 func withoutEnvironment(values []string, key string) []string {

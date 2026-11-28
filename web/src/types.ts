@@ -58,6 +58,15 @@ export interface UpdateCheck {
   releaseName: string;
   publishedAt: string;
   checkedAt: string;
+  selfUpdate: {
+    enabled: boolean;
+    requestID?: string;
+    state?: string;
+    targetVersion?: string;
+    message?: string;
+    requestedAt?: string;
+    updatedAt?: string;
+  };
 }
 export interface Snippet {
   id: string;

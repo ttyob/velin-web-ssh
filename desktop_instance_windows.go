@@ -27,11 +27,14 @@ func desktopInstance(directory string) (func(), bool, error) {
 	if errors.Is(err, winapi.ERROR_ALREADY_EXISTS) {
 		_ = winapi.CloseHandle(handle)
 		user32 := winapi.NewLazySystemDLL("user32.dll")
-		title, _ := winapi.UTF16PtrFromString("VelinWebSSH")
-		window, _, _ := user32.NewProc("FindWindowW").Call(0, uintptr(unsafe.Pointer(title)))
-		if window != 0 {
-			_, _, _ = user32.NewProc("ShowWindow").Call(window, 9)
-			_, _, _ = user32.NewProc("SetForegroundWindow").Call(window)
+		for _, caption := range []string{"Jeex Terminal", "VelinWebSSH"} {
+			title, _ := winapi.UTF16PtrFromString(caption)
+			window, _, _ := user32.NewProc("FindWindowW").Call(0, uintptr(unsafe.Pointer(title)))
+			if window != 0 {
+				_, _, _ = user32.NewProc("ShowWindow").Call(window, 9)
+				_, _, _ = user32.NewProc("SetForegroundWindow").Call(window)
+				break
+			}
 		}
 		return func() {}, false, nil
 	}

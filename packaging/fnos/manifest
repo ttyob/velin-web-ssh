@@ -1,11 +1,11 @@
 appname=velin-web-ssh
 version=0.3.54
-display_name=VelinWebSSH
+display_name=Jeex Terminal
 desc=浏览器端 SSH 工作台，支持远程桌面、文件管理和内网穿透。
 platform=x86
 source=thirdparty
-maintainer=VelinWebSSH
-distributor=VelinWebSSH
+maintainer=Jeex Terminal
+distributor=Jeex Terminal
 desktop_uidir=ui
 desktop_applaunchname=velin-web-ssh.main
 service_port=8377

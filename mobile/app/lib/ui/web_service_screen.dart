@@ -76,7 +76,7 @@ class _WebServiceScreenState extends State<WebServiceScreen> {
                   style: TextStyle(color: V.accent),
                 ),
                 const SizedBox(height: 24),
-                const Text('原生 App 会通过当前 Velin 服务访问此网页。此预览不连接远端服务。'),
+                const Text('原生 App 会通过当前 Jeex Terminal 服务访问此网页。此预览不连接远端服务。'),
               ],
             )
           : error.isNotEmpty

@@ -3,14 +3,18 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ttyob/velin-web-ssh/internal/version"
 )
 
@@ -34,14 +38,31 @@ type githubRelease struct {
 }
 
 type updateInfo struct {
-	CurrentVersion  string `json:"currentVersion"`
-	LatestVersion   string `json:"latestVersion"`
-	VersionKnown    bool   `json:"versionKnown"`
-	UpdateAvailable bool   `json:"updateAvailable"`
-	ReleaseURL      string `json:"releaseURL"`
-	ReleaseName     string `json:"releaseName"`
-	PublishedAt     string `json:"publishedAt"`
-	CheckedAt       string `json:"checkedAt"`
+	CurrentVersion  string         `json:"currentVersion"`
+	LatestVersion   string         `json:"latestVersion"`
+	VersionKnown    bool           `json:"versionKnown"`
+	UpdateAvailable bool           `json:"updateAvailable"`
+	ReleaseURL      string         `json:"releaseURL"`
+	ReleaseName     string         `json:"releaseName"`
+	PublishedAt     string         `json:"publishedAt"`
+	CheckedAt       string         `json:"checkedAt"`
+	SelfUpdate      selfUpdateInfo `json:"selfUpdate"`
+}
+
+type selfUpdateInfo struct {
+	Enabled       bool   `json:"enabled"`
+	RequestID     string `json:"requestID,omitempty"`
+	State         string `json:"state,omitempty"`
+	TargetVersion string `json:"targetVersion,omitempty"`
+	Message       string `json:"message,omitempty"`
+	RequestedAt   string `json:"requestedAt,omitempty"`
+	UpdatedAt     string `json:"updatedAt,omitempty"`
+}
+
+type selfUpdateRequest struct {
+	RequestID     string `json:"requestID"`
+	TargetVersion string `json:"targetVersion"`
+	RequestedAt   string `json:"requestedAt"`
 }
 
 func parseReleaseVersion(raw string) (releaseVersion, bool) {
@@ -70,6 +91,19 @@ func parseReleaseVersion(raw string) (releaseVersion, bool) {
 		pre = strings.TrimSpace(core[1])
 	}
 	return releaseVersion{major: values[0], minor: values[1], patch: values[2], pre: pre}, true
+}
+
+func validReleaseImageTag(raw string) bool {
+	if len(raw) < 6 || len(raw) > 129 || raw[0] != 'v' {
+		return false
+	}
+	for _, char := range raw {
+		if !(char >= '0' && char <= '9' || char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' || char == '.' || char == '-') {
+			return false
+		}
+	}
+	_, ok := parseReleaseVersion(raw)
+	return ok
 }
 
 func compareReleaseVersions(left, right releaseVersion) int {
@@ -102,7 +136,7 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, endpoint, curr
 		return updateInfo{}, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", "VelinWebSSH/"+current)
+	request.Header.Set("User-Agent", "JeexTerminal/"+current)
 	response, err := client.Do(request)
 	if err != nil {
 		return updateInfo{}, err
@@ -116,7 +150,7 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, endpoint, curr
 		return updateInfo{}, fmt.Errorf("解析 GitHub release 失败: %w", err)
 	}
 	latest, ok := parseReleaseVersion(release.TagName)
-	if !ok {
+	if !ok || !validReleaseImageTag(release.TagName) {
 		return updateInfo{}, fmt.Errorf("GitHub release 版本号无效: %q", release.TagName)
 	}
 	if release.HTMLURL != "" {
@@ -143,7 +177,7 @@ func (a *API) update(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("refresh") != "1" && !a.updateCheckedAt.IsZero() && time.Since(a.updateCheckedAt) < updateCacheTTL {
 		cached := a.updateCache
 		a.updateMu.Unlock()
-		writeJSON(w, http.StatusOK, cached)
+		writeJSON(w, http.StatusOK, a.attachSelfUpdate(cached))
 		return
 	}
 	client := a.updateClient
@@ -165,5 +199,127 @@ func (a *API) update(w http.ResponseWriter, r *http.Request) {
 	a.updateCache = info
 	a.updateCheckedAt = time.Now()
 	a.updateMu.Unlock()
-	writeJSON(w, http.StatusOK, info)
+	writeJSON(w, http.StatusOK, a.attachSelfUpdate(info))
+}
+
+func (a *API) selfUpdateDir() string {
+	return filepath.Join(a.cfg.DataDir, "self-update")
+}
+
+func (a *API) attachSelfUpdate(info updateInfo) updateInfo {
+	status := selfUpdateInfo{Enabled: a.cfg.SelfUpdate}
+	path := filepath.Join(a.selfUpdateDir(), "status.json")
+	file, err := os.Open(path)
+	if err == nil {
+		defer file.Close()
+		if decodeErr := json.NewDecoder(io.LimitReader(file, 64*1024)).Decode(&status); decodeErr != nil {
+			status = selfUpdateInfo{Enabled: a.cfg.SelfUpdate, State: "failed", Message: "无法读取更新状态"}
+		}
+	}
+	status.Enabled = a.cfg.SelfUpdate
+	info.SelfUpdate = status
+	return info
+}
+
+func writeUpdateJSON(path string, value any) error {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(directory, ".update-*.json")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err = temp.Chmod(0o600); err == nil {
+		err = json.NewEncoder(temp).Encode(value)
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
+}
+
+func selfUpdateInProgress(state string) bool {
+	switch state {
+	case "queued", "pulling", "restarting", "verifying", "rolling_back":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *API) startUpdate(w http.ResponseWriter, r *http.Request) {
+	if !a.cfg.SelfUpdate {
+		writeError(w, http.StatusConflict, "self_update_unavailable", "当前部署未启用一键更新")
+		return
+	}
+	current := a.attachSelfUpdate(updateInfo{}).SelfUpdate
+	if selfUpdateInProgress(current.State) {
+		writeError(w, http.StatusConflict, "self_update_in_progress", "版本更新正在进行")
+		return
+	}
+	client := a.updateClient
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	endpoint := a.updateURL
+	if endpoint == "" {
+		endpoint = defaultReleaseURL
+	}
+	info, err := fetchLatestRelease(r.Context(), client, endpoint, version.Current)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "update_check_failed", "无法检查版本更新")
+		return
+	}
+	if !info.VersionKnown {
+		writeError(w, http.StatusConflict, "development_version", "开发版本不能执行一键更新")
+		return
+	}
+	if !info.UpdateAvailable {
+		writeError(w, http.StatusConflict, "already_latest", "当前已经是最新版本")
+		return
+	}
+	if !validReleaseImageTag(info.LatestVersion) {
+		writeError(w, http.StatusBadGateway, "invalid_release_version", "发布版本号无法用于镜像更新")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	request := selfUpdateRequest{RequestID: uuid.NewString(), TargetVersion: info.LatestVersion, RequestedAt: now}
+	status := selfUpdateInfo{Enabled: true, RequestID: request.RequestID, State: "queued", TargetVersion: request.TargetVersion, Message: "更新任务已提交", RequestedAt: now, UpdatedAt: now}
+	statusPath := filepath.Join(a.selfUpdateDir(), "status.json")
+	requestPath := filepath.Join(a.selfUpdateDir(), "request.json")
+	a.updateMu.Lock()
+	current = a.attachSelfUpdate(updateInfo{}).SelfUpdate
+	if selfUpdateInProgress(current.State) {
+		a.updateMu.Unlock()
+		writeError(w, http.StatusConflict, "self_update_in_progress", "版本更新正在进行")
+		return
+	}
+	if err = writeUpdateJSON(statusPath, status); err == nil {
+		err = writeUpdateJSON(requestPath, request)
+	}
+	if err != nil {
+		failed := status
+		failed.State = "failed"
+		failed.Message = "无法创建更新任务"
+		failed.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		_ = writeUpdateJSON(statusPath, failed)
+		a.updateMu.Unlock()
+		if !errors.Is(err, os.ErrPermission) {
+			writeError(w, http.StatusInternalServerError, "self_update_failed", "无法创建更新任务")
+			return
+		}
+		writeError(w, http.StatusForbidden, "self_update_permission_denied", "更新目录不可写")
+		return
+	}
+	a.updateCache = info
+	a.updateCheckedAt = time.Now()
+	a.updateMu.Unlock()
+	info.SelfUpdate = status
+	writeJSON(w, http.StatusAccepted, info)
 }

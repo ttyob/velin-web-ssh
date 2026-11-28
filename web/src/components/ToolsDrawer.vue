@@ -169,7 +169,7 @@ async function exportData() {
   const blob = await response.blob(),
     link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `velin-export-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `jeex-terminal-export-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 0);
 }
@@ -248,8 +248,8 @@ async function deleteForward(value: PortForward) {
     <el-tabs :model-value="section" class="embedded-tool-tabs">
       <el-tab-pane label="命令片段" name="snippets"
         ><div class="tool-heading">
-          <span>个人命令片段</span
-          ><el-button :icon="Plus" type="primary" @click="edit()"
+          <span>个人命令片段 · {{ snippets.length }}</span
+          ><el-button :icon="Plus" type="primary" size="small" @click="edit()"
             >新增</el-button
           >
         </div>
@@ -303,8 +303,8 @@ async function deleteForward(value: PortForward) {
       ></el-tab-pane>
       <el-tab-pane label="端口转发" name="forwards"
         ><div class="tool-heading">
-          <span>本地、远程与 SOCKS 转发</span
-          ><el-button :icon="Plus" type="primary" @click="editForward()"
+          <span>本地、远程与 SOCKS 转发 · {{ forwards.length }}</span
+          ><el-button :icon="Plus" type="primary" size="small" @click="editForward()"
             >新增</el-button
           >
         </div>

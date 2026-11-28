@@ -1,14 +1,14 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "VelinWebSSH",
+  "name": "JeexTerminal",
   "outputfilename": "velin-web-ssh",
   "frontend:dir": "desktop",
   "build:dir": "build",
   "info": {
-    "productName": "VelinWebSSH",
+    "productName": "Jeex Terminal",
     "productVersion": "0.3.54"
   },
   "author": {
-    "name": "VelinWebSSH"
+    "name": "Jeex Terminal"
   }
 }

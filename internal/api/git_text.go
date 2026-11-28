@@ -13,6 +13,27 @@ func (a *API) agentGitText(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithAgentTimeout(r, 30*time.Second)
 	defer cancel()
 	q := r.URL.Query()
+	if q.Get("mode") == "info" {
+		info, err := a.agents.GitFileInfo(ctx, currentUser(r).ID, chi.URLParam(r, "id"), q.Get("repository"), q.Get("path"), q.Get("revision"))
+		if err != nil {
+			writeAgentError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
+		return
+	}
+	if q.Get("mode") == "image" {
+		content, contentType, err := a.agents.GitPreviewImage(ctx, currentUser(r).ID, chi.URLParam(r, "id"), q.Get("repository"), q.Get("path"), q.Get("revision"))
+		if err != nil {
+			writeAgentError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "private, no-store")
+		_, _ = w.Write([]byte(content))
+		return
+	}
 	content, exists, err := a.agents.GitText(ctx, currentUser(r).ID, chi.URLParam(r, "id"), q.Get("repository"), q.Get("path"), q.Get("revision"))
 	if err != nil {
 		writeAgentError(w, err)

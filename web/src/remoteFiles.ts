@@ -1,4 +1,5 @@
 import { api, json } from "./api";
+import type { DiffFileInfo } from "./codeDiff";
 
 export interface RemoteFileEntry {
   name: string;
@@ -23,6 +24,9 @@ export function createRemoteFiles(hostID: string, sessionID: string) {
   return {
     list: (path: string, signal?: AbortSignal) => api<{ path: string; entries: RemoteFileEntry[] }>(url("list", path), { signal }),
     read: (path: string) => api<RemoteText>(url("text", path)),
+    info: (path: string) => api<DiffFileInfo>(`${url("text", path)}&mode=info`),
+    imageURL: (path: string) => url("preview-image", path),
+    downloadURL: (path: string) => url("download", path),
     mkdir: (path: string) => api(url("mkdir", path), { method: "POST", body: json({ path }) }),
     create: (path: string) => api(url("upload", path), { method: "PUT", body: new Blob([]) }),
     upload: (path: string, content: Blob, signal?: AbortSignal) => api(url("upload", path), { method: "PUT", body: content, signal }),

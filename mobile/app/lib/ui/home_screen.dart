@@ -765,7 +765,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _group('网络与服务', [
         ListTile(
           leading: const Icon(Icons.dns_outlined),
-          title: const Text('Velin 服务管理'),
+          title: const Text('Jeex Terminal 服务管理'),
           trailing: Icon(Icons.chevron_right, color: V.muted),
           onTap: _profiles,
         ),
@@ -996,7 +996,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       const SizedBox(height: 32),
       Center(
         child: Text(
-          '✦ velin mobile · 0.1.2 ✦',
+          '✦ Jeex Terminal · 0.1.2 ✦',
           style: TextStyle(
             color: V.muted,
             fontSize: 11,

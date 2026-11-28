@@ -837,19 +837,6 @@ button {
   width: 100%;
 }
 
-.web-proxy-form {
-  margin-top: 16px;
-}
-.web-proxy-form .el-select {
-  width: 100%;
-}
-.web-proxy-form .el-segmented,
-.web-proxy-form .el-input-number {
-  width: 100%;
-}
-.web-proxy-form .el-alert {
-  margin-bottom: 18px;
-}
 .web-service-resource {
   flex: 0 0 var(--web-service-height, 210px);
   min-height: 82px;
@@ -903,7 +890,8 @@ button {
   padding: 0 6px 6px;
 }
 .web-service-row {
-  height: 43px;
+  height: auto;
+  min-height: 46px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -924,6 +912,14 @@ button {
   flex-direction: column;
   gap: 3px;
 }
+.web-service-copy {
+  min-width: 0;
+  overflow: hidden;
+}
+.web-service-icon {
+  flex: 0 0 15px;
+  color: #64b9e8;
+}
 .web-service-row strong,
 .web-service-row small {
   overflow: hidden;
@@ -934,10 +930,12 @@ button {
 .web-service-row strong {
   color: var(--text);
   font-size: 11px;
+  line-height: 15px;
 }
 .web-service-row small {
   color: var(--muted);
   font-size: 9px;
+  line-height: 13px;
 }
 .web-service-row:hover .row-menu {
   opacity: 1;
@@ -2382,36 +2380,6 @@ button {
   transition:
     background-color 0.24s ease,
     border-color 0.24s ease;
-}
-.terminal-tab {
-  position: relative;
-  transition:
-    color 0.22s ease,
-    background-color 0.22s ease,
-    transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.terminal-tab::after {
-  content: "";
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 0;
-  height: 2px;
-  background: var(--accent);
-  transform: scaleX(0);
-  transform-origin: center;
-  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.terminal-tab.active {
-  box-shadow: none;
-  transform: translateY(-1px);
-}
-.terminal-tab.active::after {
-  transform: scaleX(1);
-}
-.terminal-tab:hover {
-  background: var(--surface-2);
-  color: var(--text);
 }
 .resource-list > article {
   animation: list-item-enter 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;

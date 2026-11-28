@@ -114,7 +114,7 @@ class RemoteApi {
         method: method,
         headers: {
           'Cookie': cookieHeader(uri),
-          'User-Agent': 'Velin-Mobile/0.1',
+          'User-Agent': 'Jeex-Terminal-Mobile/0.1',
           if (_csrf != null && method != 'GET') 'X-CSRF-Token': _csrf,
           ...?headers,
         },
@@ -230,7 +230,7 @@ class RemoteApi {
         headers: {
           ...?headers,
           'Cookie': cookieHeader(uri),
-          'User-Agent': 'Velin-Mobile-Tools/0.1',
+          'User-Agent': 'Jeex-Terminal-Mobile-Tools/0.1',
         },
       ),
     );
@@ -380,7 +380,7 @@ class RemoteApi {
           headers: {
             'Cookie': cookieHeader(http),
             'Origin': base.origin,
-            'User-Agent': 'Velin-Mobile/0.1',
+            'User-Agent': 'Jeex-Terminal-Mobile/0.1',
           },
         )
         .then((socket) {

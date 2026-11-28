@@ -2,6 +2,8 @@
 
 [返回首页](../README.md)
 
+产品已更名为 **Jeex Terminal**。为兼容已有部署和在线升级，仓库与镜像地址、`velin` 服务名、`VELIN_*` 配置变量、数据文件和安装包文件名继续沿用原标识。
+
 ## 快速安装
 
 需要 Linux、Docker Engine 和 Docker Compose v2：
@@ -31,7 +33,9 @@ curl -fsSL https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/install.sh
 - root 用户：`/opt/velin`
 - 普通用户：`~/.local/share/velin`
 
-升级已安装实例：
+管理员可在「设置 → 版本更新」中直接升级。更新服务会拉取目标版本、重启主服务并执行健康检查，失败时自动恢复旧镜像和配置；主服务不挂载 Docker Socket。
+
+从不含更新服务的旧版本首次升级时，先执行一次下面的命令更新 Compose 配置。之后可以直接使用网页中的一键更新：
 
 ```bash
 /opt/velin/update.sh
@@ -90,7 +94,7 @@ Docker 镜像发布到 `ghcr.io/ttyob/velin-web-ssh`，支持 `linux/amd64` 和 
 
 ## 飞牛 fnOS 原生应用包
 
-仓库提供不依赖 Docker 的飞牛 fnOS `.fpk` 原生应用包。包内直接运行 VelinWebSSH Go 服务和 guacd，数据保存到 fnOS 应用数据目录，不影响现有 Compose 部署：
+仓库提供不依赖 Docker 的飞牛 fnOS `.fpk` 原生应用包。包内直接运行 Jeex Terminal Go 服务和 guacd，数据保存到 fnOS 应用数据目录，不影响现有 Compose 部署。升级请在飞牛应用中心安装新 `.fpk`，由应用中心执行停服、替换和启动流程：
 
 ```bash
 packaging/fnos/build.sh
@@ -112,7 +116,7 @@ sudo -u velin env \
   /var/apps/velin-web-ssh/target/cmd/main reset-admin-password
 ```
 
-命令会短暂停止 VelinWebSSH、生成并输出临时密码，然后恢复原有运行状态。指定新密码时增加 `VELIN_RESET_PASSWORD='替换为新密码'`；数据、主机和凭据不会被删除。
+命令会短暂停止 Jeex Terminal、生成并输出临时密码，然后恢复原有运行状态。指定新密码时增加 `VELIN_RESET_PASSWORD='替换为新密码'`；数据、主机和凭据不会被删除。
 
 卸载 fnOS 原生应用时可选择保留或删除应用数据，默认保留以便重新安装。选择删除会永久清除数据库、主密钥、凭据、备份和日志。
 
@@ -120,7 +124,7 @@ sudo -u velin env \
 
 ## Windows 客户端
 
-从 [Releases](https://github.com/ttyob/velin-web-ssh/releases/latest) 下载 `windows-gui` EXE，放在可写目录中双击运行。网页已内嵌，运行需要 WebView2 Runtime。
+从 [Releases](https://github.com/ttyob/velin-web-ssh/releases/latest) 下载 `windows-gui` EXE，放在当前用户可写的目录中双击运行。网页已内嵌，运行需要 WebView2 Runtime。管理员可在「设置 → 版本更新」中一键更新；程序会校验 Release 校验文件，短暂关闭并重启服务。若新版本未能启动，会恢复旧 EXE。首次升级到含更新器的版本需要手动下载安装；之后可在应用内更新。安装目录不可写时，请先将 EXE 移到用户目录后再更新。
 
 启动时选择本次运行方式：
 
@@ -153,7 +157,7 @@ sudo -u velin env \
 
 ## 配置
 
-VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优先。
+Jeex Terminal 默认读取运行目录中的 `.env`，同名系统环境变量优先。
 
 管理员可在「设置 → AI 模型」配置 Agent 专用代理，支持 HTTP、HTTPS、SOCKS5（例如 `http://127.0.0.1:7890`），留空时直连。代理仅用于 AI Agent 的模型列表、对话和连接测试，保存后立即生效；包含账号密码的代理地址会加密保存。Docker 部署时填写容器能够访问的代理地址。
 
@@ -164,7 +168,7 @@ VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优�
 | `VELIN_ADMIN_PASSWORD` | 空 | 首次启动管理员密码 |
 | `VELIN_DATA_DIR` | `data` | 数据库、主密钥及备份的存储目录 |
 | `VELIN_COOKIE_SECURE` | `true` | 会话 Cookie 仅通过 HTTPS 发送；纯 HTTP 内网部署必须显式设置为 `false` |
-| `VELIN_EMBED_ORIGINS` | 空 | 允许嵌入 VelinWebSSH 的可信来源，多个来源用逗号分隔，例如 `https://nas.example.com` |
+| `VELIN_EMBED_ORIGINS` | 空 | 允许嵌入 Jeex Terminal 的可信来源，多个来源用逗号分隔，例如 `https://nas.example.com` |
 | `VELIN_TRUSTED_PROXY_CIDRS` | 空 | 可信反向代理网段，只有来自这些网段的请求才会读取 `X-Real-IP` |
 | `VELIN_HOST_PORT_ADDR` | `127.0.0.1` | 主机端口代理监听地址 |
 | `VELIN_GUACD_ADDR` | `127.0.0.1:4822` | RDP 使用的 guacd 地址 |
@@ -176,13 +180,13 @@ VelinWebSSH 默认读取运行目录中的 `.env`，同名系统环境变量优�
 | `VELIN_AI_MODEL` | 空 | AI Agent 模型名称 |
 | `VELIN_AI_API_KEY` | 空 | AI API Key |
 
-公网部署请使用 Caddy、Nginx 等反向代理提供 HTTPS；同时通过防火墙限制外部直接访问 `8377` 端口。配置内嵌页面时只填写明确的 `VELIN_EMBED_ORIGINS`，不要使用通配来源。反向代理必须覆盖而不是追加 `X-Real-IP`，并将代理网段写入 `VELIN_TRUSTED_PROXY_CIDRS`。guacd 没有认证能力，Compose 已将其限制在 `127.0.0.1:4822`，不要将该端口暴露到公网。Compose 会自动为 VelinWebSSH 和 guacd 共享 RDP 磁盘映射目录。
+公网部署请使用 Caddy、Nginx 等反向代理提供 HTTPS；同时通过防火墙限制外部直接访问 `8377` 端口。配置内嵌页面时只填写明确的 `VELIN_EMBED_ORIGINS`，不要使用通配来源。反向代理必须覆盖而不是追加 `X-Real-IP`，并将代理网段写入 `VELIN_TRUSTED_PROXY_CIDRS`。guacd 没有认证能力，Compose 已将其限制在 `127.0.0.1:4822`，不要将该端口暴露到公网。Compose 会自动为 Jeex Terminal 和 guacd 共享 RDP 磁盘映射目录。
 
 ### 内嵌 Tailscale
 
-管理员可在「设置 → 组网」中配置节点名称、控制面地址和 Auth Key，并通过服务状态开关启停。默认关闭；只有开启并保存后，VelinWebSSH 才会在当前进程中启动 `tsnet` 用户态网络。节点身份保存在 `data/tailscale`，升级和重启时必须保留。
+管理员可在「设置 → 组网」中配置节点名称、控制面地址和 Auth Key，并通过服务状态开关启停。默认关闭；只有开启并保存后，Jeex Terminal 才会在当前进程中启动 `tsnet` 用户态网络。节点身份保存在 `data/tailscale`，升级和重启时必须保留。
 
-启用后，在 VelinWebSSH 主机列表中直接填写 Tailnet IP 或 MagicDNS 名称；SSH、SFTP、RDP、Web 代理和端口转发的远端出站连接都会通过内嵌节点。VelinWebSSH 不安装 `tailscaled`、不创建系统 TUN，也不要求容器增加 `NET_ADMIN`。Auth Key 只保存在服务端加密数据中。
+启用后，在 Jeex Terminal 主机列表中直接填写 Tailnet IP 或 MagicDNS 名称；SSH、SFTP、RDP、Web 代理和端口转发的远端出站连接都会通过内嵌节点。Jeex Terminal 不安装 `tailscaled`、不创建系统 TUN，也不要求容器增加 `NET_ADMIN`。Auth Key 只保存在服务端加密数据中。
 
 ## 数据与备份
 

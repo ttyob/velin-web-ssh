@@ -18,6 +18,7 @@ const props = defineProps<{
   mobileAlt?: boolean;
   dockSessionID?: string;
   dockTarget?: HTMLElement;
+  dockResizing?: boolean;
 }>();
 const emit = defineEmits<{
   focus: [leafID: string];
@@ -253,6 +254,7 @@ defineExpose({
       :mobile-alt="mobileAlt"
       :dock-sessionID="dockSessionID"
       :dock-target="dockTarget"
+      :dock-resizing="dockResizing"
       @focus="(id) => emit('focus', id)"
       @context="(...args) => emit('context', ...args)"
       @close="(id) => emit('close', id)"
@@ -286,6 +288,7 @@ defineExpose({
       :mobile-alt="mobileAlt"
       :dock-sessionID="dockSessionID"
       :dock-target="dockTarget"
+      :dock-resizing="dockResizing"
       @focus="(id) => emit('focus', id)"
       @context="(...args) => emit('context', ...args)"
       @close="(id) => emit('close', id)"
@@ -318,6 +321,8 @@ defineExpose({
       :preferences="preferences"
       :visible="docked || (visible && !hiddenByMaximize)"
       :closable="!root && !docked"
+      :floating="docked"
+      :resize-suspended="docked && dockResizing"
       :mobile-ctrl="mobileCtrl"
       :mobile-alt="mobileAlt"
       @close="emit('close', node.id)"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrandLogo from '../components/BrandLogo.vue';
 import {
   computed,
   defineAsyncComponent,
@@ -11,6 +12,7 @@ import {
   watch,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { contextMenuPosition, contextMenuKey } from "../contextMenu";
 import { sessionLinkQuery } from "../sessionLink";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -20,6 +22,7 @@ import {
   Box,
   Bot,
   BrushCleaning,
+  ChevronDown,
   ChevronRight,
   ClipboardPaste,
   CircleCheck,
@@ -81,10 +84,13 @@ import {
   findTerminalTheme,
 } from "../themePresets";
 import {
+  nextSessionAttention,
   resolveTabAttention,
+  shouldFlashInactiveTab,
   type TabAttention,
   type TabAttentionKind,
   type TerminalAttentionEvent,
+  type TerminalAttentionInput,
   type TerminalAttentionNotice,
 } from "../terminalAttention";
 
@@ -193,12 +199,15 @@ type CodeWorkspaceHandle = { confirmClose: () => Promise<boolean>; focus: () => 
 const codeWorkspaceRefs = new Map<string, CodeWorkspaceHandle>();
 const codeFileManagerTabID = ref("");
 const codeTerminalTargets = shallowReactive<Record<string, HTMLElement | undefined>>({});
+const codeTerminalResizing = shallowReactive<Record<string, boolean>>({});
 const activeCodeTerminal = computed(() => {
   const id = activeCodeTabID.value, project = codeTabs[id], target = codeTerminalTargets[id];
-  return project && target && !locked.value ? { sessionID: project.sessionID, target } : undefined;
+  return project && target && !locked.value ? { sessionID: project.sessionID, target, resizing: codeTerminalResizing[id] || false } : undefined;
 });
 const conversationSessions = reactive<Record<string, boolean>>({});
 const sessionAttention = reactive<Record<string, TerminalAttentionNotice>>({});
+const agentTabAttention = reactive<Record<string, TerminalAttentionNotice>>({});
+const unseenEndedTabs = reactive<Record<string, boolean>>({});
 const pendingTerminalCommands = reactive<Record<string, string>>({});
 const connecting = ref<string>(),
   testing = ref<string>(),
@@ -249,8 +258,35 @@ const pinnedSessionIDs = ref<string[]>([]);
 const mobileCtrl = ref(false),
   mobileAlt = ref(false);
 const contextMenu = reactive({ open: false, x: 0, y: 0, leafID: "" });
-const tabContextMenu = reactive({ open: false, x: 0, y: 0, tabID: "" });
-const tabContextSession = computed(() => tabSession(tabContextMenu.tabID));
+const tabContextMenu = reactive({
+  open: false,
+  x: 0,
+  y: 0,
+  tabID: "",
+  kind: "terminal" as "terminal" | "code",
+});
+const tabContextSession = computed(() =>
+  tabContextMenu.kind === "terminal" ? tabSession(tabContextMenu.tabID) : undefined,
+);
+const tabContextHost = computed(() =>
+  tabContextMenu.kind === "terminal"
+    ? tabHost(tabContextMenu.tabID)
+    : codeTabs[tabContextMenu.tabID]?.host,
+);
+const editingTabID = ref("");
+const editingTabName = ref("");
+const editingTabSaving = ref(false);
+const tabRenameInput = ref<HTMLInputElement[] | HTMLInputElement | null>(null);
+const tabsScrollEl = ref<HTMLElement | null>(null);
+const tabsScrollState = reactive({ left: false, right: false, overflow: false });
+const tabsOverviewOpen = ref(false);
+const dragTab = reactive({
+  kind: "" as "" | "terminal" | "code",
+  id: "",
+  overID: "",
+  position: "before" as "before" | "after",
+});
+let tabsResizeObserver: ResizeObserver | null = null;
 const dockerContext = reactive({
   sessionID: "",
   checking: false,
@@ -338,27 +374,62 @@ const backgroundSessions = computed(() =>
     (s) => !visibleSessionIDs.value.has(s.id) && s.status !== "ended",
   ),
 );
-const currentPaneCount = computed(() =>
-  activeTree.value ? collectSessionIDs(activeTree.value).length : 0,
-);
 const tabIndicators = computed<Record<string, TabAttention>>(() => {
   const indicators: Record<string, TabAttention> = {};
   for (const tabID of layout.tabs) {
+    const items: TerminalAttentionInput[] = [];
+    const pending = pendingConnections[tabID];
+    if (pending?.stage === "failed") {
+      items.push({ name: pending.name, status: "unreachable" });
+    }
     const tree = layout.trees?.[tabID];
-    if (!tree) continue;
-    const indicator = resolveTabAttention(
-      collectSessionIDs(tree)
-        .map((id) => sessions.value.find((session) => session.id === id))
-        .filter(Boolean)
-        .map((session) => ({
-          name: session!.name,
-          status: session!.status,
-          notice: sessionAttention[session!.id],
-        })),
-    );
+    if (tree) {
+      for (const id of collectSessionIDs(tree)) {
+        const session = sessions.value.find((item) => item.id === id);
+        if (!session) continue;
+        items.push({
+          name: session.name,
+          status: session.status,
+          notice: sessionAttention[session.id],
+        });
+      }
+    }
+    if (agentOpen.value && agentTabID.value === tabID && agentTabAttention[tabID]) {
+      items.push({
+        name: tabTitle(tabID),
+        status: "attached",
+        notice: agentTabAttention[tabID],
+        source: "agent",
+      });
+    }
+    const indicator = resolveTabAttention(items);
     if (indicator) indicators[tabID] = indicator;
   }
   return indicators;
+});
+const tabAlertPriority: Record<TabAttentionKind, number> = {
+  required: 4,
+  bell: 3,
+  ended: 2,
+  settled: 1,
+};
+const tabFlashKinds = computed<Record<string, TabAttentionKind>>(() => {
+  const result: Record<string, TabAttentionKind> = {};
+  for (const tabID of layout.tabs) {
+    if (!activeCodeTabID.value && layout.active === tabID) continue;
+    const kind = shouldFlashInactiveTab(tabIndicators.value[tabID], {
+      endedUnseen: Boolean(unseenEndedTabs[tabID]),
+    });
+    if (kind) result[tabID] = kind;
+  }
+  return result;
+});
+const overviewAlertKind = computed<TabAttentionKind | undefined>(() => {
+  let best: TabAttentionKind | undefined;
+  for (const kind of Object.values(tabFlashKinds.value)) {
+    if (!best || tabAlertPriority[kind] > tabAlertPriority[best]) best = kind;
+  }
+  return best;
 });
 const activeWorkspaceSessions = computed(
   () =>
@@ -366,6 +437,26 @@ const activeWorkspaceSessions = computed(
       .map((id) => sessions.value.find((item) => item.id === id))
       .filter(Boolean) as TerminalSession[],
 );
+const activeSidebarHostID = computed(() => {
+  if (activeCodeTabID.value && codeTabs[activeCodeTabID.value]) {
+    return codeTabs[activeCodeTabID.value].host.id;
+  }
+  return layout.active ? tabHost(layout.active)?.id || "" : "";
+});
+const connectedHostIDs = computed(() => {
+  const ids = new Set<string>();
+  for (const session of sessions.value) {
+    if (session.hostID && session.status === "attached") {
+      ids.add(session.hostID);
+    }
+  }
+  for (const desktop of Object.values(desktopTabs)) {
+    if (desktop.host?.id && desktop.status === "connected") {
+      ids.add(desktop.host.id);
+    }
+  }
+  return ids;
+});
 
 function nodeID() {
   return (
@@ -412,6 +503,57 @@ function tabSession(tabID: string) {
       )
     : undefined;
 }
+function tabHost(tabID: string) {
+  const pending = pendingConnections[tabID]?.host;
+  if (pending) return pending;
+  const desktop = desktopTabs[tabID]?.host;
+  if (desktop) return desktop;
+  const session = tabSession(tabID);
+  return session ? sessionHost(session) : undefined;
+}
+function tabKind(tabID: string): "ssh" | "vnc" | "rdp" {
+  const protocol = tabHost(tabID)?.protocol;
+  if (protocol === "vnc" || protocol === "rdp") return protocol;
+  return "ssh";
+}
+function tabPaneCount(tabID: string) {
+  const tree = layout.trees?.[tabID];
+  return tree ? collectSessionIDs(tree).length : 0;
+}
+const allOpenTabs = computed<Array<{ kind: "terminal" | "code"; id: string }>>(() => [
+  ...layout.tabs.map((id) => ({ kind: "terminal" as const, id })),
+  ...codeTabOrder.value.map((id) => ({ kind: "code" as const, id })),
+]);
+const totalTabCount = computed(() => allOpenTabs.value.length);
+const tabContextIndex = computed(() =>
+  allOpenTabs.value.findIndex(
+    (item) => item.kind === tabContextMenu.kind && item.id === tabContextMenu.tabID,
+  ),
+);
+const tabContextOtherTabs = computed(() =>
+  allOpenTabs.value.filter(
+    (item) => !(item.kind === tabContextMenu.kind && item.id === tabContextMenu.tabID),
+  ),
+);
+const tabContextRightTabs = computed(() =>
+  tabContextIndex.value >= 0 ? allOpenTabs.value.slice(tabContextIndex.value + 1) : [],
+);
+const tabContextTitle = computed(() => {
+  if (tabContextMenu.kind === "code") {
+    const tab = codeTabs[tabContextMenu.tabID];
+    return tab ? tab.path.split("/").at(-1) || "/" : "代码编辑器";
+  }
+  return tabTitle(tabContextMenu.tabID);
+});
+const tabContextSubtitle = computed(() => {
+  if (tabContextMenu.kind === "code") {
+    const tab = codeTabs[tabContextMenu.tabID];
+    return tab ? `${tab.host.name} · ${tab.path}` : "";
+  }
+  const host = tabContextHost.value;
+  if (!host) return "";
+  return host.username ? `${host.username}@${host.address}` : host.address;
+});
 function tabTitle(tabID: string) {
   return pendingConnections[tabID]?.name || desktopTabs[tabID]?.host.name || tabSession(tabID)?.name || "已结束会话";
 }
@@ -422,21 +564,259 @@ function tabDescription(tabID: string) {
   return [session.name, host && `${host.name} · ${host.username}@${host.address}`, terminalTitles[session.id], "双击名称或右键重命名"]
     .filter(Boolean).join("\n");
 }
+function fitWorkspaceMenu(state: { x: number; y: number; open: boolean }, selector: string) {
+  if (!state.open) return;
+  const element = document.querySelector<HTMLElement>(selector);
+  if (!element) return;
+  Object.assign(state, contextMenuPosition(state, element));
+  element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+}
+function workspaceMenuKey(event: KeyboardEvent) { contextMenuKey(event, event.currentTarget as HTMLElement, () => { closeContextMenus(); activePaneTree()?.focus?.(); }); }
 function closeContextMenus() {
   contextMenu.open = false;
   tabContextMenu.open = false;
+  tabsOverviewOpen.value = false;
 }
-function openTabContext(event: MouseEvent, tabID: string) {
+function openTabContext(
+  event: MouseEvent,
+  tabID: string,
+  kind: "terminal" | "code" = "terminal",
+) {
   closeContextMenus();
+  tabContextMenu.kind = kind;
   tabContextMenu.tabID = tabID;
-  tabContextMenu.x = Math.max(6, Math.min(event.clientX, window.innerWidth - 216));
-  tabContextMenu.y = Math.max(6, Math.min(event.clientY, window.innerHeight - 80));
+  tabContextMenu.x = event.clientX; tabContextMenu.y = event.clientY;
   tabContextMenu.open = true;
+  void nextTick(() => fitWorkspaceMenu(tabContextMenu, '.tab-context-menu'));
+}
+function focusTabRenameInput() {
+  const target = Array.isArray(tabRenameInput.value)
+    ? tabRenameInput.value[0]
+    : tabRenameInput.value;
+  if (!target) return;
+  target.focus();
+  target.select();
 }
 function renameTabSession(tabID: string) {
   const session = tabSession(tabID);
   closeContextMenus();
-  if (session) void renameSession(session);
+  if (!session) return;
+  editingTabID.value = tabID;
+  editingTabName.value = session.name;
+  editingTabSaving.value = false;
+  void nextTick(focusTabRenameInput);
+}
+function cancelInlineTabRename() {
+  editingTabID.value = "";
+  editingTabName.value = "";
+  editingTabSaving.value = false;
+}
+async function commitInlineTabRename(tabID: string, fromBlur = false) {
+  if (editingTabID.value !== tabID || editingTabSaving.value) return;
+  const session = tabSession(tabID);
+  if (!session) {
+    cancelInlineTabRename();
+    return;
+  }
+  const name = editingTabName.value.trim();
+  if (!name || [...name].length > 80) {
+    ElMessage.warning("会话名称需为 1 到 80 个字符");
+    if (fromBlur) cancelInlineTabRename();
+    else void nextTick(focusTabRenameInput);
+    return;
+  }
+  if (name === session.name) {
+    cancelInlineTabRename();
+    return;
+  }
+  editingTabSaving.value = true;
+  try {
+    const saved = await api<TerminalSession>(`/api/sessions/${session.id}`, {
+      method: "PATCH",
+      body: json({ name }),
+    });
+    const current = sessions.value.find((item) => item.id === session.id);
+    if (current) {
+      current.name = saved.name;
+      current.updatedAt = saved.updatedAt;
+    }
+    ElMessage.success("会话名称已更新");
+  } catch (error) {
+    ElMessage.error(
+      error instanceof Error ? error.message : "保存会话名称失败，请重试",
+    );
+  } finally {
+    cancelInlineTabRename();
+  }
+}
+function onTabAuxClick(event: MouseEvent, tabID: string) {
+  if (event.button !== 1) return;
+  void closeTab(tabID);
+}
+function onCodeTabAuxClick(event: MouseEvent, id: string) {
+  if (event.button !== 1) return;
+  void closeCodeTab(id);
+}
+function onTabDragStart(
+  event: DragEvent,
+  kind: "terminal" | "code",
+  id: string,
+) {
+  if (editingTabID.value === id) {
+    event.preventDefault();
+    return;
+  }
+  closeContextMenus();
+  dragTab.kind = kind;
+  dragTab.id = id;
+  dragTab.overID = "";
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `${kind}:${id}`);
+  }
+}
+function onTabDragOver(
+  event: DragEvent,
+  kind: "terminal" | "code",
+  id: string,
+) {
+  if (dragTab.kind !== kind || !dragTab.id || dragTab.id === id) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  dragTab.overID = id;
+  dragTab.position =
+    event.clientX - rect.left < rect.width / 2 ? "before" : "after";
+}
+function onTabDrop(event: DragEvent, kind: "terminal" | "code", id: string) {
+  if (dragTab.kind !== kind || !dragTab.id || dragTab.id === id) {
+    clearTabDrag();
+    return;
+  }
+  event.preventDefault();
+  const list = kind === "terminal" ? [...layout.tabs] : [...codeTabOrder.value];
+  const fromIndex = list.indexOf(dragTab.id);
+  const targetIndex = list.indexOf(id);
+  if (fromIndex >= 0 && targetIndex >= 0 && fromIndex !== targetIndex) {
+    const [moved] = list.splice(fromIndex, 1);
+    const nextTarget = list.indexOf(id);
+    const insertAt = dragTab.position === "after" ? nextTarget + 1 : nextTarget;
+    list.splice(insertAt, 0, moved);
+    if (kind === "terminal") {
+      layout.tabs = list;
+      scheduleSave();
+    } else {
+      codeTabOrder.value = list;
+    }
+  }
+  clearTabDrag();
+}
+function clearTabDrag() {
+  dragTab.kind = "";
+  dragTab.id = "";
+  dragTab.overID = "";
+}
+function updateTabsScrollState() {
+  const el = tabsScrollEl.value;
+  if (!el) return;
+  const overflow = el.scrollWidth > el.clientWidth + 2;
+  tabsScrollState.overflow = overflow;
+  tabsScrollState.left = overflow && el.scrollLeft > 2;
+  tabsScrollState.right =
+    overflow && el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+}
+function onTabsWheel(event: WheelEvent) {
+  const el = tabsScrollEl.value;
+  if (!el || el.scrollWidth <= el.clientWidth + 1) return;
+  if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+    event.preventDefault();
+    el.scrollLeft += event.deltaY;
+    updateTabsScrollState();
+  }
+}
+function scrollActiveTabIntoView() {
+  const el = tabsScrollEl.value;
+  if (!el) return;
+  const active = el.querySelector<HTMLElement>(".terminal-tab.active");
+  active?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  updateTabsScrollState();
+}
+function toggleTabsOverview() {
+  const next = !tabsOverviewOpen.value;
+  closeContextMenus();
+  tabsOverviewOpen.value = next;
+}
+function duplicateContextTab() {
+  const host = tabContextHost.value;
+  closeContextMenus();
+  if (!host) return;
+  void connect(host);
+}
+function backgroundContextTab() {
+  const tabID = tabContextMenu.tabID;
+  closeContextMenus();
+  if (!tabID) return;
+  moveBackground(tabID);
+  ElMessage.info("会话已移到后台");
+}
+function returnContextCodeToTerminal() {
+  const id = tabContextMenu.tabID;
+  closeContextMenus();
+  if (id) returnToCodeTerminal(id);
+}
+async function closeTabsBatch(
+  items: Array<{ kind: "terminal" | "code"; id: string }>,
+) {
+  if (!items.length) return;
+  const terminalIDs = items
+    .filter((item) => item.kind === "terminal")
+    .map((item) => item.id);
+  const codeIDs = items
+    .filter((item) => item.kind === "code")
+    .map((item) => item.id);
+  if (terminalIDs.length === 1 && !codeIDs.length) {
+    await closeTab(terminalIDs[0]);
+    return;
+  }
+  const runningMap = new Map<string, TerminalSession>();
+  for (const tabID of terminalIDs) {
+    if (desktopTabs[tabID]) continue;
+    const tree = layout.trees?.[tabID];
+    if (!tree) continue;
+    for (const sid of collectSessionIDs(tree)) {
+      const session = sessions.value.find((item) => item.id === sid);
+      if (session && session.status !== "ended") runningMap.set(sid, session);
+    }
+  }
+  const running = [...runningMap.values()];
+  if (running.length) {
+    try {
+      await ElMessageBox.confirm(
+        `将关闭 ${terminalIDs.length} 个标签，终止将结束其中 ${running.length} 个运行中的远程会话及任务。`,
+        "批量关闭终端标签",
+        {
+          confirmButtonText: "全部终止并关闭",
+          cancelButtonText: "全部移到后台",
+          distinguishCancelAndClose: true,
+          type: "warning",
+        },
+      );
+      for (const tabID of terminalIDs) moveBackground(tabID);
+      await terminateClosedSessions(running);
+    } catch (action) {
+      if (action === "cancel") {
+        for (const tabID of terminalIDs) moveBackground(tabID);
+        ElMessage.info("已将相关会话移到后台");
+      } else {
+        return;
+      }
+    }
+  } else {
+    for (const tabID of terminalIDs) moveBackground(tabID);
+  }
+  for (const id of codeIDs) {
+    await closeCodeTab(id);
+  }
 }
 function renamePaneSession() {
   const tree = activeTree.value;
@@ -446,8 +826,25 @@ function renamePaneSession() {
 }
 function closeContextTab() {
   const tabID = tabContextMenu.tabID;
+  const kind = tabContextMenu.kind;
   closeContextMenus();
-  void closeTab(tabID);
+  if (kind === "code") void closeCodeTab(tabID);
+  else void closeTab(tabID);
+}
+function closeOtherContextTabs() {
+  const targets = [...tabContextOtherTabs.value];
+  closeContextMenus();
+  void closeTabsBatch(targets);
+}
+function closeRightContextTabs() {
+  const targets = [...tabContextRightTabs.value];
+  closeContextMenus();
+  void closeTabsBatch(targets);
+}
+function closeAllContextTabs() {
+  const targets = [...allOpenTabs.value];
+  closeContextMenus();
+  void closeTabsBatch(targets);
 }
 function tabStatus(tabID: string) {
   return pendingConnections[tabID] ? (pendingConnections[tabID].stage === "failed" ? "unreachable" : "creating") : desktopTabs[tabID]?.status || tabSession(tabID)?.status || "ended";
@@ -1051,14 +1448,8 @@ function openContext(event: MouseEvent, leafID: string) {
   dockerContext.conversation = Boolean(session && conversationSessions[session.id]);
   dockerContext.installed = undefined;
   dockerContext.checking = Boolean(session);
-  contextMenu.x = Math.max(
-    6,
-    Math.min(event.clientX, window.innerWidth - 216),
-  );
-  contextMenu.y = Math.max(
-    6,
-    Math.min(event.clientY, window.innerHeight - 560),
-  );
+  contextMenu.x = event.clientX; contextMenu.y = event.clientY;
+  void nextTick(() => fitWorkspaceMenu(contextMenu, '.pane-context-menu'));
   const request = ++dockerContextRequest;
   if (!session) {
     dockerContext.checking = false;
@@ -1283,6 +1674,30 @@ async function openPaneFiles() {
   fileManagerPath.value = current || host.initialDirectory || ".";
   fileManagerOpen.value = true;
 }
+async function openHostFiles(host: Host) {
+  if ((host.protocol || "ssh") !== "ssh")
+    return ElMessage.warning("SFTP 仅支持 SSH 主机");
+  if (!host.credentialID && !host.hasPassword)
+    return ElMessage.warning("请先为这台主机保存 SSH 密码或密钥");
+
+  const session = sessions.value.find(
+    (item) => item.hostID === host.id && item.status !== "ended",
+  );
+  let current = session ? sessionDirectories[session.id] : "";
+  if (session && !current) {
+    try {
+      current = (await api<{ path: string }>(
+        `/api/sessions/${session.id}/directory`,
+      )).path;
+      if (current.startsWith("/")) sessionDirectories[session.id] = current;
+    } catch {}
+  }
+  fileManagerHost.value = host;
+  fileManagerSessionID.value = session?.id || "";
+  fileManagerPath.value =
+    current?.startsWith("/") ? current : host.initialDirectory || ".";
+  fileManagerOpen.value = true;
+}
 function setCodeWorkspaceRef(id: string, value: unknown) {
   if (value) codeWorkspaceRefs.set(id, value as CodeWorkspaceHandle);
   else codeWorkspaceRefs.delete(id);
@@ -1313,6 +1728,7 @@ async function closeCodeTab(id: string) {
   if (workbench && !(await workbench.confirmClose())) return;
   const source = codeTabs[id]?.terminalTabID;
   delete codeTerminalTargets[id];
+  delete codeTerminalResizing[id];
   await nextTick();
   delete codeTabs[id];
   codeTabOrder.value = codeTabOrder.value.filter(tab => tab !== id);
@@ -1598,9 +2014,16 @@ function sendMobileKey(key: string, modified = false) {
 }
 function updateStatus(id: string, status: string, message?: string) {
   const session = sessions.value.find((item) => item.id === id);
+  const previousStatus = session?.status;
   if (session) {
     session.status = status as any;
     session.lastError = message || "";
+  }
+  if (status === "ended" && previousStatus && previousStatus !== "ended") {
+    const tabID = tabIDForSession(id);
+    if (tabID && (activeCodeTabID.value || layout.active !== tabID)) {
+      unseenEndedTabs[tabID] = true;
+    }
   }
   const command = pendingTerminalCommands[id];
   if (status === "attached" && command) {
@@ -1618,12 +2041,43 @@ function updateStatus(id: string, status: string, message?: string) {
     });
   }
 }
+function tabIDForSession(sessionID: string) {
+  for (const tabID of layout.tabs) {
+    const tree = layout.trees?.[tabID];
+    if (tree && collectSessionIDs(tree).includes(sessionID)) return tabID;
+  }
+  return "";
+}
+function isTerminalTabActive(tabID: string) {
+  return Boolean(tabID && !activeCodeTabID.value && layout.active === tabID);
+}
 function updateAttention(id: string, event: TerminalAttentionEvent) {
   if (event === "settled") for (const [tabID, project] of Object.entries(codeTabs)) if (project.sessionID === id) void codeWorkspaceRefs.get(tabID)?.refresh();
-  if (event === "clear") delete sessionAttention[id];
-  else sessionAttention[id] = event;
+  if (event !== "clear") {
+    const tabID = tabIDForSession(id);
+    if (tabID && isTerminalTabActive(tabID)) {
+      delete sessionAttention[id];
+      return;
+    }
+  }
+  const next = nextSessionAttention(sessionAttention[id], event);
+  if (next) sessionAttention[id] = next;
+  else delete sessionAttention[id];
+}
+function updateAgentAttention(event: TerminalAttentionEvent) {
+  const tabID = agentTabID.value;
+  if (!tabID) return;
+  if (event === "clear" || isTerminalTabActive(tabID)) {
+    delete agentTabAttention[tabID];
+    return;
+  }
+  const next = nextSessionAttention(agentTabAttention[tabID], event);
+  if (next) agentTabAttention[tabID] = next;
+  else delete agentTabAttention[tabID];
 }
 function clearTabAttention(tabID: string) {
+  delete agentTabAttention[tabID];
+  delete unseenEndedTabs[tabID];
   const tree = layout.trees?.[tabID];
   if (!tree) return;
   for (const id of collectSessionIDs(tree)) delete sessionAttention[id];
@@ -1687,9 +2141,12 @@ function webServiceSaved(service: WebService) {
   else webServices.value.push(service);
   webServices.value.sort((a, b) => a.name.localeCompare(b.name));
 }
-async function openSavedWebService(service: WebService) {
+async function openSavedWebService(
+  service: WebService,
+  existingPopup?: Window | null,
+) {
   if (openingWebService.value) return;
-  const popup = window.open("about:blank", "_blank");
+  const popup = existingPopup ?? window.open("about:blank", "_blank");
   if (!popup)
     return ElMessage.warning("浏览器阻止了新标签，请允许弹出窗口后重试");
   popup.opener = null;
@@ -1918,6 +2375,14 @@ function hostSaved(host: Host) {
   api<Credential[]>("/api/credentials")
     .then((items) => (credentials.value = items))
     .catch(() => {});
+}
+function hostSavedAndConnect(host: Host) {
+  connect(host);
+}
+function credentialCreated(credential: Credential) {
+  if (!credentials.value.some((item) => item.id === credential.id)) {
+    credentials.value.push(credential);
+  }
 }
 function normalizeHostGroup(value: string) {
   return value
@@ -2326,6 +2791,19 @@ function handleKeyboard(event: KeyboardEvent) {
     );
   }
 }
+watch(
+  [
+    () => layout.tabs.length,
+    () => codeTabOrder.value.length,
+    () => layout.active,
+    () => activeCodeTabID.value,
+    sidebarWidth,
+    sidebarOpen,
+  ],
+  () => {
+    void nextTick(scrollActiveTabIntoView);
+  },
+);
 onMounted(() => {
   try {
     const savedWidth = Number(localStorage.getItem("velin-sidebar-width"));
@@ -2339,12 +2817,19 @@ onMounted(() => {
   } catch {}
   if (!locked.value) load();
   window.addEventListener("keydown", handleKeyboard, true);
+  if (typeof ResizeObserver !== "undefined" && tabsScrollEl.value) {
+    tabsResizeObserver = new ResizeObserver(updateTabsScrollState);
+    tabsResizeObserver.observe(tabsScrollEl.value);
+  }
+  void nextTick(updateTabsScrollState);
 });
 onBeforeUnmount(() => {
   for (const controller of connectionControllers.values()) controller.abort();
   connectionControllers.clear();
   sidebarResizeCleanup?.();
   webServiceResizeCleanup?.();
+  tabsResizeObserver?.disconnect();
+  tabsResizeObserver = null;
   clearTimeout(saveTimer.value);
   window.removeEventListener("keydown", handleKeyboard, true);
 });
@@ -2359,11 +2844,11 @@ onBeforeUnmount(() => {
     >
       <button
         class="rail-brand"
-        title="VelinWebSSH"
+        title="Jeex Terminal"
         aria-label="切换主机面板"
         @click="sidebarOpen = !sidebarOpen"
       >
-        <TerminalSquare :size="18" />
+        <BrandLogo :size="26" />
       </button>
       <div class="rail-group">
         <button
@@ -2454,8 +2939,8 @@ onBeforeUnmount(() => {
     >
       <header class="sidebar-header">
         <div class="brand-mini">
-          <span class="brand-mark"><TerminalSquare :size="20" /></span
-          ><strong class="mobile-only">VelinWebSSH</strong
+          <span class="brand-mark"><BrandLogo :size="24" /></span
+          ><strong class="mobile-only">Jeex Terminal</strong
           ><strong class="desktop-only">{{
             sidePanel === "hosts" ? "主机" : "内网 Web"
           }}</strong>
@@ -2511,8 +2996,10 @@ onBeforeUnmount(() => {
           v-if="sidePanel === 'hosts'"
           :hosts="visibleHosts"
           :testing="testing"
+          :active-host-id="activeSidebarHostID"
+          :connected-host-ids="connectedHostIDs"
           @connect="connect"
-          @web="openWebProxy"
+          @files="openHostFiles"
           @test="testHost"
           @edit="editHost"
           @duplicate="duplicateHost"
@@ -2595,52 +3082,168 @@ onBeforeUnmount(() => {
         >
           <Menu :size="18" />
         </button>
-        <div class="tabs-scroll">
-          <transition-group name="tab"
-            ><div
-              v-for="id in layout.tabs"
-              :key="id"
-              class="terminal-tab"
-              :class="{ active: !activeCodeTabID && layout.active === id }"
-              @click="activate(id)"
-              @contextmenu.prevent.stop="openTabContext($event, id)"
-            >
-              <span
-                class="status-dot"
-                :class="statusColor(tabStatus(id))"
-              ></span
-              ><span class="tab-title" :title="tabDescription(id)"
-                @dblclick.stop="renameTabSession(id)">{{ tabTitle(id) }}</span
-              ><el-tooltip
-                v-if="tabIndicators[id]"
-                :content="tabIndicators[id].label"
-                placement="bottom"
+        <div
+          class="tabs-strip"
+          :class="{
+            'fade-left': tabsScrollState.left,
+            'fade-right': tabsScrollState.right,
+          }"
+        >
+          <div
+            ref="tabsScrollEl"
+            class="tabs-scroll"
+            @scroll="updateTabsScrollState"
+            @wheel="onTabsWheel"
+          >
+            <transition-group name="tab"
+              ><div
+                v-for="id in layout.tabs"
+                :key="id"
+                class="terminal-tab"
+                :class="{
+                  active: !activeCodeTabID && layout.active === id,
+                  editing: editingTabID === id,
+                  'tab-alert': Boolean(tabFlashKinds[id]),
+                  'tab-alert-required': tabFlashKinds[id] === 'required',
+                  'tab-alert-bell': tabFlashKinds[id] === 'bell',
+                  'tab-alert-settled': tabFlashKinds[id] === 'settled',
+                  'tab-alert-ended': tabFlashKinds[id] === 'ended',
+                  'is-dragging': dragTab.kind === 'terminal' && dragTab.id === id,
+                  'drag-over-before':
+                    dragTab.kind === 'terminal' &&
+                    dragTab.overID === id &&
+                    dragTab.position === 'before',
+                  'drag-over-after':
+                    dragTab.kind === 'terminal' &&
+                    dragTab.overID === id &&
+                    dragTab.position === 'after',
+                }"
+                :draggable="editingTabID !== id"
+                @click="activate(id)"
+                @mousedown.middle.prevent
+                @auxclick.prevent="onTabAuxClick($event, id)"
+                @contextmenu.prevent.stop="openTabContext($event, id, 'terminal')"
+                @dragstart="onTabDragStart($event, 'terminal', id)"
+                @dragover="onTabDragOver($event, 'terminal', id)"
+                @drop="onTabDrop($event, 'terminal', id)"
+                @dragend="clearTabDrag"
               >
                 <span
-                  class="tab-attention"
-                  :class="tabIndicators[id].kind"
-                  :aria-label="tabIndicators[id].label"
+                  v-if="tabFlashKinds[id]"
+                  class="tab-flash-bg"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  class="tab-kind-icon"
+                  :class="`kind-${tabKind(id)}`"
                 >
-                  <component
-                    :is="tabAttentionIcon(tabIndicators[id].kind)"
-                    :size="14"
-                  />
+                  <TerminalSquare v-if="tabKind(id) === 'ssh'" :size="13" />
+                  <Monitor v-else :size="13" />
+                  <span
+                    class="status-dot"
+                    :class="statusColor(tabStatus(id))"
+                  ></span>
                 </span>
-              </el-tooltip>
-              <button
-                class="tab-close danger"
-                :title="desktopTabs[id] ? '关闭远程桌面标签' : '关闭终端标签'"
-                @click.stop="closeTab(id)"
-              >
-                <X :size="13" />
-              </button></div></transition-group>
-          <div v-for="id in codeTabOrder" :key="id" class="terminal-tab code-workspace-tab" :class="{ active: activeCodeTabID === id }" :title="`${codeTabs[id].host.name} · ${codeTabs[id].path}`" @click="activateCodeTab(id)">
-            <CodeXml :size="14" /><span class="tab-title">{{ codeTabs[id].path.split('/').at(-1) || '/' }}</span><span v-if="codeTabs[id].dirty" class="code-tab-dirty" aria-label="存在未保存文件">•</span><button class="tab-close" title="关闭代码编辑器" aria-label="关闭代码编辑器" @click.stop="closeCodeTab(id)"><X :size="13" /></button>
+                <input
+                  v-if="editingTabID === id"
+                  ref="tabRenameInput"
+                  v-model="editingTabName"
+                  class="tab-rename-input"
+                  type="text"
+                  aria-label="重命名标签"
+                  @click.stop
+                  @dblclick.stop
+                  @mousedown.stop
+                  @keydown.enter.prevent.stop="commitInlineTabRename(id)"
+                  @keydown.esc.prevent.stop="cancelInlineTabRename"
+                  @blur="commitInlineTabRename(id, true)"
+                />
+                <span
+                  v-else
+                  class="tab-title"
+                  :title="tabDescription(id)"
+                  @dblclick.stop="renameTabSession(id)"
+                >{{ tabTitle(id) }}</span>
+                <span
+                  v-if="editingTabID !== id && tabPaneCount(id) > 1"
+                  class="tab-pane-badge"
+                  :title="`包含 ${tabPaneCount(id)} 个分屏窗格`"
+                >{{ tabPaneCount(id) }}</span>
+                <el-tooltip
+                  v-if="editingTabID !== id && tabIndicators[id]"
+                  :content="tabIndicators[id].label"
+                  placement="bottom"
+                >
+                  <span
+                    class="tab-attention"
+                    :class="tabIndicators[id].kind"
+                    :aria-label="tabIndicators[id].label"
+                  >
+                    <component
+                      :is="tabAttentionIcon(tabIndicators[id].kind)"
+                      :size="13"
+                    />
+                  </span>
+                </el-tooltip>
+                <button
+                  class="tab-close"
+                  :title="desktopTabs[id] ? '关闭远程桌面标签' : '关闭终端标签'"
+                  @click.stop="closeTab(id)"
+                >
+                  <X :size="13" />
+                </button></div></transition-group>
+            <div
+              v-for="id in codeTabOrder"
+              :key="id"
+              class="terminal-tab code-workspace-tab"
+              :class="{
+                active: activeCodeTabID === id,
+                'is-dragging': dragTab.kind === 'code' && dragTab.id === id,
+                'drag-over-before':
+                  dragTab.kind === 'code' &&
+                  dragTab.overID === id &&
+                  dragTab.position === 'before',
+                'drag-over-after':
+                  dragTab.kind === 'code' &&
+                  dragTab.overID === id &&
+                  dragTab.position === 'after',
+              }"
+              :title="`${codeTabs[id].host.name} · ${codeTabs[id].path}`"
+              draggable="true"
+              @click="activateCodeTab(id)"
+              @mousedown.middle.prevent
+              @auxclick.prevent="onCodeTabAuxClick($event, id)"
+              @contextmenu.prevent.stop="openTabContext($event, id, 'code')"
+              @dragstart="onTabDragStart($event, 'code', id)"
+              @dragover="onTabDragOver($event, 'code', id)"
+              @drop="onTabDrop($event, 'code', id)"
+              @dragend="clearTabDrag"
+            >
+              <span class="tab-kind-icon kind-code">
+                <CodeXml :size="13" />
+              </span>
+              <span class="tab-title">{{ codeTabs[id].path.split('/').at(-1) || '/' }}</span>
+              <span class="tab-close-slot" :class="{ dirty: codeTabs[id].dirty }">
+                <span
+                  v-if="codeTabs[id].dirty"
+                  class="code-tab-dirty"
+                  aria-label="存在未保存文件"
+                ></span>
+                <button
+                  class="tab-close"
+                  title="关闭代码编辑器"
+                  aria-label="关闭代码编辑器"
+                  @click.stop="closeCodeTab(id)"
+                >
+                  <X :size="13" />
+                </button>
+              </span>
+            </div>
           </div>
-          <button class="new-tab" title="新建终端" @click="openNewTabDialog">
-            <Plus :size="16" />
-          </button>
         </div>
+        <button class="new-tab" title="新建终端" aria-label="新建终端" @click="openNewTabDialog">
+          <Plus :size="15" />
+        </button>
         <button
           class="mobile-session-switch mobile-only"
           title="切换终端会话"
@@ -2650,9 +3253,106 @@ onBeforeUnmount(() => {
           <Monitor :size="15" /><span>{{ layout.tabs.length }}</span>
         </button>
         <div class="workspace-actions">
-          <span v-if="!activeCodeTabID && currentPaneCount > 1" class="pane-count"
-            ><Columns2 :size="14" />{{ currentPaneCount }}</span
+          <div
+            v-if="tabsScrollState.overflow || totalTabCount >= 4"
+            class="tabs-overview-anchor desktop-only"
+            @click.stop
           >
+            <button
+              class="tabs-overview-btn"
+              :class="{
+                active: tabsOverviewOpen,
+                'has-alert': Boolean(overviewAlertKind),
+              }"
+              title="全部打开的标签"
+              aria-label="全部打开的标签"
+              :aria-expanded="tabsOverviewOpen"
+              @click="toggleTabsOverview"
+            >
+              <span
+                v-if="overviewAlertKind"
+                class="tabs-overview-alert-dot"
+                :class="overviewAlertKind"
+                aria-hidden="true"
+              ></span>
+              <span>{{ totalTabCount }}</span>
+              <ChevronDown :size="13" />
+            </button>
+            <Transition name="context">
+              <nav
+                v-if="tabsOverviewOpen"
+                class="host-context-menu tabs-overview-menu"
+                role="menu"
+                aria-label="全部标签"
+              >
+                <div class="host-context-heading">
+                  <strong>已打开标签（{{ totalTabCount }}）</strong>
+                </div>
+                <div
+                  v-for="id in layout.tabs"
+                  :key="`ov-t-${id}`"
+                  class="tabs-overview-item"
+                  :class="{
+                    active: !activeCodeTabID && layout.active === id,
+                    'tab-alert': Boolean(tabFlashKinds[id]),
+                    'tab-alert-required': tabFlashKinds[id] === 'required',
+                    'tab-alert-bell': tabFlashKinds[id] === 'bell',
+                    'tab-alert-settled': tabFlashKinds[id] === 'settled',
+                    'tab-alert-ended': tabFlashKinds[id] === 'ended',
+                  }"
+                  role="menuitem"
+                  @click="activate(id); tabsOverviewOpen = false"
+                >
+                  <span class="tab-kind-icon" :class="`kind-${tabKind(id)}`">
+                    <TerminalSquare v-if="tabKind(id) === 'ssh'" :size="13" />
+                    <Monitor v-else :size="13" />
+                    <span class="status-dot" :class="statusColor(tabStatus(id))"></span>
+                  </span>
+                  <span class="tabs-overview-name">{{ tabTitle(id) }}</span>
+                  <span
+                    v-if="tabIndicators[id]"
+                    class="tab-attention"
+                    :class="tabIndicators[id].kind"
+                    :title="tabIndicators[id].label"
+                    :aria-label="tabIndicators[id].label"
+                  >
+                    <component :is="tabAttentionIcon(tabIndicators[id].kind)" :size="12" />
+                  </span>
+                  <span v-if="tabPaneCount(id) > 1" class="tab-pane-badge">{{ tabPaneCount(id) }}</span>
+                  <button
+                    class="tabs-overview-close"
+                    title="关闭标签"
+                    aria-label="关闭标签"
+                    @click.stop="closeTab(id)"
+                  >
+                    <X :size="12" />
+                  </button>
+                </div>
+                <div
+                  v-for="id in codeTabOrder"
+                  :key="`ov-c-${id}`"
+                  class="tabs-overview-item"
+                  :class="{ active: activeCodeTabID === id }"
+                  role="menuitem"
+                  @click="activateCodeTab(id); tabsOverviewOpen = false"
+                >
+                  <span class="tab-kind-icon kind-code">
+                    <CodeXml :size="13" />
+                  </span>
+                  <span class="tabs-overview-name">{{ codeTabs[id].path.split('/').at(-1) || '/' }}</span>
+                  <span v-if="codeTabs[id].dirty" class="code-tab-dirty" aria-label="存在未保存文件"></span>
+                  <button
+                    class="tabs-overview-close"
+                    title="关闭代码编辑器"
+                    aria-label="关闭代码编辑器"
+                    @click.stop="closeCodeTab(id)"
+                  >
+                    <X :size="12" />
+                  </button>
+                </div>
+              </nav>
+            </Transition>
+          </div>
           <button
             v-if="preferences.lockEnabled"
             class="icon-btn workspace-lock-button"
@@ -2717,6 +3417,7 @@ onBeforeUnmount(() => {
             :mobile-alt="mobileAlt"
             :dock-sessionID="activeCodeTerminal?.sessionID"
             :dock-target="activeCodeTerminal?.target"
+            :dock-resizing="activeCodeTerminal?.resizing"
             @focus="focusPane"
             @context="openContext"
             @close="terminatePane"
@@ -2737,7 +3438,7 @@ onBeforeUnmount(() => {
           >新增主机</el-button
         >
       </div>
-      <CodeWorkspace v-for="id in codeTabOrder" v-show="!locked && activeCodeTabID === id" :key="id" :ref="value => setCodeWorkspaceRef(id, value)" :host="codeTabs[id].host" :session-id="codeTabs[id].sessionID" :root-path="codeTabs[id].path" :visible="activeCodeTabID === id" :locked="locked" @dirty="codeTabs[id].dirty = $event" @terminal="returnToCodeTerminal(id)" @files="openCodeFiles(id, $event)" @dock="codeTerminalTargets[id] = $event" />
+      <CodeWorkspace v-for="id in codeTabOrder" v-show="!locked && activeCodeTabID === id" :key="id" :ref="value => setCodeWorkspaceRef(id, value)" :host="codeTabs[id].host" :session-id="codeTabs[id].sessionID" :root-path="codeTabs[id].path" :visible="activeCodeTabID === id" :locked="locked" @dirty="codeTabs[id].dirty = $event" @terminal="returnToCodeTerminal(id)" @files="openCodeFiles(id, $event)" @dock="(target, resizing) => { codeTerminalTargets[id] = target; codeTerminalResizing[id] = resizing; }" />
       <div
         v-if="!locked && !activeCodeTabID && activeTree && !desktopTabs[layout.active || '']"
         class="mobile-keybar"
@@ -2776,14 +3477,62 @@ onBeforeUnmount(() => {
       </div>
     </section>
     <Transition name="context">
-      <nav v-if="tabContextMenu.open" class="pane-context-menu tab-context-menu"
+      <nav
+        v-if="tabContextMenu.open"
+        class="host-context-menu tab-context-menu"
+        role="menu" @keydown="workspaceMenuKey"
         aria-label="标签操作"
-        :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }" @click.stop>
-        <button v-if="tabContextSession" @click="renameTabSession(tabContextMenu.tabID)">
-          <Pencil :size="16" /><span>重命名</span>
+        :style="{ left: `${tabContextMenu.x}px`, top: `${tabContextMenu.y}px` }"
+        @click.stop
+      >
+        <div class="host-context-heading">
+          <strong>{{ tabContextTitle }}</strong>
+          <small v-if="tabContextSubtitle">{{ tabContextSubtitle }}</small>
+        </div>
+        <template v-if="tabContextMenu.kind === 'terminal'">
+          <button
+            v-if="tabContextSession"
+            @click="renameTabSession(tabContextMenu.tabID)"
+          >
+            <Pencil :size="14" /><span>重命名</span>
+          </button>
+          <button
+            v-if="tabContextHost"
+            @click="duplicateContextTab"
+          >
+            <Copy :size="14" /><span>复制标签</span>
+          </button>
+          <button
+            v-if="tabContextSession && tabContextSession.status !== 'ended'"
+            @click="backgroundContextTab"
+          >
+            <Archive :size="14" /><span>移到后台</span>
+          </button>
+        </template>
+        <template v-else>
+          <button @click="returnContextCodeToTerminal">
+            <TerminalSquare :size="14" /><span>返回终端</span>
+          </button>
+        </template>
+        <div class="host-context-separator" role="separator" />
+        <button @click="closeContextTab">
+          <X :size="14" /><span>关闭标签</span>
         </button>
-        <button class="danger" @click="closeContextTab">
-          <X :size="16" /><span>关闭标签</span>
+        <button
+          :disabled="!tabContextOtherTabs.length"
+          @click="closeOtherContextTabs"
+        >
+          <X :size="14" /><span>关闭其他标签</span>
+        </button>
+        <button
+          :disabled="!tabContextRightTabs.length"
+          @click="closeRightContextTabs"
+        >
+          <X :size="14" /><span>关闭右侧标签</span>
+        </button>
+        <div class="host-context-separator" role="separator" />
+        <button class="danger" @click="closeAllContextTabs">
+          <X :size="14" /><span>关闭全部标签</span>
         </button>
       </nav>
     </Transition>
@@ -2791,6 +3540,7 @@ onBeforeUnmount(() => {
       ><nav
         v-if="contextMenu.open"
         class="pane-context-menu"
+        role="menu" @keydown="workspaceMenuKey"
         aria-label="终端操作"
         :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
         @click.stop
@@ -3081,7 +3831,11 @@ onBeforeUnmount(() => {
       :host="editingHost"
       :hosts="hosts"
       :credentials="credentials"
+      :testing="Boolean(editingHost && testing === editingHost.id)"
       @saved="hostSaved"
+      @save-and-connect="hostSavedAndConnect"
+      @credential-created="credentialCreated"
+      @test="testHost"
     />
     <TmuxInstallDialog
       :model-value="tmuxInstallOpen"
@@ -3118,11 +3872,13 @@ onBeforeUnmount(() => {
       :host="webProxyHost"
       :service="editingWebService"
       @saved="webServiceSaved"
+      @save-and-open="openSavedWebService"
     />
     <AgentDialog
       v-model="agentOpen"
       :host="agentHost"
       :suspended="Boolean(activeCodeTabID || (agentTabID && agentTabID !== layout.active))"
+      @attention="updateAgentAttention"
     />
     <SessionShareDialog
       v-model="sessionShareOpen"

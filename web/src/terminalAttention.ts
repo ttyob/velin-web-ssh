@@ -1,7 +1,7 @@
 export const terminalOutputSettleDelay = 5_000;
 
-export type TerminalAttentionEvent = "bell" | "settled" | "clear";
-export type TerminalAttentionNotice = Exclude<TerminalAttentionEvent, "clear">;
+export type TerminalAttentionEvent = "bell" | "settled" | "activity" | "clear";
+export type TerminalAttentionNotice = "bell" | "settled";
 export type TabAttentionKind =
   | "required"
   | "bell"
@@ -12,12 +12,35 @@ export interface TerminalAttentionInput {
   name: string;
   status: string;
   notice?: TerminalAttentionNotice;
+  source?: "terminal" | "agent";
 }
 
 export interface TabAttention {
   kind: TabAttentionKind;
   label: string;
   count: number;
+}
+
+export function nextSessionAttention(
+  current: TerminalAttentionNotice | undefined,
+  event: TerminalAttentionEvent,
+): TerminalAttentionNotice | undefined {
+  if (event === "clear") return undefined;
+  if (event === "activity") return current === "settled" ? undefined : current;
+  if (event === "bell") return "bell";
+  if (event === "settled") return current === "bell" ? "bell" : "settled";
+  return current;
+}
+
+export function shouldFlashInactiveTab(
+  attention: TabAttention | undefined,
+  options?: { endedUnseen?: boolean },
+): TabAttentionKind | undefined {
+  if (!attention) return undefined;
+  if (attention.kind === "ended") {
+    return options?.endedUnseen ? "ended" : undefined;
+  }
+  return attention.kind;
 }
 
 interface Candidate {
@@ -28,6 +51,21 @@ interface Candidate {
 
 function candidateFor(input: TerminalAttentionInput): Candidate | undefined {
   const prefix = input.name ? `${input.name}：` : "";
+  if (input.source === "agent") {
+    if (input.notice === "bell")
+      return {
+        kind: "bell",
+        label: `${prefix}Agent 等待确认执行命令`,
+        priority: 42,
+      };
+    if (input.notice === "settled")
+      return {
+        kind: "settled",
+        label: `${prefix}Agent 回复已完成，等待查看`,
+        priority: 22,
+      };
+    return undefined;
+  }
   if (input.status === "auth_required")
     return { kind: "required", label: `${prefix}等待 SSH 认证`, priority: 50 };
   if (input.status === "host_key_required")

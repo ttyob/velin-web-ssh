@@ -119,7 +119,7 @@ try {
   assert.equal(await page.locator('#workspace-unlock-pin').count(), 0)
   const coverText = await cover.innerText()
   assert(coverText.includes('工作区已锁定') && coverText.includes('点击屏幕解锁'))
-  assert(!coverText.includes('开发者') && !coverText.includes('velin') && !coverText.includes('远端任务'))
+  assert(!coverText.includes('开发者') && !coverText.includes('Jeex Terminal') && !coverText.includes('远端任务'))
   await shot('web-lock-screen')
   assert(await page.locator('.system-lock-prompt').evaluate(el =>
     el.getAnimations({ subtree: true }).filter(animation => animation.playState === 'running' && animation.effect.getTiming().iterations === Infinity).length >= 2

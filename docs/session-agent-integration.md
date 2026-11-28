@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-让 OpenClaw 等 MCP 客户端复用 Velin 已打开的 SSH/tmux 会话，查看最近输出、发送输入，并按授权创建、恢复、重命名、终止会话。入口放在原有设置中的“外部 Agent”，Web 与 Windows 共用。会话输出仍是终端内容，不把静默视为任务完成，也不假装获得 CLI 的结构化内部状态。
+让 OpenClaw 等 MCP 客户端复用 Jeex Terminal 已打开的 SSH/tmux 会话，查看最近输出、发送输入，并按授权创建、恢复、重命名、终止会话。入口放在原有设置中的“外部 Agent”，Web 与 Windows 共用。会话输出仍是终端内容，不把静默视为任务完成，也不假装获得 CLI 的结构化内部状态。
 
 模块独立实现为 `internal/sessionbridge/`、`internal/api/session_bridge.go`、`internal/terminal/bridge.go` 与 `web/src/features/session-bridge/`。API 只保留初始化、路由与 Bearer 传输的 CSRF 分流接入点；模块自行管理附加数据库表。删除这些目录、文件和接入点即可整块移除，不改变既有会话表和浏览器登录逻辑。
 

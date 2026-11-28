@@ -16,6 +16,7 @@ import "./styles-perf.css";
 import "./styles-motion.css";
 import "./styles-auth.css";
 import "./styles-icons.css";
+import "./styles-interactions.css";
 import { installScrollIdle } from "./scrollIdle";
 
 try {

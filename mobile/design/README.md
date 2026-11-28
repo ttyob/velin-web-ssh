@@ -48,7 +48,7 @@
 
 ## 复现与待验收
 
-依照 [构建说明](../README.md) 启动预览后运行 `node mobile/scripts/capture-design.mjs`。脚本检查搜索、草稿收展、选择、附件引用、全屏及 360 / 390 / 430 宽度和横屏布局，同时检查浏览器异常。图标源为 [icon.svg](icon.svg)，各平台使用同一终端图形。
+依照 [构建说明](../README.md) 启动预览后运行 `node mobile/scripts/capture-design.mjs`。脚本检查搜索、草稿收展、选择、附件引用、全屏及 360 / 390 / 430 宽度和横屏布局，同时检查浏览器异常。各平台统一使用 [Jeex Terminal 品牌原图](../../assets/brand/README.md)。
 
 `node mobile/scripts/test-management.mjs` 检查主机增改、命名会话、同名区分、反向代理增改 / 打开 / 删除和服务档案增改，并更新上述管理页面截图。预览操作只修改示例数据或当前浏览器的本地档案。
 

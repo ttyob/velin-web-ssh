@@ -83,7 +83,7 @@ Host broken
 }
 
 func TestVerifySecondFactor(t *testing.T) {
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: "VelinWebSSH", AccountName: "test"})
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Jeex Terminal", AccountName: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

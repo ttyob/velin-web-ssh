@@ -24,7 +24,7 @@ var (
 	ErrHostKeyUnknown     = errors.New("host key is not trusted")
 	ErrHostKeyChanged     = errors.New("host key changed")
 	ErrNotController      = errors.New("terminal is controlled by another client")
-	ErrNormalSessionEnded = errors.New("normal SSH sessions cannot be restored after the VelinWebSSH service restarts")
+	ErrNormalSessionEnded = errors.New("normal SSH sessions cannot be restored after the Jeex Terminal service restarts")
 )
 
 const (

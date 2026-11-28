@@ -170,4 +170,35 @@ func TestGitTextCompleteSnapshots(t *testing.T) {
 	if _, _, e := manager.GitText(context.Background(), "user", "host", repository, "too-large", "0"); e == nil {
 		t.Fatal("oversized file accepted")
 	}
+	for _, test := range []struct {
+		file   string
+		kind   string
+		exists bool
+	}{
+		{"binary", "binary", true}, {"too-large", "text", true}, {"missing", "text", false},
+	} {
+		info, err := manager.GitFileInfo(ctx, "user", "host", repository, test.file, "0")
+		if err != nil || info.Kind != test.kind || info.Exists != test.exists {
+			t.Fatalf("metadata %s: %+v %v", test.file, info, err)
+		}
+		if test.file == "too-large" && info.Size != (2<<20)+1 {
+			t.Fatalf("large blob size: %+v", info)
+		}
+	}
+	image := "\x89PNG\r\n\x1a\n" + strings.Repeat("\x00", 100)
+	if err := os.WriteFile(filepath.Join(repository, "preview.png"), []byte(image), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "preview.png")
+	info, err := manager.GitFileInfo(ctx, "user", "host", repository, "preview.png", "0")
+	if err != nil || info.Kind != "image" {
+		t.Fatalf("image metadata: %+v %v", info, err)
+	}
+	gotImage, mime, err := manager.GitPreviewImage(ctx, "user", "host", repository, "preview.png", "0")
+	if err != nil || mime != "image/png" || gotImage != image {
+		t.Fatalf("image bytes altered: %s %v", mime, err)
+	}
+	if _, _, err := manager.GitPreviewImage(ctx, "user", "host", repository, "binary", "0"); err == nil {
+		t.Fatal("binary served as image")
+	}
 }

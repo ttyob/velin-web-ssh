@@ -6,7 +6,7 @@ IMAGE_REPOSITORY="ghcr.io/ttyob/velin-web-ssh"
 VERSION="${VELIN_VERSION:-latest}"
 
 if [ "$(uname -s)" != "Linux" ]; then
-  echo "VelinWebSSH 快速安装目前仅支持 Linux。" >&2
+  echo "Jeex Terminal 快速安装目前仅支持 Linux。" >&2
   exit 1
 fi
 
@@ -77,6 +77,7 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
   umask 077
   {
     echo "VELIN_IMAGE=${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+    echo "VELIN_INSTALL_DIR=${INSTALL_DIR}"
     echo "VELIN_ADMIN_USER=${VELIN_ADMIN_USER:-admin}"
     echo "VELIN_ADMIN_PASSWORD=${ADMIN_PASSWORD}"
     echo "VELIN_ADDR=${VELIN_ADDR:-0.0.0.0:8377}"
@@ -92,6 +93,9 @@ else
   if grep -q '^VELIN_IMAGE=ghcr.io/ttyob/velinwebssh:' "$INSTALL_DIR/.env"; then
     sed -i 's#^VELIN_IMAGE=ghcr.io/ttyob/velinwebssh:#VELIN_IMAGE=ghcr.io/ttyob/velin-web-ssh:#' "$INSTALL_DIR/.env"
   fi
+  if ! grep -q '^VELIN_INSTALL_DIR=' "$INSTALL_DIR/.env"; then
+    printf '\nVELIN_INSTALL_DIR=%s\n' "$INSTALL_DIR" >> "$INSTALL_DIR/.env"
+  fi
 fi
 
 cd "$INSTALL_DIR"
@@ -105,7 +109,7 @@ until $DOCKER compose exec -T velin sh -c \
   'port=${VELIN_ADDR##*:}; wget -q -O - "http://127.0.0.1:${port}/api/health/ready"' >/dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 30 ]; then
-    echo "VelinWebSSH 未能在预期时间内启动，请检查：cd $INSTALL_DIR && $DOCKER compose logs" >&2
+    echo "Jeex Terminal 未能在预期时间内启动，请检查：cd $INSTALL_DIR && $DOCKER compose logs" >&2
     exit 1
   fi
   sleep 2
@@ -123,7 +127,7 @@ fi ;;
 esac
 
 echo
-echo "VelinWebSSH 已安装完成"
+echo "Jeex Terminal 已安装完成"
 echo "访问地址: http://${HOST_IP}:${SERVICE_PORT}"
 echo "安装目录: ${INSTALL_DIR}"
 if [ "$PASSWORD_CREATED" = true ]; then

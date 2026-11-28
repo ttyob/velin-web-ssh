@@ -2,6 +2,7 @@ import { api, json } from "./api";
 import { parseGitBranches, parseGitStatus } from "./git";
 import { truncateGitAIContent } from "./gitAI";
 import type { AgentStatus } from "./types";
+import type { DiffFileInfo } from "./codeDiff";
 
 export function shellQuote(value: string) { return `'${value.replace(/'/g, `'\\''`)}'`; }
 
@@ -38,6 +39,8 @@ export function createRemoteGit(hostID: string) {
       return parseGitStatus(output);
     },
     blob: (repository: string, path: string, revision: "HEAD" | "0") => api<{ content: string; exists: boolean }>(`${base}/git-text?${new URLSearchParams({ repository, path, revision })}`),
+    fileInfo: (repository: string, path: string, revision: "HEAD" | "0") => api<DiffFileInfo>(`${base}/git-text?${new URLSearchParams({ repository, path, revision, mode: "info" })}`),
+    imageURL: (repository: string, path: string, revision: "HEAD" | "0") => `${base}/git-text?${new URLSearchParams({ repository, path, revision, mode: "image" })}`,
     stage: (root: string, path?: string) => command(root, path ? `add -- ${shellQuote(path)}` : "add -A"),
     async unstage(root: string, path?: string) {
       const spec = path ? shellQuote(path) : ".";
@@ -50,6 +53,10 @@ export function createRemoteGit(hostID: string) {
     branches: async (root: string) => parseGitBranches(await command(root, "for-each-ref --format='%(HEAD)%09%(refname)%09%(objectname:short)%09%(upstream:short)%09%(upstream:track)%09%(subject)' refs/heads refs/remotes")),
     switchBranch: (root: string, name: string) => command(root, `switch -- ${shellQuote(name)}`),
     switchRemoteBranch: (root: string, name: string) => command(root, `switch --track ${shellQuote(name)}`),
+    fetch: (root: string, upstream?: string) => {
+      const remote = upstream?.split("/", 1)[0];
+      return command(root, `fetch --quiet${remote ? ` ${shellQuote(remote)}` : ""}`);
+    },
     pull: (root: string) => command(root, "pull --ff-only"),
     push: (root: string) => command(root, "push"),
   };

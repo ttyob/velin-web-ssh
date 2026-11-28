@@ -17,14 +17,15 @@ class AuthBrand extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      const SoftBadge(Icons.terminal_rounded, size: 46),
+      Image.asset('assets/brand/logo-white.png', width: 46, height: 46,
+          fit: BoxFit.contain, excludeFromSemantics: true),
       const SizedBox(width: 12),
       Expanded(
         child: ShaderMask(
           shaderCallback: (r) =>
               LinearGradient(colors: [V.accent, V.sky]).createShader(r),
           child: const Text(
-            'velin',
+            'Jeex Terminal',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(

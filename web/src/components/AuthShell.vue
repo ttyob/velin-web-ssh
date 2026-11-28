@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { TerminalSquare } from "@lucide/vue";
+import BrandLogo from './BrandLogo.vue';
 
 defineProps<{ title: string; subtitle?: string }>();
 </script>
@@ -11,8 +11,8 @@ defineProps<{ title: string; subtitle?: string }>();
       <div class="auth-panel">
         <header class="auth-heading">
           <div class="auth-brand">
-            <TerminalSquare class="auth-brand-mark" :size="23" aria-hidden="true" />
-            <span class="auth-wordmark">velin</span>
+            <BrandLogo class="auth-brand-mark" :size="30" tone="white" />
+            <span class="auth-wordmark">Jeex Terminal</span>
           </div>
           <h1 id="auth-title">{{ title }}</h1>
         </header>

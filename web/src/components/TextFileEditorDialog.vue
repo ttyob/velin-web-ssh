@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import OperationFeedback from "./OperationFeedback.vue";
+import { useDialogReturnFocus } from "../composables/useDialogReturnFocus";
 import { basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -25,6 +27,8 @@ const emit = defineEmits<{
   saved: [];
 }>();
 
+const { restoreFocus } = useDialogReturnFocus(() => props.modelValue);
+const fileError = ref(""), saveError = ref("");
 const editorElement = ref<HTMLElement>();
 const loading = ref(false);
 const saving = ref(false);
@@ -60,7 +64,7 @@ function destroyEditor() {
 async function loadFile() {
   if (!props.host || !props.file || !editorElement.value) return;
   destroyEditor();
-  loading.value = true;
+  loading.value = true; fileError.value = ""; saveError.value = "";
   try {
     const session = props.sessionId
       ? `&session=${encodeURIComponent(props.sessionId)}`
@@ -83,6 +87,7 @@ async function loadFile() {
         doc: result.content,
         extensions: [
           basicSetup,
+          EditorState.lineSeparator.of(result.content.includes("\r\n") ? "\r\n" : "\n"),
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
           codeLanguage(props.file.path).extension,
           workbenchEditorTheme,
@@ -90,7 +95,7 @@ async function loadFile() {
           EditorView.contentAttributes.of({ "aria-label": `编辑 ${props.file.path}` }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
-              markdownContent.value = update.state.doc.toString();
+              markdownContent.value = update.state.sliceDoc();
               dirty.value = markdownContent.value !== originalContent;
               byteSize.value = new TextEncoder().encode(markdownContent.value).length;
             }
@@ -101,15 +106,15 @@ async function loadFile() {
     ready.value = true;
     editor.focus();
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "文本文件读取失败");
+    fileError.value = error instanceof Error ? error.message : "文本文件读取失败";
   } finally {
     loading.value = false;
   }
 }
 
 async function saveFile() {
-  if (!props.host || !props.file || !editor || !ready.value || !dirty.value) return;
-  const content = editor.state.doc.toString();
+  if (!props.host || !props.file || !editor || !ready.value || !dirty.value || saving.value) return;
+  const content = editor.state.sliceDoc();
   let allowEmpty = false;
   if (!content.length && originalContent.length) {
     try {
@@ -123,7 +128,7 @@ async function saveFile() {
       return;
     }
   }
-  saving.value = true;
+  saving.value = true; saveError.value = "";
   try {
     const session = props.sessionId
       ? `&session=${encodeURIComponent(props.sessionId)}`
@@ -137,21 +142,21 @@ async function saveFile() {
           "If-Match": `"${version.value}"`,
           ...(allowEmpty ? { "X-Velin-Allow-Empty": "true" } : {}),
         },
-        body: content,
+        body: new Blob([content], { type: "text/plain; charset=utf-8" }),
       },
     );
     originalContent = content;
-    markdownContent.value = content;
+    markdownContent.value = editor.state.sliceDoc();
     version.value = result.version;
-    byteSize.value = result.bytes;
-    dirty.value = false;
+    byteSize.value = new TextEncoder().encode(markdownContent.value).length;
+    dirty.value = markdownContent.value !== originalContent;
     ElMessage.success("文件已安全保存");
     emit("saved");
   } catch (error) {
     if (error instanceof ApiError && error.status === 409) {
-      ElMessage.error("远程文件已经变化，未覆盖原文件。请关闭并重新打开后合并修改");
+      saveError.value = "远程文件已经变化，未覆盖原文件。请先复制保留当前修改，再重新读取远程版本进行合并。";
     } else {
-      ElMessage.error(error instanceof Error ? error.message : "文件保存失败");
+      saveError.value = error instanceof Error ? error.message : "文件保存失败";
     }
   } finally {
     saving.value = false;
@@ -159,11 +164,12 @@ async function saveFile() {
 }
 
 async function confirmClose() {
+  if (saving.value) { ElMessage.info("文件正在保存，请稍后关闭"); return false; }
 	if (dirty.value) {
 		try {
       await ElMessageBox.confirm("尚有未保存的修改，确定关闭？", "放弃修改", {
         type: "warning",
-        confirmButtonText: "放弃修改",
+        confirmButtonText: "放弃修改", closeOnClickModal: false,
       });
 		} catch {
 			return false;
@@ -198,7 +204,7 @@ onBeforeUnmount(destroyEditor);
 <template>
   <el-dialog
     :model-value="modelValue"
-    class="text-editor-dialog"
+    class="text-editor-dialog" @close-auto-focus="restoreFocus"
     width="min(900px, calc(100vw - 24px))"
     append-to-body
     :close-on-click-modal="false"
@@ -217,6 +223,7 @@ onBeforeUnmount(destroyEditor);
         <el-radio-button label="preview"><Eye :size="14" /> 预览</el-radio-button>
       </el-radio-group>
     </div>
+    <OperationFeedback :pending="saving ? '正在保存远程文件…' : undefined" :error="fileError || saveError" :retry-label="fileError ? '重新读取' : '重试保存'" @retry="fileError ? loadFile() : saveFile()" @dismiss="fileError = ''; saveError = ''" />
     <div v-loading="loading" class="text-editor-shell">
       <div
         ref="editorElement"

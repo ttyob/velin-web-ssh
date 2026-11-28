@@ -1,6 +1,11 @@
 <div align="center">
 
-# VelinWebSSH
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo-white.png">
+  <img src="assets/brand/logo-black.png" width="100" alt="Jeex Terminal">
+</picture>
+
+# Jeex Terminal
 
 **自托管的 SSH 与远程桌面工作区**
 
@@ -14,7 +19,7 @@
 
 </div>
 
-![VelinWebSSH 实际运行界面：主机管理、SSH 分屏终端与项目测试](.github/assets/velin-workspace.png)
+![Jeex Terminal 实际运行界面：主机管理、SSH 分屏终端与项目测试](.github/assets/velin-workspace.png)
 
 <p align="center"><sub>真实运行截图 · SSH 连接与分屏终端</sub></p>
 
@@ -41,7 +46,9 @@ curl -fsSL https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/install.sh
 
 安装完成后会显示访问地址和初始管理员账号、密码。默认端口 **8377**，首次登录需修改密码。
 
-升级（默认 root 安装目录）：
+管理员可在「设置 → 版本更新」中检查并一键升级。Docker 安装版和 Windows 桌面版支持应用内更新；Windows 会校验下载文件并在启动失败时恢复旧程序。首次升级到包含更新器的 Windows 版本仍需手动下载安装。飞牛 fnOS 请通过应用中心升级 `.fpk`。
+
+也可以使用命令升级（默认 root 安装目录）：
 
 ```bash
 /opt/velin/update.sh

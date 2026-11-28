@@ -5,13 +5,26 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 INSTALL_DIR="${VELIN_INSTALL_DIR:-$SCRIPT_DIR}"
 
 if [ ! -f "$INSTALL_DIR/compose.yaml" ] || [ ! -f "$INSTALL_DIR/.env" ]; then
-  echo "未在 ${INSTALL_DIR} 找到 VelinWebSSH，请先运行 install.sh。" >&2
+  echo "未在 ${INSTALL_DIR} 找到 Jeex Terminal，请先运行 install.sh。" >&2
   exit 1
 fi
 
 if grep -q '^VELIN_IMAGE=ghcr.io/ttyob/velinwebssh:' "$INSTALL_DIR/.env"; then
   sed -i 's#^VELIN_IMAGE=ghcr.io/ttyob/velinwebssh:#VELIN_IMAGE=ghcr.io/ttyob/velin-web-ssh:#' "$INSTALL_DIR/.env"
 fi
+if ! grep -q '^VELIN_INSTALL_DIR=' "$INSTALL_DIR/.env"; then
+  printf '\nVELIN_INSTALL_DIR=%s\n' "$INSTALL_DIR" >> "$INSTALL_DIR/.env"
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/compose.release.yaml" -o "$INSTALL_DIR/compose.yaml.tmp"
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO "$INSTALL_DIR/compose.yaml.tmp" "https://raw.githubusercontent.com/ttyob/velin-web-ssh/main/compose.release.yaml"
+else
+  echo "需要 curl 或 wget 下载更新配置。" >&2
+  exit 1
+fi
+mv "$INSTALL_DIR/compose.yaml.tmp" "$INSTALL_DIR/compose.yaml"
 
 DOCKER="docker"
 if ! docker info >/dev/null 2>&1; then
@@ -26,4 +39,4 @@ fi
 cd "$INSTALL_DIR"
 $DOCKER compose pull
 $DOCKER compose up -d --remove-orphans
-echo "VelinWebSSH 已更新：$($DOCKER compose ps --format json | tr '\n' ' ')"
+echo "Jeex Terminal 已更新：$($DOCKER compose ps --format json | tr '\n' ' ')"

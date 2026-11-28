@@ -1528,7 +1528,7 @@ func (a *API) saveWebService(w http.ResponseWriter, r *http.Request) {
 		value.ListenPort = 0
 	} else {
 		if value.ListenPort == configuredListenPort(a.cfg.Addr) {
-			writeError(w, http.StatusBadRequest, "invalid_web_service_port", "主机端口不能与 VelinWebSSH HTTP 端口相同")
+			writeError(w, http.StatusBadRequest, "invalid_web_service_port", "主机端口不能与 Jeex Terminal HTTP 端口相同")
 			return
 		}
 		if err := a.webProxies.checkHostPort(value.ID, value.ListenPort); err != nil {
@@ -1720,7 +1720,7 @@ func (a *API) hostPortWebServiceHandler(userID, serviceID string) http.Handler {
 		authTokenHash, authorized := a.webProxies.hostPortAuthorization(accessToken, userID, serviceID, activate)
 		user, locked, authErr := a.store.UserByTokenState(authTokenHash)
 		if !authorized || authErr != nil || user.Disabled || user.ID != userID {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "请先从 VelinWebSSH 打开此内网 Web")
+			writeError(w, http.StatusUnauthorized, "unauthorized", "请先从 Jeex Terminal 打开此内网 Web")
 			return
 		}
 		if locked {
@@ -1777,7 +1777,7 @@ func (a *API) restoreHostPortWebServices() {
 	}
 	for _, value := range services {
 		if value.ListenPort == configuredListenPort(a.cfg.Addr) {
-			slog.Error("restore host-port web service", "service_id", value.ID, "port", value.ListenPort, "error", "port conflicts with VelinWebSSH HTTP listener")
+			slog.Error("restore host-port web service", "service_id", value.ID, "port", value.ListenPort, "error", "port conflicts with Jeex Terminal HTTP listener")
 			continue
 		}
 		if err = a.webProxies.setHostPort(value.ID, value.ListenPort, a.hostPortWebServiceHandler(value.UserID, value.ID)); err != nil {

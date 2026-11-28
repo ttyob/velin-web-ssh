@@ -268,6 +268,7 @@ func (a *API) Router() http.Handler {
 			r.Put("/api/admin/tailscale", a.saveTailscale)
 			r.Get("/api/admin/stats", a.stats)
 			r.Get("/api/admin/metrics", a.metrics)
+			r.Post("/api/admin/system/update", a.startUpdate)
 			r.Post("/api/admin/backup", a.backup)
 			r.Get("/api/admin/backups", a.backups)
 			r.Post("/api/admin/backups/upload", a.uploadBackup)
@@ -768,7 +769,7 @@ func (a *API) setupTOTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "totp_already_enabled", "双因素认证已启用，请先验证并关闭现有设置")
 		return
 	}
-	key, err := totp.Generate(totp.GenerateOpts{Issuer: "VelinWebSSH", AccountName: u.Username})
+	key, err := totp.Generate(totp.GenerateOpts{Issuer: "Jeex Terminal", AccountName: u.Username})
 	if err != nil {
 		writeError(w, 500, "totp_setup_failed", "无法生成 TOTP 密钥")
 		return
@@ -1605,7 +1606,7 @@ func (a *API) exportData(w http.ResponseWriter, r *http.Request) {
 	for i := range webServices {
 		webServices[i].UserID = ""
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="velin-export.json"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="jeex-terminal-export.json"`)
 	writeJSON(w, 200, map[string]any{"format": "velin-export", "version": 1, "exportedAt": time.Now().UTC(), "hosts": hosts, "preferences": preferences, "snippets": snippets, "webServices": webServices})
 }
 
@@ -2416,7 +2417,7 @@ func (a *API) staticHandler() http.Handler {
 			http.ServeFileFS(w, r, dist, "index.html")
 			return
 		}
-		http.Error(w, "VelinWebSSH frontend has not been built", http.StatusServiceUnavailable)
+		http.Error(w, "Jeex Terminal frontend has not been built", http.StatusServiceUnavailable)
 	})
 }
 

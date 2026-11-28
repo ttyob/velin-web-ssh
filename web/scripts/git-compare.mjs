@@ -60,12 +60,13 @@ createApp({render:()=>h(Dialog,{modelValue:open.value,'onUpdate:modelValue':v=>o
       else if (url.pathname.endsWith('/agent/git-text')) {
         const revision = url.searchParams.get('revision'), spec = revision === 'HEAD' ? `HEAD:${file}` : `:${revision}:${file}`
         try { body = { content: git('show', spec), exists: true } } catch { body = { content: '', exists: false } }
+        if (url.searchParams.get('mode') === 'info') body = { exists: body.exists, size: Buffer.byteLength(body.content), kind: 'text' }
       } else if (url.pathname.includes('/sftp/')) {
         working = await readFile(join(repo, file), 'utf8')
         if (request.method() === 'PUT') {
           if (request.headers()['if-match'] !== `"${digest(working)}"`) { status = 409; body = { message: '远程文件已被其他操作修改' } }
           else { working = request.postData(); await writeFile(join(repo, file), working); body = { version: digest(working), bytes: Buffer.byteLength(working) } }
-        } else body = { content: working, version: digest(working) }
+        } else body = url.searchParams.get('mode') === 'info' ? { exists: true, size: Buffer.byteLength(working), kind: 'text' } : { content: working, version: digest(working) }
       } else if (url.pathname.endsWith('/agent/command')) { git('add', '--', file); body = { success: true, output: '' } }
       else throw new Error(url.pathname)
     } catch (error) { status = 500; body = { message: error.message } }
@@ -127,10 +128,28 @@ createApp({render:()=>h(Dialog,{modelValue:open.value,'onUpdate:modelValue':v=>o
   await page.waitForFunction(() => window.compareTest.saved() === 2)
   assert.equal(git('ls-files', '-u'), ''); assert.equal(git('show', `:${file}`), expected)
   await page.evaluate(() => window.compareTest.compare())
-  await page.locator('.git-full-compare-dialog .cm-mergeView').waitFor()
+  await page.locator('.code-diff-dialog .cm-mergeView').waitFor()
+  assert.equal(await page.getByRole('dialog', { name: `文件变更对比 · ${file}`, exact: true }).count(), 1)
+  assert.equal(await page.locator('.git-full-compare-dialog').count(), 0)
+  assert.equal(await page.locator('.code-diff-dialog .el-dialog__footer').count(), 0)
+  assert.equal(await page.locator('.code-diff-dialog .el-dialog__body').evaluate(el => getComputedStyle(el).padding), '0px')
   assert.equal(await page.evaluate(() => window.compareTest.readonly()), expected)
-  assert.equal(await page.locator('.git-full-compare-dialog .cm-content[contenteditable="true"]').count(), 0)
-  assert(await page.locator('.git-full-compare-dialog .cm-mergeView').evaluate(el => el.scrollHeight > el.clientHeight * 2))
+  assert.equal(await page.locator('.code-diff-dialog .cm-content[contenteditable="true"]').count(), 0)
+  assert(await page.locator('.code-diff-dialog .cm-collapsedLines').count() > 0)
+  await page.getByRole('button', { name: '折叠未修改代码', exact: true }).click()
+  assert(await page.locator('.code-diff-dialog .cm-mergeView').evaluate(el => el.scrollHeight > el.clientHeight * 2))
+  assert.equal(await page.locator('.code-diff-dialog .cm-changedText').count(), 0)
+  const diffHorizontal = page.getByLabel('代码横向滚动', { exact: true })
+  await diffHorizontal.waitFor()
+  const dr = await diffHorizontal.boundingBox()
+  await page.mouse.move(dr.x + 30, dr.y + dr.height / 2); await page.mouse.down(); await page.mouse.move(dr.x + 500, dr.y + dr.height / 2, { steps: 12 }); await page.mouse.up()
+  await page.waitForFunction(() => [...document.querySelectorAll('.cm-mergeViewEditor .cm-scroller')].every(el => el.scrollLeft > 100))
+  await page.locator('.cm-mergeView').evaluate(el => { el.scrollTop = 2000 })
+  await page.waitForFunction(() => document.querySelector('.cm-mergeView').scrollTop > 1500)
+  assert(await diffHorizontal.isVisible())
+  assert(Number(await diffHorizontal.getAttribute('aria-valuenow')) > 100)
+  await diffHorizontal.focus(); await page.keyboard.press('Home')
+  await page.locator('.cm-mergeView').evaluate(el => { el.scrollTop = 0 })
   await page.screenshot({ path: join(shots, 'two-pane.png') })
   assert.deepEqual(errors, [])
   console.log('PASS: real Git conflicts; left/right/both; edit outside conflicts and undo; full save/stage; concurrent write protection; global scrollbar dragging; shared read-only comparison dialog')

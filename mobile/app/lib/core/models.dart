@@ -144,7 +144,7 @@ Uri serviceURI(String value) {
 String shellQuote(String text) => "'${text.replaceAll("'", "'\\''")}'";
 
 final demoSessions = [
-  RemoteSession(id: 'demo-api', hostID: 'demo-host', name: 'Velin · 移动端开发'),
+  RemoteSession(id: 'demo-api', hostID: 'demo-host', name: 'Jeex Terminal · 移动端开发'),
   RemoteSession(id: 'demo-ui', hostID: 'demo-host', name: '控制台界面优化'),
   RemoteSession(id: 'demo-docs', hostID: 'demo-host', name: '文档与发布'),
   RemoteSession(id: 'demo-integration', hostID: 'demo-host', name: 'API 联调'),

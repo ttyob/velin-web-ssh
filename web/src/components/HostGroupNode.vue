@@ -10,6 +10,7 @@ import {
 } from "@lucide/vue";
 import type { Host } from "../types";
 import { distributionLogos } from "../distributionLogos";
+import { formatHostEndpoint } from "../hostAddress";
 
 defineOptions({ name: "HostGroupNode" });
 
@@ -32,10 +33,13 @@ const props = defineProps<{
   testing?: string;
   draggingHostID?: string;
   dropTarget?: HostDropTarget | null;
+  maskAddresses?: boolean;
+  activeHostId?: string;
+  connectedHostIds?: Set<string>;
 }>();
 const emit = defineEmits<{
   connect: [Host];
-  web: [Host];
+  context: [{ host: Host; x: number; y: number }];
   test: [Host];
   edit: [Host];
   duplicate: [Host];
@@ -56,32 +60,39 @@ const platformIcons = {
   bsd: Server,
   unix: SquareTerminal,
 };
+const platformColors: Record<string, string> = {
+  linux: "#69b4e8",
+  windows: "#5ca8f8",
+  macos: "#d6dce6",
+  bsd: "#ef7f55",
+  unix: "#67c99a",
+};
 const distributionBadges: Record<
   string,
   { label: string; color: string }
 > = {
   ubuntu: { label: "Ubuntu", color: "#e95420" },
-  debian: { label: "Debian", color: "#d70a53" },
+  debian: { label: "Debian", color: "#e8437a" },
   linuxmint: { label: "Linux Mint", color: "#87cf3e" },
   pop: { label: "Pop!_OS", color: "#48b9c7" },
   elementary: { label: "elementary OS", color: "#64baff" },
-  rhel: { label: "Red Hat Enterprise Linux", color: "#ee0000" },
-  centos: { label: "CentOS", color: "#a14f8c" },
+  rhel: { label: "Red Hat Enterprise Linux", color: "#f05252" },
+  centos: { label: "CentOS", color: "#c26eb0" },
   rocky: { label: "Rocky Linux", color: "#10b981" },
   almalinux: { label: "AlmaLinux", color: "#4f6bff" },
   fedora: { label: "Fedora", color: "#51a2da" },
   arch: { label: "Arch Linux", color: "#1793d1" },
   manjaro: { label: "Manjaro", color: "#35bf5c" },
   endeavouros: { label: "EndeavourOS", color: "#7f5af0" },
-  alpine: { label: "Alpine Linux", color: "#0d597f" },
+  alpine: { label: "Alpine Linux", color: "#3b9ed8" },
   opensuse: { label: "openSUSE", color: "#73ba25" },
   gentoo: { label: "Gentoo", color: "#8b7bb5" },
-  kali: { label: "Kali Linux", color: "#557c94" },
-  raspbian: { label: "Raspberry Pi OS", color: "#c51a4a" },
+  kali: { label: "Kali Linux", color: "#6ea5c7" },
+  raspbian: { label: "Raspberry Pi OS", color: "#e34877" },
   nixos: { label: "NixOS", color: "#5277c3" },
-  void: { label: "Void Linux", color: "#478061" },
+  void: { label: "Void Linux", color: "#5cb88a" },
   amazon: { label: "Amazon Linux", color: "#ff9900" },
-  oracle: { label: "Oracle Linux", color: "#c74634" },
+  oracle: { label: "Oracle Linux", color: "#e0624f" },
   proxmox: { label: "Proxmox VE", color: "#e57000" },
 };
 function distributionBadge(value?: string) {
@@ -106,8 +117,28 @@ function systemLabel(host: Host) {
   };
   return labels[host.platform || ""] || "尚未识别系统";
 }
+function hostIconColor(host: Host) {
+  if (host.protocol === "vnc") return "#62c9a2";
+  if (host.protocol === "rdp") return "#69aefc";
+  if (host.distribution) return distributionBadge(host.distribution).color;
+  return platformColors[host.platform || ""] || "#7aa2ff";
+}
 function hostInitial(name: string) {
   return Array.from(name.trim())[0]?.toUpperCase() || "?";
+}
+function hostProtocol(host: Host) {
+  return (host.protocol || "ssh").toLowerCase();
+}
+function hostDisplayAddress(host: Host) {
+  return formatHostEndpoint(host, { masked: props.maskAddresses });
+}
+function hostSubtitleTitle(host: Host) {
+  const proto = hostProtocol(host).toUpperCase();
+  const endpoint = formatHostEndpoint(host, {
+    masked: props.maskAddresses,
+    includeDefaultPort: true,
+  });
+  return `${proto} · ${endpoint}`;
 }
 function countHosts(group: HostTreeGroup): number {
   return (
@@ -118,11 +149,25 @@ function countHosts(group: HostTreeGroup): number {
 function forwardSelection(id: string, value: boolean) {
   emit("toggleSelection", id, value);
 }
-function openHostMenu(event: MouseEvent) {
+function openHostMenu(event: MouseEvent, host: Host) {
   if (props.selecting) return;
-  const row = event.currentTarget;
-  if (row instanceof HTMLElement)
-    row.querySelector<HTMLButtonElement>(".row-menu")?.click();
+  emit("context", {
+    host,
+    x: event.clientX,
+    y: event.clientY,
+  });
+}
+function openHostMenuFromButton(event: MouseEvent, host: Host) {
+  if (props.selecting) return;
+  const button = event.currentTarget;
+  const rect = button instanceof HTMLElement
+    ? button.getBoundingClientRect()
+    : undefined;
+  emit("context", {
+    host,
+    x: rect ? Math.min(rect.right, window.innerWidth - 12) : event.clientX,
+    y: rect ? rect.bottom + 3 : event.clientY,
+  });
 }
 function dragStart(event: DragEvent, host: Host) {
   if (props.selecting) return;
@@ -202,6 +247,8 @@ function dropHost(event: DragEvent, host: Host) {
         class="host-row"
         :class="{
           selected: selected.has(host.id),
+          'is-active': !selecting && activeHostId === host.id,
+          'is-connected': Boolean(connectedHostIds?.has(host.id)),
           dragging: draggingHostID === host.id,
           'drop-target':
             dropTarget?.kind === 'host' && dropTarget.hostID === host.id,
@@ -212,7 +259,7 @@ function dropHost(event: DragEvent, host: Host) {
         @dragover="dragOverHost($event, host)"
         @drop="dropHost($event, host)"
         @dblclick="!selecting && emit('connect', host)"
-        @contextmenu.prevent="openHostMenu"
+        @contextmenu.prevent.stop="openHostMenu($event, host)"
       >
         <el-checkbox
           v-if="selecting"
@@ -232,15 +279,9 @@ function dropHost(event: DragEvent, host: Host) {
               (host.protocol || 'ssh') === 'ssh' && Boolean(host.distribution),
           }"
           :title="systemLabel(host)"
-          :style="
-            (host.protocol || 'ssh') === 'ssh' && host.distribution
-              ? {
-                  color: distributionBadge(host.distribution).color,
-                  borderColor: `${distributionBadge(host.distribution).color}66`,
-                  backgroundColor: `${distributionBadge(host.distribution).color}18`,
-                }
-              : undefined
-          "
+          :style="{
+            '--host-icon-color': hostIconColor(host),
+          }"
         >
           <Monitor
             v-if="host.protocol === 'vnc' || host.protocol === 'rdp'"
@@ -262,46 +303,37 @@ function dropHost(event: DragEvent, host: Host) {
             :stroke-width="1.8"
           />
           <span v-else>{{ hostInitial(host.name) }}</span>
+          <span
+            v-if="connectedHostIds?.has(host.id)"
+            class="host-live-dot"
+            title="已有活跃会话"
+            aria-hidden="true"
+          ></span>
         </span>
         <div class="host-copy">
           <strong>{{ host.name }}</strong>
-          <small>
-            {{ (host.protocol || "ssh").toUpperCase() }} · {{ host.address }}:{{ host.port }}
+          <small :title="hostSubtitleTitle(host)">
+            <span class="host-proto" :class="`proto-${hostProtocol(host)}`">{{
+              hostProtocol(host).toUpperCase()
+            }}</span><span class="host-meta-sep" aria-hidden="true">·</span><span
+              class="host-addr"
+              :class="{ masked: maskAddresses }"
+            >{{ hostDisplayAddress(host) }}</span>
           </small>
         </div>
-        <span v-if="!selecting" class="host-row-actions"
-          ><el-dropdown
-            trigger="click"
-            @click.stop
-            ><button class="icon-btn row-menu">
-              <MoreHorizontal :size="16" /></button
-            ><template #dropdown
-              ><el-dropdown-menu
-                ><el-dropdown-item @click="emit('connect', host)"
-                  >连接</el-dropdown-item
-                ><el-dropdown-item
-                  :disabled="
-                    (host.protocol || 'ssh') !== 'ssh' || !host.credentialID
-                  "
-                  @click="emit('web', host)"
-                  >访问内网 Web</el-dropdown-item
-                ><el-dropdown-item
-                  :disabled="testing === host.id"
-                  @click="emit('test', host)"
-                  >{{
-                    testing === host.id ? "正在测试…" : "测试连接"
-                  }}</el-dropdown-item
-                ><el-dropdown-item @click="emit('edit', host)"
-                  >编辑</el-dropdown-item
-                ><el-dropdown-item @click="emit('duplicate', host)"
-                  >复制主机</el-dropdown-item
-                ><el-dropdown-item divided @click="emit('delete', host)"
-                  >删除</el-dropdown-item
-                ></el-dropdown-menu
-              ></template
-            ></el-dropdown
-          ></span
-        >
+        <span v-if="!selecting" class="host-row-actions">
+          <button
+            class="icon-btn row-menu"
+            title="主机操作"
+            aria-label="主机操作"
+            aria-haspopup="menu"
+            @pointerdown.stop
+            @click.stop="openHostMenuFromButton($event, host)"
+            @dblclick.stop
+          >
+            <MoreHorizontal :size="15" />
+          </button>
+        </span>
       </article>
       <HostGroupNode
         v-for="child in group.children"
@@ -314,8 +346,11 @@ function dropHost(event: DragEvent, host: Host) {
         :testing="testing"
         :dragging-host-id="draggingHostID"
         :drop-target="dropTarget"
+        :mask-addresses="maskAddresses"
+        :active-host-id="activeHostId"
+        :connected-host-ids="connectedHostIds"
         @connect="emit('connect', $event)"
-        @web="emit('web', $event)"
+        @context="emit('context', $event)"
         @test="emit('test', $event)"
         @edit="emit('edit', $event)"
         @duplicate="emit('duplicate', $event)"

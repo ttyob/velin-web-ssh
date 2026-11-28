@@ -115,7 +115,7 @@ cp -R "$WEB_DIST"/. "$STAGE_DIR/app/web/dist/"
 
 if [ -n "$PREBUILT_BINARY" ]; then
   if [ ! -f "$PREBUILT_BINARY" ]; then
-    echo "Prebuilt VelinWebSSH binary was not found: $PREBUILT_BINARY" >&2
+    echo "Prebuilt Jeex Terminal binary was not found: $PREBUILT_BINARY" >&2
     exit 1
   fi
   cp "$PREBUILT_BINARY" "$STAGE_DIR/app/bin/velin"

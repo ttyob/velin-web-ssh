@@ -79,8 +79,8 @@ try {
   assert.equal(await service.count(), 0);
   await back();
 
-  await menu('Velin 服务管理');
-  await button('添加 Velin 服务').tap();
+  await menu('Jeex Terminal 服务管理');
+  await button('添加 Jeex Terminal 服务').tap();
   await fill('备注名称（可选）', '开发服务');
   await fill('服务地址', 'https://dev.example.com/velin');
   await fill('账户', 'dev');

@@ -111,13 +111,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	slog.Info("VelinWebSSH listening", "addr", cfg.Addr, "pid", os.Getpid())
+	slog.Info("Jeex Terminal listening", "addr", cfg.Addr, "pid", os.Getpid())
 	apiService.StartIntegrations()
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
-		slog.Info("VelinWebSSH shutting down")
+		slog.Info("Jeex Terminal shutting down")
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)

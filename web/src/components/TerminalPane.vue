@@ -50,8 +50,10 @@ const props = withDefaults(
     closable?: boolean;
     mobileCtrl?: boolean;
     mobileAlt?: boolean;
+    floating?: boolean;
+    resizeSuspended?: boolean;
   }>(),
-  { closable: false, mobileCtrl: false, mobileAlt: false },
+  { closable: false, mobileCtrl: false, mobileAlt: false, floating: false, resizeSuspended: false },
 );
 const emit = defineEmits<{
   status: [id: string, status: string, message?: string];
@@ -65,6 +67,9 @@ const emit = defineEmits<{
 const container = ref<HTMLElement>();
 const status = ref(props.session.status);
 const statusMessage = ref(props.session.lastError || "");
+const networkOffline = ref(!navigator.onLine);
+function networkLost() { networkOffline.value = true; clearTimeout(reconnectTimer); }
+function networkRestored() { networkOffline.value = false; if (!connected.value && !["ended", "auth_required", "host_key_required"].includes(status.value)) void ensureAttached(); }
 const connected = ref(false);
 const terminalLatency = ref<number>();
 const controller = ref(false);
@@ -151,6 +156,11 @@ let resizeSnapshotDeadline = 0;
 let resizeFollowingBottom = false;
 let resizeAwaitingRemoteOutput = false;
 let resizeRemoteOutputSeen = false;
+let remoteGeometryVersion = 0;
+let floatingResize: {
+  cols: number; rows: number; version: number;
+  acknowledged: boolean; outputSeen: boolean; rendered: boolean; releaseScheduled: boolean;
+} | undefined;
 let pendingWrites = 0;
 let pendingReplayWrites = 0;
 let selectingTerminalText = false;
@@ -727,6 +737,9 @@ function resumeOutputFollow(smooth = false) {
 
 function writeTerminal(data: Uint8Array, callback?: () => void, isReplay = false) {
   if (!terminal) return callback?.();
+  // A callback for bytes queued before the geometry ACK must not complete a
+  // newer resize, even if xterm parses them after that ACK has arrived.
+  const resizedOutput = !isReplay && floatingResize?.acknowledged ? floatingResize : undefined;
   const resizingAtBottom = Boolean(resizeSnapshot && resizeFollowingBottom);
   if (!resizingAtBottom && (historyLocked.value || !isAtBottom())) {
     historyLocked.value = true;
@@ -750,15 +763,22 @@ function writeTerminal(data: Uint8Array, callback?: () => void, isReplay = false
         hasNewOutput.value = false;
         terminal?.scrollToBottom();
       }
-      if (resizeAwaitingRemoteOutput) {
+      if (floatingResize) {
+        if (resizedOutput === floatingResize) floatingResize.outputSeen = true;
+        settleFloatingResize();
+      } else if (resizeAwaitingRemoteOutput) {
         resizeAwaitingRemoteOutput = false;
         resizeRemoteOutputSeen = true;
       }
-      if (resizeRemoteOutputSeen) releaseResizeSnapshot(100);
+      if (!floatingResize && resizeRemoteOutputSeen) releaseResizeSnapshot(100);
     }
     if (!pendingWrites && resizeAfterWrite) {
       resizeAfterWrite = false;
-      resize();
+      if (props.floating) {
+        // Fit as soon as xterm drains its queue. Repeating the 90 ms debounce
+        // can stay in phase with a streaming TUI and postpone resize forever.
+        if (!props.resizeSuspended) nextTick(fitTerminal);
+      } else resize();
     }
   });
 }
@@ -870,7 +890,7 @@ function finishReplay(current: WebSocket) {
 }
 
 async function ensureAttached() {
-  if (disposed || attaching || connectionRecoveryOpen.value) return;
+  if (disposed || attaching || connectionRecoveryOpen.value || networkOffline.value) return;
   attaching = true;
   clearTimeout(reconnectTimer);
   status.value = "reconnecting";
@@ -906,7 +926,7 @@ function applyConnectionError(error: unknown) {
 }
 
 function scheduleReconnect() {
-  if (disposed || connectionRecoveryOpen.value || ["ended", "auth_required", "host_key_required"].includes(status.value)) return;
+  if (disposed || networkOffline.value || connectionRecoveryOpen.value || ["ended", "auth_required", "host_key_required"].includes(status.value)) return;
   clearTimeout(reconnectTimer);
   const delay = reconnectDelay(reconnectAttempts);
   reconnectAttempts = Math.min(reconnectAttempts + 1, 5);
@@ -951,7 +971,7 @@ function writeConnectionNotice(message: string, tone: "muted" | "error" = "muted
   if (!terminal || !clean || clean === lastConnectionNotice) return;
   lastConnectionNotice = clean;
   const color = tone === "error" ? "31" : "90";
-  terminal.writeln(`\r\n\x1b[${color}m[VelinWebSSH] ${clean}\x1b[0m`);
+  terminal.writeln(`\r\n\x1b[${color}m[Jeex Terminal] ${clean}\x1b[0m`);
 }
 
 async function recoverConnection(statusName: string, detail: Record<string, unknown> = {}) {
@@ -1051,6 +1071,7 @@ function connectSocket() {
         latencyPingAt = 0;
       }
 		} else if (message.type === "hello") {
+      remoteGeometryVersion = Number(message.geometryVersion) || 0;
       clientID = message.clientID || "";
       controller.value = Boolean(clientID && message.controller === clientID);
 			updateRemoteHistoryState(message);
@@ -1103,6 +1124,13 @@ function connectSocket() {
         resetTerminalForReplay();
         writeTerminal(base64ToBytes(message.data), () => finishReplay(current), true);
       }
+    } else if (message.type === "geometry") {
+      const version = Number(message.geometryVersion) || 0;
+      remoteGeometryVersion = Math.max(remoteGeometryVersion, version);
+      if (floatingResize && version >= floatingResize.version &&
+        message.cols === floatingResize.cols && message.rows === floatingResize.rows) {
+        floatingResize.acknowledged = true;
+      }
     } else if (message.type === "replay_preview" && message.data) {
       showReplayPreview(base64ToBytes(message.data));
 			if (previewTailReconnect) {
@@ -1148,7 +1176,7 @@ function connectSocket() {
       writeTerminal(output, () => {
         if (Number.isFinite(outputOffset)) streamOffset = outputOffset;
       });
-      emit("attention", props.session.id, "clear");
+      emit("attention", props.session.id, "activity");
       scheduleHistoryStateRefresh();
       scheduleOutputSettledAttention();
 		} else if (message.type === "history_state") {
@@ -1187,7 +1215,8 @@ function connectSocket() {
       !controlPromptOpen
     ) {
       controlPromptOpen = true;
-      emit("attention", props.session.id, "bell");
+      clearTimeout(outputSettleTimer);
+      if (!props.visible) emit("attention", props.session.id, "bell");
       ElMessageBox.confirm(
         "另一台设备请求接管此终端。允许后，当前设备会立即变为只读。",
         "终端控制权",
@@ -1246,6 +1275,7 @@ function connectSocket() {
   };
 	current.onclose = () => {
 	    if (socket !== current) return;
+	    if (props.floating || floatingResize) disposeResizeSnapshot();
 		clearInterval(heartbeatTimer);
 	replaying = false;
 	disposeHistoryTransitionSnapshot();
@@ -1395,6 +1425,15 @@ function disposeResizeSnapshot() {
   resizeFollowingBottom = false;
   resizeAwaitingRemoteOutput = false;
   resizeRemoteOutputSeen = false;
+  floatingResize = undefined;
+}
+
+function settleFloatingResize() {
+  if (floatingResize?.acknowledged && floatingResize.outputSeen &&
+    floatingResize.rendered && !pendingWrites && !floatingResize.releaseScheduled) {
+    floatingResize.releaseScheduled = true;
+    releaseResizeSnapshot(100);
+  }
 }
 
 function releaseResizeSnapshot(delay = 0) {
@@ -1404,13 +1443,24 @@ function releaseResizeSnapshot(delay = 0) {
   resizeReleaseTimer = window.setTimeout(() => {
     resizeReleaseTimer = undefined;
     resizeReleaseFrame = requestAnimationFrame(() => {
-      resizeReleaseFrame = requestAnimationFrame(disposeResizeSnapshot);
+      resizeReleaseFrame = requestAnimationFrame(() => {
+        // Wait for queued writes and their renderer frame, with a finite
+        // fallback for silent shells, old servers, and disconnected clients.
+        if (floatingResize && performance.now() < resizeSnapshotDeadline &&
+          (!floatingResize.acknowledged || !floatingResize.outputSeen ||
+            !floatingResize.rendered || pendingWrites)) {
+          releaseResizeSnapshot(50);
+          return;
+        }
+        disposeResizeSnapshot();
+      });
     });
   }, Math.min(delay, remaining));
 }
 
 function fitTerminal() {
   if (!props.visible || !fit || !terminal || !container.value) return;
+  if (props.floating && props.resizeSuspended) return;
   if (pendingWrites) {
     resizeAfterWrite = true;
     return;
@@ -1425,11 +1475,13 @@ function fitTerminal() {
     ) {
       if (keepBottom) terminal.scrollToBottom();
       sendTerminalSize();
+      if (props.floating && !floatingResize) disposeResizeSnapshot();
       return;
     }
     const applyResize = () => {
       resizeApplyFrame = undefined;
       if (!terminal) return disposeResizeSnapshot();
+      if (props.floating && (!props.visible || props.resizeSuspended)) return disposeResizeSnapshot();
       if (pendingWrites) {
         resizeAfterWrite = true;
         return;
@@ -1440,16 +1492,27 @@ function fitTerminal() {
         cancelAnimationFrame(resizeReleaseFrame);
       resizeReleaseFrame = undefined;
       resizeFollowingBottom = Boolean(resizeSnapshot && keepBottom);
-      resizeSnapshotDeadline = resizeSnapshot ? performance.now() + 700 : 0;
+      resizeSnapshotDeadline = resizeSnapshot ? performance.now() + (props.floating ? 1000 : 700) : 0;
       resizeRemoteOutputSeen = false;
+      floatingResize = props.floating && resizeSnapshot ? {
+        cols: dimensions.cols, rows: dimensions.rows, version: remoteGeometryVersion + 1,
+        acknowledged: false, outputSeen: false, rendered: false, releaseScheduled: false,
+      } : undefined;
       terminal.resize(dimensions.cols, dimensions.rows);
       if (keepBottom) terminal.scrollToBottom();
       clearTimeout(resizeSocketTimer);
-      resizeSocketTimer = window.setTimeout(() => {
-        resizeAwaitingRemoteOutput = Boolean(resizeSnapshot);
+      if (props.floating) {
+        // Keep the local grid change and PTY request in the same JS turn;
+        // do not admit another old-width output event during an 80 ms gap.
         sendTerminalSize();
-        releaseResizeSnapshot(320);
-      }, 80);
+        releaseResizeSnapshot(1000);
+      } else {
+        resizeSocketTimer = window.setTimeout(() => {
+          resizeAwaitingRemoteOutput = Boolean(resizeSnapshot);
+          sendTerminalSize();
+          releaseResizeSnapshot(320);
+        }, 80);
+      }
       terminal.refresh(0, Math.max(0, terminal.rows - 1));
     };
     if (captureResizeSnapshot())
@@ -1459,6 +1522,7 @@ function fitTerminal() {
 }
 function resize() {
   if (!props.visible || !fit || !terminal) return;
+  if (props.floating && props.resizeSuspended) return;
   // Pane dragging and history replay can both trigger many layout changes.
   // Let the container move first and perform one terminal reflow afterward.
   if (document.body.classList.contains("is-resizing-panes") || replaying)
@@ -1994,7 +2058,10 @@ function downloadText() {
 }
 function ringBell() {
   if (replaying) return;
-  emit("attention", props.session.id, "bell");
+  if (!props.visible) {
+    clearTimeout(outputSettleTimer);
+    emit("attention", props.session.id, "bell");
+  }
   if (props.preferences.visualBell) {
     bellActive.value = true;
     window.setTimeout(() => (bellActive.value = false), 220);
@@ -2023,7 +2090,13 @@ function scheduleOutputSettledAttention() {
     emit("attention", props.session.id, "settled");
   }, terminalOutputSettleDelay);
 }
+function notifyOscAttention() {
+  if (replaying || props.visible) return;
+  clearTimeout(outputSettleTimer);
+  emit("attention", props.session.id, "bell");
+}
 onMounted(() => {
+  window.addEventListener("offline", networkLost); window.addEventListener("online", networkRestored);
   terminal = new Terminal({
     cols: initialTerminalDimensions.cols,
     rows: initialTerminalDimensions.rows,
@@ -2117,6 +2190,16 @@ onMounted(() => {
       return false;
     }
   });
+  terminal.parser.registerOscHandler(9, (value) => {
+    if (!value || value.startsWith("4;")) return false;
+    notifyOscAttention();
+    return true;
+  });
+  terminal.parser.registerOscHandler(777, (value) => {
+    if (!value.startsWith("notify;")) return false;
+    notifyOscAttention();
+    return true;
+  });
   terminal.onScroll(() => {
     if (smoothScrolling) return;
     historyLocked.value = !isAtBottom();
@@ -2133,6 +2216,12 @@ onMounted(() => {
     scrollingSelection?.clear();
     rememberTerminalDimensions(cols, rows);
     scheduleInlineImagePreview();
+  });
+  terminal.onRender(() => {
+    if (floatingResize?.outputSeen) {
+      floatingResize.rendered = true;
+      settleFloatingResize();
+    }
   });
   terminal.attachCustomWheelEventHandler(handleTerminalWheel);
   terminal.onTitleChange((title) => {
@@ -2151,6 +2240,18 @@ onMounted(() => {
   window.addEventListener("pageshow", handlePageShow);
   ensureAttached();
 });
+
+watch(
+  () => [props.floating, props.resizeSuspended, props.visible] as const,
+  ([floating, suspended, visible], [wasFloating]) => {
+    if (!floating && !wasFloating) return;
+    clearTimeout(resizeSettleTimer);
+    clearTimeout(resizeSocketTimer);
+    if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
+    disposeResizeSnapshot();
+    if (visible && !(floating && suspended)) nextTick(resize);
+  },
+);
 
 watch(
   [applicationAlternateScreen, remoteHistoryMode, controller, connected, () => props.visible],
@@ -2214,6 +2315,7 @@ watch(
   },
 );
 onBeforeUnmount(() => {
+  window.removeEventListener("offline", networkLost); window.removeEventListener("online", networkRestored);
   disposed = true;
   scrollingSelection?.dispose();
   filePasteAbort?.abort();
@@ -2312,6 +2414,7 @@ defineExpose({
         @keyup.enter="findNext"
       /><el-button size="small" @click="findNext">下一个</el-button>
     </div>
+    <div v-if="networkOffline || (!connected && status === 'reconnecting' && !connectionRecoveryOpen)" class="terminal-reconnect-strip" role="status" aria-live="polite"><span>{{ networkOffline ? '网络已断开，恢复后自动重连' : '正在恢复连接，终端内容已保留…' }}</span><button v-if="!networkOffline" type="button" @click="ensureAttached">重试连接</button></div>
     <div v-if="!controller && connected" class="readonly-banner">
       <Eye :size="14" /> 只读观看，点击键盘图标请求控制
     </div>
@@ -2450,4 +2553,10 @@ defineExpose({
 .terminal-inline-image-preview.loaded img {
   opacity: 1;
 }
+</style>
+
+<style scoped>
+.terminal-reconnect-strip { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--muted); background: var(--surface); font-size: 11px; }
+.terminal-reconnect-strip > span { flex: 1; min-width: 0; }
+.terminal-reconnect-strip button { border: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; padding: 2px; }
 </style>

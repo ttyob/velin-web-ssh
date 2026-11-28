@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Velin</string>
+	<string>Jeex Terminal</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>连接你配置的内网 SSH 工作台服务。</string>
 	<key>NSAppTransportSecurity</key>
@@ -20,7 +20,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>velin_mobile</string>
+	<string>Jeex Terminal</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

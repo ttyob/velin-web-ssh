@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from "vue";
 import {
-  Archive,
   Check,
   ChevronRight,
   CircleAlert,
@@ -22,14 +21,13 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  X,
 } from "@lucide/vue";
-import { ElMessage, ElMessageBox, type TreeInstance } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { api, json } from "../api";
+import { createRemoteGit } from "../remoteGit";
 import { truncateGitAIContent } from "../gitAI";
 import {
   buildGitChangeTree,
-  isStaged,
   parseGitBranches,
   parseGitCommits,
   parseGitRemotes,
@@ -38,9 +36,12 @@ import {
   type GitChange,
   type GitCommit,
   type GitRemote,
-  type GitTreeNode,
 } from "../git";
 import type { AgentStatus, Host } from "../types";
+import OperationFeedback from "./OperationFeedback.vue";
+import { operationLabel } from "../operationFeedback";
+import { getActivePinia } from "pinia";
+import { useAuthStore } from "../stores/auth";
 import GitSurface from "./GitSurface.vue";
 
 const GitCompareDialog = defineAsyncComponent(
@@ -67,8 +68,12 @@ const mergeDirty = ref(false), mergeSaving = ref(false);
 const activeTab = ref<GitTab>("status");
 const status = ref<AgentStatus>();
 const loading = ref(false);
+const refreshing = ref(false);
 const busy = ref("");
 const error = ref("");
+const operationError = ref(""), operationProgress = ref("");
+const expandedChangePaths = ref<string[]>([]), selectedChangePath = ref("");
+let refreshEpoch = 0;
 const repoPath = ref(".");
 const repoRoot = ref("");
 const branch = ref("");
@@ -76,17 +81,18 @@ const tracking = ref("");
 const ahead = ref(0);
 const behind = ref(0);
 const changes = ref<GitChange[]>([]);
-const selectedChangePaths = ref<string[]>([]);
 const commits = ref<GitCommit[]>([]);
 const branches = ref<GitBranchInfo[]>([]);
 const remotes = ref<GitRemote[]>([]);
 const commitMessage = ref("");
+const userID = getActivePinia() ? useAuthStore().user?.id || "local" : "local";
+const draftKey = computed(() => `velin-git-message:${userID}:${props.host?.id || ""}:${repoPath.value}`);
+watch(commitMessage, value => { try { localStorage.setItem(draftKey.value, value); } catch { /* Keep the in-memory message. */ } }, { flush: "sync" });
 const newBranchName = ref("");
 const remoteName = ref("");
 const remoteURL = ref("");
 const selectedRemote = ref("");
 const changeView = ref<ChangeView>("list");
-const changeTreeRef = ref<TreeInstance>();
 const changePreviewOpen = ref(false);
 const previewChange = ref<GitChange>();
 const previewMerge = ref(false);
@@ -102,15 +108,15 @@ const conflictAnalysisPath = ref("");
 const conflictAnalysis = ref("");
 
 const connected = computed(() => status.value?.state === "connected");
+const repositoryName = computed(() => repoRoot.value.split(/[\\/]/).filter(Boolean).slice(-1)[0] || "Git 工作区");
 const localBranches = computed(() => branches.value.filter((item) => !item.remote));
 const remoteBranches = computed(() => branches.value.filter((item) => item.remote));
-const stagedCount = computed(() => changes.value.filter((item) => isStaged(item)).length);
-const unstagedCount = computed(() => changes.value.filter((item) => item.worktree !== " ").length);
 const currentRemote = computed(() => selectedRemote.value || remotes.value[0]?.name || "");
 const changeTree = computed(() => buildGitChangeTree(changes.value));
-const allChangesSelected = computed(() => changes.value.length > 0 && selectedChangePaths.value.length === changes.value.length);
-const someChangesSelected = computed(() => selectedChangePaths.value.length > 0 && !allChangesSelected.value);
 const conflicts = computed(() => changes.value.filter(isConflict));
+const REMOTE_REFRESH_INTERVAL = 30_000;
+let lastRemoteRefreshAttempt = 0;
+let remoteRefreshTimer: number | undefined;
 
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -118,6 +124,11 @@ function shellQuote(value: string) {
 
 function isConflict(item: GitChange) {
   return item.index === "U" || item.worktree === "U" || (item.index === "A" && item.worktree === "A") || (item.index === "D" && item.worktree === "D");
+}
+
+function changeSource(item: GitChange) {
+  if (item.index === "?" || item.worktree === "?") return "未跟踪";
+  return [item.index !== " " ? "暂存区" : "", item.worktree !== " " ? "工作区" : ""].filter(Boolean).join(" · ");
 }
 
 async function loadStatus() {
@@ -137,6 +148,13 @@ async function ensureConnected() {
 
 async function command(commandText: string) {
   if (!props.host) throw new Error("当前终端没有可用的主机信息");
+  if (busy.value) {
+    if (/\bfetch\b/.test(commandText)) operationProgress.value = "正在获取远程状态…";
+    else if (/\bpull\b/.test(commandText)) operationProgress.value = "正在拉取最新代码…";
+    else if (/\bpush\b/.test(commandText)) operationProgress.value = "正在推送提交…";
+    else if (/\badd -A\b/.test(commandText)) operationProgress.value = "正在准备全部更改…";
+    else if (/\bcommit -m\b/.test(commandText)) operationProgress.value = "正在创建提交…";
+  }
   const result = await api<{ output: string; success: boolean; error?: string }>(
     `/api/hosts/${props.host.id}/agent/command`,
     { method: "POST", body: json({ command: commandText }) },
@@ -149,25 +167,43 @@ function gitCommand(args: string) {
   return `git -C ${shellQuote(repoRoot.value || repoPath.value.trim() || ".")} --literal-pathspecs ${args}`;
 }
 
+function fetchTrackingCommand() {
+  const remote = tracking.value.split("/", 1)[0];
+  return gitCommand(`fetch --quiet ${shellQuote(remote)}`);
+}
+
 function applyStatus(output: string) {
   const value = parseGitStatus(output);
   branch.value = value.branch;
   tracking.value = value.tracking;
   ahead.value = value.ahead;
   behind.value = value.behind;
-  changes.value = value.changes;
-  selectedChangePaths.value = selectedChangePaths.value.filter((path) =>
-    changes.value.some((item) => item.path === path),
-  );
+  const previous = new Map(changes.value.map(item => [item.path, item]));
+  if (JSON.stringify(changes.value) !== JSON.stringify(value.changes)) changes.value = value.changes.map(item => JSON.stringify(previous.get(item.path)) === JSON.stringify(item) ? previous.get(item.path)! : item);
 }
 
-async function refresh() {
-  if (!props.host) return;
-  loading.value = true;
-  error.value = "";
+async function refreshRemoteStatus(force = false, silent = false) {
+  if (!repoRoot.value || !tracking.value) return;
+  if (!force && Date.now() - lastRemoteRefreshAttempt < REMOTE_REFRESH_INTERVAL) return;
+  lastRemoteRefreshAttempt = Date.now(); const epoch = refreshEpoch, operation = busy.value;
+  try {
+    await command(fetchTrackingCommand());
+    const output = await command(gitCommand("status --porcelain=v1 -z --branch --untracked-files=all"));
+    if (epoch === refreshEpoch && operation === busy.value && props.modelValue) applyStatus(output);
+  } catch (cause) {
+    if (!silent) throw cause;
+  }
+}
+
+async function refresh(silent = false) {
+  if (!props.host || refreshing.value || (silent && busy.value)) return;
+  const epoch = ++refreshEpoch;
+  refreshing.value = true; if (!silent) { loading.value = true; error.value = ""; }
   try {
     await ensureConnected();
-    repoRoot.value = (await command(`git -C ${shellQuote(repoPath.value.trim() || ".")} rev-parse --show-toplevel`)).trim();
+    const root = (await command(`git -C ${shellQuote(repoPath.value.trim() || ".")} rev-parse --show-toplevel`)).trim();
+    if (epoch !== refreshEpoch || !props.modelValue) return;
+    repoRoot.value = root;
     const [statusOutput, commitOutput, branchOutput, remoteOutput, mergeHead] = await Promise.all([
       command(gitCommand("status --porcelain=v1 -z --branch --untracked-files=all")),
       command(`if ${gitCommand("rev-parse --verify HEAD")} >/dev/null 2>&1; then ${gitCommand("log -50 --date=iso-strict --pretty=format:'%H%x09%h%x09%an%x09%ad%x09%s'")}; fi`),
@@ -175,37 +211,36 @@ async function refresh() {
       command(gitCommand("remote -v")),
       command(`${gitCommand("rev-parse -q --verify MERGE_HEAD")} 2>/dev/null || true`),
     ]);
+    if (epoch !== refreshEpoch || !props.modelValue) return;
     applyStatus(statusOutput);
-    commits.value = parseGitCommits(commitOutput);
-    branches.value = parseGitBranches(branchOutput);
-    remotes.value = parseGitRemotes(remoteOutput);
+    const nextCommits = parseGitCommits(commitOutput), nextBranches = parseGitBranches(branchOutput), nextRemotes = parseGitRemotes(remoteOutput);
+    if (JSON.stringify(commits.value) !== JSON.stringify(nextCommits)) commits.value = nextCommits;
+    if (JSON.stringify(branches.value) !== JSON.stringify(nextBranches)) branches.value = nextBranches;
+    if (JSON.stringify(remotes.value) !== JSON.stringify(nextRemotes)) remotes.value = nextRemotes;
     mergeInProgress.value = Boolean(mergeHead.trim());
     if (!selectedRemote.value || !remotes.value.some((item) => item.name === selectedRemote.value))
       selectedRemote.value = remotes.value[0]?.name || "";
+    await refreshRemoteStatus(false, true);
   } catch (cause) {
-    repoRoot.value = "";
-    changes.value = [];
-    commits.value = [];
-    branches.value = [];
-    remotes.value = [];
-    mergeInProgress.value = false;
-    error.value = cause instanceof Error ? cause.message : "Git 仓库读取失败";
+    if (epoch === refreshEpoch && !silent) error.value = cause instanceof Error ? cause.message : "Git 仓库读取失败";
   } finally {
-    loading.value = false;
+    if (epoch === refreshEpoch) { loading.value = false; refreshing.value = false; }
   }
 }
 
-async function runOperation(key: string, operation: () => Promise<void>, message: string) {
+async function runOperation(key: string, operation: () => Promise<unknown>, message: string) {
   if (busy.value || loading.value || !(await allowOperation())) return;
-  busy.value = key;
+  refreshEpoch++; refreshing.value = false;
+  busy.value = key; operationError.value = ""; operationProgress.value = "";
   try {
-    await operation();
-    ElMessage.success(message);
+    const result = await operation();
+    if (result !== false) ElMessage.success(message);
     await refresh();
   } catch (cause) {
-    ElMessage.error(cause instanceof Error ? cause.message : "Git 操作失败");
+    operationError.value = cause instanceof Error ? cause.message : "Git 操作失败";
+    await refresh();
   } finally {
-    busy.value = "";
+    busy.value = ""; operationProgress.value = "";
     emit("changed");
   }
 }
@@ -224,63 +259,57 @@ defineExpose({ confirmClose, refresh, selectTab, saveCurrent });
 watch(mergeDirty, value => emit("dirty", value));
 watch(() => Boolean(busy.value) || mergeSaving.value, value => emit("busy", value));
 
-function selectedPaths() {
-  return selectedChangePaths.value.map(shellQuote).join(" ");
-}
-
-function toggleAllChanges(value: string | number | boolean) {
-  selectedChangePaths.value = value ? changes.value.map((item) => item.path) : [];
-}
-
-function updateTreeSelection() {
-  const checked = (changeTreeRef.value?.getCheckedNodes(true) || []) as GitTreeNode[];
-  selectedChangePaths.value = checked
-    .map((item) => item.change?.path)
-    .filter((path): path is string => Boolean(path));
-}
-
-async function stageSelected() {
-  if (!selectedChangePaths.value.length) return ElMessage.warning("请先选择文件");
-  await runOperation("stage", () => command(gitCommand(`add -- ${selectedPaths()}`)).then(() => undefined), "已暂存所选文件");
-}
-
-async function stageAll() {
-  await runOperation("stage-all", () => command(gitCommand("add -A")).then(() => undefined), "已暂存全部变更");
-}
-
-async function unstageSelected() {
-  if (!selectedChangePaths.value.length) return ElMessage.warning("请先选择文件");
-  await runOperation("unstage", () => command(`if ${gitCommand("rev-parse --verify HEAD")} >/dev/null 2>&1; then ${gitCommand(`restore --staged -- ${selectedPaths()}`)}; else ${gitCommand(`rm --cached -- ${selectedPaths()}`)}; fi`).then(() => undefined), "已取消暂存");
-}
-
 async function commitChanges() {
   const message = commitMessage.value.trim();
-  if (!message) return ElMessage.warning("请输入提交说明");
-  if (!stagedCount.value) return ElMessage.warning("请先暂存要提交的文件");
-  await runOperation("commit", async () => {
+  if (!behind.value && !message) return ElMessage.warning("请输入提交说明");
+  if (mergeInProgress.value || conflicts.value.length) return ElMessage.warning("请先完成合并并处理冲突");
+  if (!behind.value && !changes.value.length) return ElMessage.warning("没有可提交的更改");
+  let pulledLatest = false;
+  await runOperation(behind.value ? "pull" : "commit", async () => {
+    if (tracking.value) {
+      await refreshRemoteStatus(true);
+      if (behind.value > 0) {
+        try {
+          await ElMessageBox.confirm(
+            `远程分支“${tracking.value}”比本地新 ${behind.value} 个提交。先拉取最新代码吗？拉取后请检查变更，再重新提交。`,
+            "远程代码有更新",
+            { confirmButtonText: "拉取最新代码", cancelButtonText: "暂不拉取", type: "warning", closeOnClickModal: false },
+          );
+        } catch { return false; }
+        await command(gitCommand("pull --ff-only"));
+        pulledLatest = true;
+        return false;
+      }
+    }
+    if (!changes.value.length) {
+      ElMessage.info("远程状态已更新，没有可提交的更改");
+      return false;
+    }
+    if (!commitMessage.value.trim()) {
+      ElMessage.warning("请输入提交说明");
+      return false;
+    }
+    await command(gitCommand("add -A"));
     await command(gitCommand(`commit -m ${shellQuote(message)}`));
     commitMessage.value = "";
   }, "提交已创建");
+  if (pulledLatest) ElMessage.success("已拉取最新代码，请检查变更后重新提交");
 }
 
 async function generateCommitMessage() {
   if (busy.value || loading.value) return;
   if (mergeInProgress.value || conflicts.value.length) return ElMessage.warning("请先完成合并并处理冲突，再生成提交说明");
-  if (!stagedCount.value) return ElMessage.warning("请先选择文件并点击“暂存”，或点击“暂存全部”，再生成提交说明");
+  if (!changes.value.length) return ElMessage.warning("没有可分析的代码变更");
   aiCommitLoading.value = true;
   busy.value = "ai-commit";
   try {
     await ensureConnected();
     if (!status.value?.aiConfigured) return ElMessage.warning("请先在设置中配置 AI 模型");
-    const diff = await command(`${gitCommand("diff --cached --no-ext-diff --no-color --stat")} && printf '\\n--- PATCH ---\\n' && ${gitCommand("diff --cached --no-ext-diff --no-color")}`);
-    const result = await api<{ message: string; model: string }>("/api/agent/git-assist", {
-      method: "POST",
-      body: json({ kind: "commit_message", branch: branch.value, content: truncateGitAIContent(diff) }),
-    });
+    const result = await createRemoteGit(props.host!.id).generateCommitMessage(repoRoot.value, branch.value);
     commitMessage.value = result.message;
     ElMessage.success(`已由 ${result.model} 生成提交说明`);
   } catch (cause) {
-    ElMessage.error(cause instanceof Error ? cause.message : "提交说明生成失败");
+    operationError.value = cause instanceof Error ? cause.message : "提交说明生成失败";
   } finally {
     aiCommitLoading.value = false;
     busy.value = "";
@@ -298,7 +327,7 @@ async function mergeBranch(item: GitBranchInfo) {
   } catch {
     return;
   }
-  busy.value = `merge:${item.name}`;
+  busy.value = `merge:${item.name}`; operationError.value = ""; operationProgress.value = "";
   try {
     await command(gitCommand(`merge --no-edit -- ${shellQuote(item.name)}`));
     ElMessage.success(`已合并 ${item.name}`);
@@ -310,7 +339,7 @@ async function mergeBranch(item: GitBranchInfo) {
       if (conflicts.value[0]) editConflict(conflicts.value[0]);
       return;
     }
-    ElMessage.error(cause instanceof Error ? cause.message : "分支合并失败");
+    operationError.value = cause instanceof Error ? cause.message : "分支合并失败";
     return;
   } finally {
     busy.value = "";
@@ -595,32 +624,29 @@ async function showCommit(item: GitCommit) {
 watch(
   () => props.modelValue,
   (open) => {
+    window.clearInterval(remoteRefreshTimer);
+    remoteRefreshTimer = undefined;
+    refreshEpoch++; loading.value = false; refreshing.value = false;
     if (!open) { changePreviewOpen.value = false; commitDetailOpen.value = false; conflictAnalysisOpen.value = false; return; }
     activeTab.value = props.initialTab || "status";
     repoPath.value = props.initialPath?.trim() || props.host?.initialDirectory || ".";
-    repoRoot.value = "";
+    repoRoot.value = ""; changes.value = []; commits.value = []; branches.value = []; remotes.value = [];
+    operationError.value = ""; expandedChangePaths.value = []; selectedChangePath.value = "";
+    try { commitMessage.value = localStorage.getItem(draftKey.value) || ""; } catch { commitMessage.value = ""; }
+    lastRemoteRefreshAttempt = 0;
     error.value = "";
     status.value = undefined;
     previewChange.value = props.initialConflict;
     previewMerge.value = Boolean(props.initialConflict);
     changePreviewOpen.value = Boolean(props.initialConflict);
     void refresh();
+    remoteRefreshTimer = window.setInterval(() => {
+      if (!busy.value && !loading.value) void refreshRemoteStatus(true, true);
+    }, REMOTE_REFRESH_INTERVAL);
   },
   { immediate: true },
 );
-
-watch(
-  [selectedChangePaths, changeView, changeTree],
-  async () => {
-    if (changeView.value !== "tree") return;
-    await nextTick();
-    changeTreeRef.value?.setCheckedKeys(
-      selectedChangePaths.value.map((path) => `file:${path}`),
-      true,
-    );
-  },
-  { deep: true, flush: "post" },
-);
+onBeforeUnmount(() => window.clearInterval(remoteRefreshTimer));
 </script>
 
 <template>
@@ -628,7 +654,7 @@ watch(
   <GitSurface
     :model-value="modelValue"
     :embedded="embedded"
-    v-show="!embedded || (!changePreviewOpen && !commitDetailOpen && !conflictAnalysisOpen)"
+    v-show="!embedded || (!(changePreviewOpen && previewMerge) && !commitDetailOpen && !conflictAnalysisOpen)"
     class="git-dialog"
     :title="embedded ? undefined : `Git 管理 · ${host?.name || '当前终端'}`"
     width="min(1080px, calc(100vw - 28px))"
@@ -638,23 +664,26 @@ watch(
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="git-heading">
-      <div class="git-path-form">
-        <GitBranch :size="18" />
-        <span v-if="embedded" class="git-embedded-path" :title="repoPath">{{ repoPath }}</span><el-input v-else v-model="repoPath" placeholder="当前终端目录或仓库路径" @keyup.enter="refresh" />
+      <div class="git-repo-identity">
+        <span class="git-repo-mark"><GitBranch :size="18" /></span>
+        <div class="git-repo-label">
+          <strong>{{ repoRoot ? repositoryName : 'Git 工作区' }}</strong>
+          <span class="git-repo-location" :title="repoRoot || repoPath">{{ repoRoot || `${repoPath} · 当前终端目录` }}</span>
+        </div>
       </div>
       <div class="git-heading-actions">
-        <el-select v-if="remotes.length" v-model="selectedRemote" class="git-remote-select" placeholder="远程仓库">
+        <el-select v-if="remotes.length" v-model="selectedRemote" class="git-remote-select" placeholder="远程仓库" size="small">
           <el-option v-for="item in remotes" :key="item.name" :label="item.name" :value="item.name" />
         </el-select>
-        <el-button :icon="Download" :disabled="!repoRoot || !remotes.length || Boolean(busy)" :loading="busy === 'fetch'" @click="fetchRepository">抓取</el-button>
-        <el-button :icon="GitMerge" :disabled="!repoRoot || !tracking || Boolean(busy)" :loading="busy === 'pull'" :title="tracking ? `从 ${tracking} 拉取` : '当前分支没有上游分支'" @click="pullRepository">拉取</el-button>
-        <el-button :icon="Upload" :disabled="!repoRoot || !remotes.length || Boolean(busy)" :loading="busy === 'push'" @click="pushRepository">推送</el-button>
-        <el-button :icon="RefreshCw" :disabled="Boolean(busy)" :loading="loading" @click="refresh">刷新</el-button>
+        <el-button size="small" :icon="RefreshCw" :disabled="Boolean(busy)" :loading="loading" @click="refresh()">刷新</el-button>
+        <span class="git-action-divider" aria-hidden="true"></span>
+        <el-button size="small" :icon="Download" :disabled="!repoRoot || !remotes.length || Boolean(busy)" :loading="busy === 'fetch'" @click="fetchRepository">抓取</el-button>
+        <el-button size="small" :icon="GitMerge" :disabled="!repoRoot || !tracking || Boolean(busy)" :loading="busy === 'pull'" :title="tracking ? `从 ${tracking} 拉取` : '当前分支没有上游分支'" @click="pullRepository">拉取</el-button>
+        <el-button size="small" :icon="Upload" :disabled="!repoRoot || !remotes.length || Boolean(busy)" :loading="busy === 'push'" @click="pushRepository">推送</el-button>
       </div>
     </div>
 
     <div v-if="repoRoot" class="git-repo-meta">
-      <span class="git-repo-root" :title="repoRoot">{{ repoRoot }}</span>
       <span class="git-branch-pill"><GitBranch :size="13" />{{ branch }}</span>
       <span v-if="tracking">跟踪 {{ tracking }}</span>
       <span v-if="ahead">领先 {{ ahead }}</span>
@@ -664,18 +693,22 @@ watch(
 
     <div v-if="!repoRoot" class="git-no-repository" v-loading="loading">
       <GitBranch :size="30" />
-      <strong>{{ error ? '当前目录不是 Git 仓库' : '正在检查 Git 仓库' }}</strong>
+      <strong>{{ error ? 'Git 仓库暂不可用' : '正在检查 Git 仓库' }}</strong>
       <span v-if="error">{{ error }}</span>
+      <el-button v-if="!loading" @click="refresh()">重新连接</el-button>
       <el-button v-if="!loading" type="primary" :icon="GitCommitHorizontal" @click="initializeRepository">初始化 Git 仓库</el-button>
     </div>
 
-    <template v-else>
+    <OperationFeedback :pending="busy ? operationProgress || operationLabel(busy) : undefined" :error="operationError || (repoRoot ? error : undefined)" retry-label="刷新 Git 状态" @retry="refresh()" @dismiss="operationError = ''; error = ''" />
+    <template v-if="repoRoot">
       <el-tabs v-model="activeTab" class="git-tabs">
         <el-tab-pane label="状态与提交" name="status">
           <div class="git-status-summary">
             <span>{{ changes.length }} 个变更</span>
-            <span>{{ stagedCount }} 个已暂存</span>
-            <span>{{ unstagedCount }} 个未暂存</span>
+            <span v-if="tracking">跟踪 {{ tracking }}</span>
+            <span v-if="ahead">领先 {{ ahead }}</span>
+            <span v-if="behind" class="git-behind-label">落后 {{ behind }}</span>
+            <span v-if="tracking && !ahead && !behind" class="git-clean-label"><Check :size="13" />已同步</span>
           </div>
           <section v-if="mergeInProgress" class="git-conflicts">
             <div class="git-conflict-heading">
@@ -699,59 +732,51 @@ watch(
               </div>
             </div>
           </section>
-          <div class="git-toolbar">
-            <div class="git-selection-tools">
-              <el-checkbox :model-value="allChangesSelected" :indeterminate="someChangesSelected" :disabled="!changes.length || Boolean(busy)" @change="toggleAllChanges">全选</el-checkbox>
-              <span v-if="selectedChangePaths.length" class="git-selected-count">已选 {{ selectedChangePaths.length }}</span>
-              <el-button size="small" :icon="Plus" :disabled="!selectedChangePaths.length || Boolean(busy)" :loading="busy === 'stage'" @click="stageSelected">暂存所选</el-button>
-              <el-button size="small" :icon="Archive" :disabled="Boolean(busy)" :loading="busy === 'stage-all'" @click="stageAll">暂存全部</el-button>
-              <el-button size="small" :icon="X" :disabled="!selectedChangePaths.length || Boolean(busy)" :loading="busy === 'unstage'" @click="unstageSelected">取消暂存</el-button>
-            </div>
-            <el-radio-group v-model="changeView" size="small" class="git-view-switch" aria-label="变动文件显示方式">
-              <el-radio-button value="list"><List :size="14" />列表</el-radio-button>
-              <el-radio-button value="tree"><FolderTree :size="14" />文件夹</el-radio-button>
-            </el-radio-group>
-          </div>
-          <el-checkbox-group v-if="changeView === 'list'" v-model="selectedChangePaths" class="git-changes">
-            <div v-for="item in changes" :key="`${item.index}${item.worktree}-${item.path}`" class="git-change-row">
-              <el-checkbox :label="item.path" :value="item.path">
-                <span class="git-change-code">{{ item.index }}{{ item.worktree }}</span>
-                <span class="git-change-path">{{ item.originalPath ? `${item.originalPath} → ${item.path}` : item.path }}</span>
-              </el-checkbox>
-              <span class="git-change-state">{{ isStaged(item) ? '已暂存' : '' }}{{ isStaged(item) && item.worktree !== ' ' ? ' · ' : '' }}{{ item.worktree !== ' ' ? '工作区' : '' }}</span>
-              <el-button text size="small" :icon="FileDiff" :disabled="Boolean(busy)" @click.stop="showChangeDiff(item)">对比</el-button>
-            </div>
-          </el-checkbox-group>
-          <el-tree
-            v-else-if="changes.length"
-            ref="changeTreeRef"
-            class="git-change-tree"
-            :data="changeTree"
-            node-key="id"
-            show-checkbox
-            :expand-on-click-node="true"
-            @check="updateTreeSelection"
-          >
-            <template #default="{ data }">
-              <div class="git-tree-node">
-                <Folder v-if="data.directory" :size="15" />
-                <FileText v-else :size="15" />
-                <span class="git-tree-label">{{ data.label }}</span>
-                <template v-if="data.change">
-                  <span class="git-change-code">{{ data.change.index }}{{ data.change.worktree }}</span>
-                  <span class="git-change-state">{{ isStaged(data.change) ? '已暂存' : '' }}{{ isStaged(data.change) && data.change.worktree !== ' ' ? ' · ' : '' }}{{ data.change.worktree !== ' ' ? '工作区' : '' }}</span>
-                  <el-button text size="small" :icon="FileDiff" :disabled="Boolean(busy)" @click.stop="showChangeDiff(data.change)">对比</el-button>
-                </template>
+          <div class="git-status-layout">
+            <section class="git-status-changes" aria-label="变动文件">
+              <header class="git-status-panel-heading">
+                <div><strong>变动</strong><span>{{ changes.length }} 个文件</span></div>
+                <el-radio-group v-model="changeView" size="small" class="git-view-switch" aria-label="变动文件显示方式">
+                  <el-radio-button value="list"><List :size="14" />列表</el-radio-button>
+                  <el-radio-button value="tree"><FolderTree :size="14" />目录</el-radio-button>
+                </el-radio-group>
+              </header>
+              <div class="git-status-change-scroll">
+                <div v-if="changeView === 'list' && changes.length" class="git-changes">
+                  <div v-for="item in changes" :key="item.path" class="git-change-row" :class="{ 'is-selected': selectedChangePath === item.path }" @click="selectedChangePath = item.path">
+                    <span class="git-change-code">{{ item.index }}{{ item.worktree }}</span>
+                    <span class="git-change-path" :title="item.originalPath ? `${item.originalPath} → ${item.path}` : item.path">{{ item.originalPath ? `${item.originalPath} → ${item.path}` : item.path }}</span>
+                    <span class="git-change-state">{{ changeSource(item) }}</span>
+                    <el-button text size="small" :icon="FileDiff" :disabled="Boolean(busy)" @click.stop="showChangeDiff(item)">对比</el-button>
+                  </div>
+                </div>
+                <el-tree v-else-if="changeView === 'tree' && changes.length" class="git-change-tree" :data="changeTree" node-key="id" :expand-on-click-node="true" :default-expanded-keys="expandedChangePaths" :current-node-key="selectedChangePath" highlight-current @node-expand="(data: { id: string }) => { if (!expandedChangePaths.includes(data.id)) expandedChangePaths.push(data.id); }" @node-collapse="(data: { id: string }) => expandedChangePaths = expandedChangePaths.filter(id => id !== data.id)" @node-click="(data: { id: string }) => selectedChangePath = data.id">
+                  <template #default="{ data }">
+                    <div class="git-tree-node">
+                      <Folder v-if="data.directory" :size="15" />
+                      <FileText v-else :size="15" />
+                      <span class="git-tree-label">{{ data.label }}</span>
+                      <template v-if="data.change">
+                        <span class="git-change-code">{{ data.change.index }}{{ data.change.worktree }}</span>
+                        <span class="git-change-state">{{ changeSource(data.change) }}</span>
+                        <el-button text size="small" :icon="FileDiff" :disabled="Boolean(busy)" @click.stop="showChangeDiff(data.change)">对比</el-button>
+                      </template>
+                    </div>
+                  </template>
+                </el-tree>
+                <div v-else class="git-empty"><Check :size="24" />工作区干净</div>
               </div>
-            </template>
-          </el-tree>
-          <div v-if="!changes.length" class="git-empty"><Check :size="24" />工作区干净</div>
-          <div class="git-commit-form">
-            <el-input v-model="commitMessage" type="textarea" :rows="3" placeholder="提交说明，例如：修复登录超时处理" />
-            <div class="git-commit-actions">
-              <el-button :icon="Sparkles" :disabled="Boolean(busy) || loading" :loading="aiCommitLoading" :title="mergeInProgress || conflicts.length ? '请先完成合并并处理冲突' : !stagedCount ? '请先选择文件并暂存，或点击“暂存全部”' : '根据已暂存差异生成提交说明'" @click="generateCommitMessage">AI 生成</el-button>
-              <el-button type="primary" :icon="GitCommitHorizontal" :disabled="!stagedCount || Boolean(busy) || mergeInProgress" :loading="busy === 'commit'" @click="commitChanges">提交已暂存内容</el-button>
-            </div>
+            </section>
+            <section class="git-status-commit" aria-label="提交操作">
+              <header class="git-status-panel-heading"><div><strong>提交</strong><span>提交时自动包含全部变更</span></div></header>
+              <div class="git-commit-editor">
+                <el-input v-model="commitMessage" type="textarea" :rows="7" :disabled="Boolean(busy)" placeholder="提交说明，例如：修复登录超时处理" />
+                <div class="git-commit-actions">
+                  <el-button :icon="Sparkles" :disabled="Boolean(busy) || loading || !changes.length || mergeInProgress || Boolean(conflicts.length)" :loading="aiCommitLoading" :title="mergeInProgress || conflicts.length ? '请先完成合并并处理冲突' : !changes.length ? '没有可分析的代码变更' : '根据全部代码变更生成提交说明'" @click="generateCommitMessage">AI 生成说明</el-button>
+                  <el-button type="primary" :icon="behind ? GitMerge : GitCommitHorizontal" :disabled="Boolean(busy) || loading || mergeInProgress || Boolean(conflicts.length) || (!behind && (!changes.length || !commitMessage.trim()))" :loading="busy === 'commit' || busy === 'pull'" @click="commitChanges">{{ behind ? '拉取最新代码' : '提交全部变更' }}</el-button>
+                </div>
+              </div>
+            </section>
           </div>
         </el-tab-pane>
 
@@ -816,7 +841,7 @@ watch(
       </el-tabs>
     </template>
 
-    <div v-if="error && repoRoot" class="git-error"><strong>Git 操作失败</strong><span>{{ error }}</span></div>
+
   </GitSurface>
 
   <GitCompareDialog
@@ -853,7 +878,6 @@ watch(
 
 <style scoped>
 .git-workspace { height: 100%; min-height: 0; overflow: hidden; position: relative; }
-.git-embedded-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--font-mono, monospace); color: var(--muted); }
 .git-workspace .git-heading { align-items: flex-start; flex-wrap: wrap; }
 .git-workspace .git-heading-actions { flex-wrap: wrap; }
 .git-workspace .git-conflict-row { flex-wrap: wrap; }
@@ -864,19 +888,36 @@ watch(
 .git-dialog { color: var(--text); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; letter-spacing: 0; }
 .git-dialog :deep(.el-button), .git-dialog :deep(.el-input__inner), .git-dialog :deep(.el-textarea__inner) { font-family: inherit; }
 .git-dialog :deep(.el-button) { font-size: 12px; }
-.git-heading, .git-path-form, .git-heading-actions, .git-repo-meta, .git-status-summary, .git-toolbar, .git-selection-tools, .git-change-row, .git-tree-node, .git-commit-row, .git-branch-create, .git-section-heading, .git-branch-row, .git-remote-row, .git-remote-form, .git-conflict-heading, .git-conflict-row, .git-conflict-row > div, .git-conflict-actions, .git-commit-actions { display: flex; align-items: center; }
-.git-heading { justify-content: space-between; gap: 14px; margin-bottom: 10px; }
-.git-path-form { min-width: 0; flex: 1; gap: 8px; color: var(--text-soft); }
-.git-path-form .el-input { max-width: 540px; }
+.git-heading, .git-repo-identity, .git-heading-actions, .git-repo-meta, .git-status-summary, .git-change-row, .git-tree-node, .git-commit-row, .git-branch-create, .git-section-heading, .git-branch-row, .git-remote-row, .git-remote-form, .git-conflict-heading, .git-conflict-row, .git-conflict-row > div, .git-conflict-actions, .git-commit-actions { display: flex; align-items: center; }
+.git-heading { justify-content: space-between; gap: 16px; margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-2); }
+.git-repo-identity { min-width: 0; flex: 1; gap: 11px; }
+.git-repo-mark { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--accent-strong); }
+.git-repo-label { display: grid; min-width: 0; gap: 3px; }
+.git-repo-label strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.git-repo-location { overflow: hidden; color: var(--muted); font: 10px var(--font-mono, monospace); text-overflow: ellipsis; white-space: nowrap; }
 .git-heading-actions { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.git-action-divider { width: 1px; height: 21px; margin: 0 2px; background: var(--line-strong); }
 .git-remote-select { width: 132px; }
-.git-repo-meta { flex-wrap: wrap; gap: 10px; margin-bottom: 8px; color: var(--text-soft); font-size: 12px; }
-.git-repo-root { min-width: 0; max-width: 44%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, monospace); }
+.git-repo-meta { flex-wrap: wrap; gap: 7px; margin: 0 2px 12px; color: var(--text-soft); font-size: 11px; }
+.git-repo-meta > span:not(.git-branch-pill):not(.git-clean-label) { padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface); }
 .git-branch-pill { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid #46566f; border-radius: 10px; background: #202d47; color: var(--accent-strong); }
 .git-clean-label { display: inline-flex; align-items: center; gap: 3px; color: #87c7a1; }
-.git-tabs { margin-top: 2px; }
+.git-tabs { margin-top: 0; }
 .git-tabs :deep(.el-tabs__item) { height: 40px; font-size: 13px; font-weight: 560; }
 .git-status-summary { gap: 14px; padding: 7px 0 10px; color: var(--text-soft); font-size: 12px; }
+.git-behind-label { color: #e5ae75; }
+.git-status-layout { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .82fr); gap: 12px; min-height: 320px; height: min(44vh, 440px); }
+.git-status-changes, .git-status-commit { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); background: var(--surface); }
+.git-status-panel-heading { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 9px; min-height: 42px; padding: 6px 10px; border-bottom: 1px solid var(--line-strong); }
+.git-status-panel-heading > div { display: grid; min-width: 0; gap: 2px; }
+.git-status-panel-heading strong { color: var(--text); font-size: 12px; font-weight: 600; }
+.git-status-panel-heading span { color: var(--muted); font-size: 10px; }
+.git-status-change-scroll { flex: 1; min-height: 0; overflow: auto; }
+.git-commit-editor { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 10px; padding: 11px; }
+.git-commit-editor > .el-textarea { flex: 1; min-height: 120px; }
+.git-commit-editor :deep(.el-textarea__inner) { height: 100%; min-height: 120px !important; resize: none; }
+.git-commit-editor .git-commit-actions { display: grid; flex: 0 0 auto; grid-template-columns: 1fr; gap: 7px; }
+.git-commit-editor .git-commit-actions .el-button { width: 100%; margin: 0; }
 .git-conflicts { margin: 0 0 12px; border: 1px solid #7a5940; background: #2c241d; }
 .git-conflict-heading { gap: 9px; padding: 10px; color: #e2bd8c; }
 .git-conflict-heading > div { min-width: 0; flex: 1; display: grid; gap: 2px; }
@@ -886,29 +927,24 @@ watch(
 .git-conflict-row > div:first-child { min-width: 0; flex: 1; gap: 7px; color: #e0b77f; }
 .git-conflict-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 12px var(--font-mono, monospace); }
 .git-conflict-actions { flex: 0 0 auto; gap: 2px; }
-.git-toolbar { justify-content: space-between; gap: 9px; margin-bottom: 9px; }
-.git-selection-tools { flex-wrap: wrap; gap: 7px; }
-.git-selected-count { color: var(--accent-strong); font-size: 11px; }
 .git-view-switch { flex: 0 0 auto; }
 .git-view-switch :deep(.el-radio-button__inner) { display: inline-flex; align-items: center; gap: 5px; }
-.git-changes, .git-change-tree { min-height: 150px; border-top: 1px solid var(--line-strong); }
+.git-changes, .git-change-tree { min-height: 100%; }
 .git-change-row { justify-content: space-between; gap: 12px; min-height: 43px; padding: 4px 8px; border-bottom: 1px solid var(--line-strong); }
-.git-change-row :deep(.el-checkbox) { min-width: 0; flex: 1; margin-right: 0; }
-.git-change-row :deep(.el-checkbox__label) { display: inline-flex; min-width: 0; align-items: center; gap: 9px; }
+.git-change-row .git-change-path { flex: 1; }
 .git-change-code { flex: 0 0 20px; color: #d0af7d; font: 12px var(--font-mono, monospace); }
 .git-change-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 12px var(--font-mono, monospace); }
 .git-change-state { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
 .git-change-tree { background: transparent; color: var(--text); }
 .git-change-tree :deep(.el-tree-node__content) { min-height: 30px; height: 30px; background: transparent; }
 .git-change-tree :deep(.el-tree-node__content:hover), .git-change-tree :deep(.el-tree-node:focus > .el-tree-node__content) { background: #1d283d; }
-.git-change-tree :deep(.el-checkbox) { height: 28px; }
 .git-change-tree :deep(.el-button) { min-height: 24px; padding-top: 2px; padding-bottom: 2px; }
 .git-tree-node { min-width: 0; width: 100%; gap: 6px; padding-right: 4px; color: var(--text-soft); }
 .git-tree-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font: 12px var(--font-mono, monospace); }
-.git-commit-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; margin-top: 14px; }
 .git-commit-actions { align-self: stretch; flex-direction: column; justify-content: flex-end; gap: 7px; }
 .git-commit-actions .el-button { width: 100%; margin-left: 0; }
 .git-empty, .git-no-repository { display: grid; place-items: center; align-content: center; gap: 8px; min-height: 180px; color: var(--text-soft); font-size: 12px; }
+.git-status-change-scroll > .git-empty { min-height: 100%; }
 .git-no-repository { border: 1px dashed var(--line-strong); background: var(--surface); }
 .git-no-repository strong { color: var(--text); font-size: 14px; }
 .git-no-repository span { max-width: 760px; overflow-wrap: anywhere; text-align: center; }
@@ -940,14 +976,15 @@ watch(
 .git-conflict-analysis-path { overflow-wrap: anywhere; color: var(--accent-strong); font: 12px var(--font-mono, monospace); }
 .git-conflict-analysis pre { min-height: 260px; max-height: 62vh; overflow: auto; margin: 10px 0 0; padding: 14px; border: 1px solid var(--line-strong); background: var(--field-bg); color: var(--text); font: 13px/1.65 var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 720px) {
-  .git-heading { align-items: stretch; flex-direction: column; }
+  .git-heading { align-items: stretch; flex-direction: column; padding: 12px; }
   .git-heading-actions { justify-content: flex-start; }
+  .git-repo-identity { width: 100%; }
+  .git-heading-actions > .el-button { flex: 1 1 auto; }
   .git-remote-select { width: min(180px, 100%); }
-  .git-toolbar { align-items: stretch; flex-direction: column; }
+  .git-status-layout { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .git-status-changes { min-height: 220px; max-height: 45vh; }
+  .git-status-commit { min-height: 250px; }
   .git-view-switch { align-self: flex-start; }
-  .git-repo-root { max-width: 100%; flex-basis: 100%; }
-  .git-commit-form { grid-template-columns: 1fr; }
-  .git-commit-actions { flex-direction: row; }
   .git-conflict-heading, .git-conflict-row { align-items: stretch; flex-direction: column; }
   .git-conflict-actions { flex-wrap: wrap; }
   .git-remote-form { flex-wrap: wrap; }

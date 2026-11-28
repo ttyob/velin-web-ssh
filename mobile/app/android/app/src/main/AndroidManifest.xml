@@ -1,11 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="Velin"
+        android:label="Jeex Terminal"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:name="${applicationName}"
-        android:icon="@drawable/ic_velin">
+        android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -66,7 +66,7 @@ try {
   assert.equal(await page.getByRole('button', { name: /^API 联调 / }).count(), 1);
   assert.equal(await page.getByRole('button', { name: /^控制台界面优化 / }).count(), 0);
   await button('收起搜索').tap();
-  await page.getByRole('button', { name: /^Velin · 移动端开发 / }).tap();
+  await page.getByRole('button', { name: /^Jeex Terminal · 移动端开发 / }).tap();
   await button('展开输入').waitFor();
   const frame = page.frames().find(f => f.url().endsWith('/terminal/index.html'));
   assert(frame, 'Terminal iframe was not created');

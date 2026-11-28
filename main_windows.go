@@ -152,12 +152,20 @@ func (d *desktopServer) close(ctx context.Context) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--apply-self-update" {
+		if err := runWindowsUpdateHelper(os.Args[2:]); err != nil {
+			log.Printf("Windows self-update failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := runDesktop(); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func runDesktop() (runErr error) {
+	cleanupWindowsUpdateHelpers()
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find desktop executable: %w", err)
@@ -217,7 +225,7 @@ func runDesktop() (runErr error) {
 	app.manager = desktopservice.New(desktopservice.Options{Command: app.workerCommand})
 	defer app.manager.Close()
 	return wails.Run(&options.App{
-		Title: "VelinWebSSH", Width: 560, Height: 440, MinWidth: 480, MinHeight: 440,
+		Title: "Jeex Terminal", Width: 560, Height: 440, MinWidth: 480, MinHeight: 440,
 		BackgroundColour: options.NewRGB(16, 18, 22),
 		AssetServer:      &assetserver.Options{Handler: http.HandlerFunc(app.servePage)},
 		Windows:          &windows.Options{Theme: windows.Dark},
@@ -330,6 +338,11 @@ func startDesktopServer(cfg config.Config, allowFallback bool) (*desktopServer, 
 }
 
 func runDesktopWorker(cfg config.Config) error {
+	launcherPID, _ := strconv.Atoi(os.Getenv("VELIN_DESKTOP_LAUNCHER_PID"))
+	launchMode := os.Getenv("VELIN_DESKTOP_LAUNCH_MODE")
+	if launcherPID < 1 || !cfg.SelfUpdate || launchMode != "service" && launchMode != "window" {
+		cfg.SelfUpdate = false
+	}
 	backend, notice, url, err := startDesktopServer(cfg, desktopArgumentPresent("--worker-window"))
 	if err != nil {
 		_ = json.NewEncoder(os.Stdout).Encode(desktopservice.Ready{Error: err.Error()})
@@ -339,6 +352,9 @@ func runDesktopWorker(cfg config.Config) error {
 	ready := desktopservice.Ready{URL: url}
 	if notice != nil {
 		ready.Credentials = &desktopservice.Credentials{Username: notice.username, Password: notice.password, Reset: notice.reset}
+	}
+	if cfg.SelfUpdate {
+		go watchWindowsSelfUpdate(cfg, url, launcherPID, launchMode, os.Getenv("VELIN_DESKTOP_LAUNCH_MINIMIZED") == "true")
 	}
 	if err = json.NewEncoder(os.Stdout).Encode(ready); err != nil {
 		return err

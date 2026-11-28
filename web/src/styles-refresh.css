@@ -720,14 +720,6 @@ body {
   transition: none !important;
 }
 
-.tabbar {
-  height: 43px;
-  flex-basis: 43px;
-  border-color: var(--line);
-  background: var(--tabbar-bg);
-  box-shadow: 0 3px 14px var(--theme-shadow);
-}
-
 .workspace-lock-button {
   border: 1px solid transparent;
   color: var(--text-muted);
@@ -737,55 +729,6 @@ body {
 .workspace-lock-button:focus-visible {
   border-color: var(--accent-border);
   background: var(--accent-surface);
-  color: var(--accent-strong);
-}
-
-.terminal-tab {
-  min-width: 96px;
-  max-width: 164px;
-  border-color: var(--line);
-  color: var(--muted);
-  transition:
-    color 0.18s var(--ease-ui),
-    background-color 0.18s var(--ease-ui),
-    opacity 0.18s var(--ease-ui);
-}
-
-.terminal-tab:hover {
-  background: var(--tab-hover-bg);
-  color: var(--text-soft);
-  transform: none;
-}
-
-.terminal-tab.active {
-  background: var(--tab-active-bg);
-  color: var(--text);
-  transform: none;
-}
-
-.terminal-tab::after {
-  left: 9px;
-  right: 9px;
-  background: var(--accent);
-}
-
-.tab-close {
-  margin-left: auto;
-  opacity: 0.72;
-}
-
-.terminal-tab:hover .tab-close,
-.terminal-tab.active .tab-close {
-  opacity: 1;
-}
-
-.new-tab {
-  min-height: 43px;
-  border-color: var(--line);
-}
-
-.new-tab:hover {
-  background: var(--surface-hover);
   color: var(--accent-strong);
 }
 
@@ -1437,10 +1380,8 @@ body {
   background: var(--surface-2);
 }
 
-.host-dialog .el-dialog__body,
 .credential-dialog .el-dialog__body,
 .tool-form-dialog .el-dialog__body,
-.web-proxy-dialog .el-dialog__body,
 .user-dialog .el-dialog__body,
 .user-password-dialog .el-dialog__body {
   padding-bottom: 4px !important;
@@ -1448,21 +1389,6 @@ body {
 
 .user-dialog .el-segmented {
   width: 100%;
-}
-
-.web-proxy-form {
-  margin-top: 18px;
-}
-
-.web-proxy-dialog .el-alert {
-  border: 1px solid #5a5137;
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-}
-
-.web-proxy-dialog .el-alert__title {
-  color: #d9bf7d;
-  line-height: 1.55;
 }
 
 .host-form-section {
@@ -1661,13 +1587,6 @@ body {
   .mobile-overlay {
     background: #050807a6;
     backdrop-filter: blur(3px);
-  }
-
-  .terminal-tab {
-    min-width: 86px;
-    max-width: 128px;
-    padding-left: 7px;
-    padding-right: 3px;
   }
 
   .workspace-empty {

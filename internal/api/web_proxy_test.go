@@ -538,7 +538,7 @@ func TestProxyCookieIsolation(t *testing.T) {
 	}
 	policy := webProxyCSP("velin.example", "/web-proxy/token", false, false)
 	if strings.Contains(policy, "allow-same-origin") {
-		t.Fatal("ordinary proxy pages share the VelinWebSSH origin")
+		t.Fatal("ordinary proxy pages share the Jeex Terminal origin")
 	}
 	if strings.Contains(policy, "connect-src 'self'") {
 		t.Fatal("proxy CSP allows root-origin API connections")

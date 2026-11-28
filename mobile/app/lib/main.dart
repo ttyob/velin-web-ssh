@@ -267,7 +267,7 @@ class _VelinAppState extends State<VelinApp> {
       scrollBehavior: const _CalmScrollBehavior(),
       navigatorKey: navigation,
       navigatorObservers: [lockNavigation],
-      title: 'Velin Mobile',
+      title: 'Jeex Terminal',
       debugShowCheckedModeBanner: false,
       theme: V.theme(),
       builder: (context, child) => WorkspaceShield(

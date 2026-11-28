@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrandLogo from '../components/BrandLogo.vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -406,8 +407,8 @@ function dispose() {
   <main ref="pageHost" class="share-page">
     <header class="share-header">
       <div class="share-brand">
-        <span class="share-brand-mark"><TerminalSquare :size="19" /></span>
-        <strong>VelinWebSSH</strong>
+        <span class="share-brand-mark"><BrandLogo :size="23" /></span>
+        <strong>Jeex Terminal</strong>
       </div>
       <div class="share-heading"><span>终端分享</span><span class="share-heading-divider">/</span><span :title="share?.sessionName">{{ share?.sessionName || "共享终端" }}</span></div>
       <div class="share-header-actions">

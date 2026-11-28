@@ -427,7 +427,7 @@ class _WebServiceEditorState extends State<WebServiceEditor> {
                       controller: port,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
-                        labelText: 'Velin 监听端口',
+                        labelText: 'Jeex Terminal 监听端口',
                       ),
                       validator: (v) {
                         final p = int.tryParse(v ?? '');

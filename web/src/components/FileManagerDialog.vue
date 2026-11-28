@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { useDialogReturnFocus } from "../composables/useDialogReturnFocus";
+import { availableFileName } from "../fileOperations";
+import { contextMenuPosition, contextMenuKey } from "../contextMenu";
+import InlineFileRename from "./InlineFileRename.vue";
+import OperationFeedback from "./OperationFeedback.vue";
 import { downloadToolFile } from "../utils/toolDownloads";
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { ArrowLeft, ArrowRight, ArrowUp, Check, ChevronDown, Copy, Download, Eye, File as FileIcon, FilePlus2, FilePenLine, Folder, FolderOpen, FolderPlus, Info, MoreHorizontal, PanelLeft, Pencil, RefreshCw, Scissors, Search, Trash2, Upload, ClipboardPaste, FolderInput, X } from "@lucide/vue";
@@ -12,13 +17,22 @@ const ImagePreviewDialog = defineAsyncComponent(() => import("./ImagePreviewDial
 const RemoteDirectoryPicker = defineAsyncComponent(() => import("./RemoteDirectoryPicker.vue"));
 const props = defineProps<{ modelValue: boolean; host?: Host; sessionId?: string; initialPath?: string }>();
 const emit = defineEmits<{ "update:modelValue": [boolean] }>();
+const { restoreFocus } = useDialogReturnFocus(() => props.modelValue);
 const files = computed(() => createRemoteFiles(props.host?.id || "", props.sessionId || ""));
+function beforeClose(done: () => void) {
+  if (busy.value || uploading.value) { ElMessage.info("文件操作正在进行，请完成或停止传输后关闭"); return; }
+  done();
+}
 const currentPath = ref("."), pathInput = ref("."), filter = ref("");
 const entries = ref<FileEntry[]>([]), selected = ref<string[]>([]), anchor = ref("");
 const showHidden = ref(false), loading = ref(false), busy = ref(false), error = ref("");
 const history = ref<string[]>([]), historyIndex = ref(-1);
+const renaming = ref<{ path: string; error: string }>();
+const operationError = ref(""), transferProgress = ref("");
 const sortBy = ref<"name" | "size" | "modifiedAt">("name"), descending = ref(false);
-const uploadQueue = ref<Array<{ name: string; progress: number; status: string }>>([]);
+type TransferItem = { name: string; progress: number; status: string; file: File; directory: string; error: string };
+const uploadQueue = ref<TransferItem[]>([]);
+let uploadAbort: AbortController | undefined;
 const uploading = ref(false), fileInput = ref<HTMLInputElement>();
 let uploadTarget: string | undefined;
 const editorOpen = ref(false), editingFile = ref<FileEntry>(), editorMode = ref<"edit" | "preview">("edit");
@@ -41,7 +55,7 @@ const shownEntries = computed(() => entries.value.filter(item => (showHidden.val
 const selectedEntries = computed(() => shownEntries.value.filter(entry => selected.value.includes(entry.path)));
 const expandedPaths = computed(() => { const paths = ["/"]; let path = ""; for (const part of currentPath.value.split("/").filter(Boolean)) { path += "/" + part; paths.push(path); } return paths; });
 const selectedSize = computed(() => selectedEntries.value.reduce((sum, entry) => sum + (entry.directory ? 0 : entry.size), 0));
-function report(cause: unknown) { if (cause !== "cancel" && cause !== "close") ElMessage.error(cause instanceof Error ? cause.message : "文件操作失败"); }
+function report(cause: unknown) { if (cause !== "cancel" && cause !== "close") operationError.value = cause instanceof Error ? cause.message : "文件操作失败"; }
 function validName(name: string) { return !!name.trim() && name !== "." && name !== ".." && !/[\/\0]/.test(name) || "名称不能为空，不能包含 /，也不能为 . 或 .."; }
 function synthetic(path: string): FileEntry { return { path, name: path === "/" ? "文件系统" : path.split("/").at(-1) || path, directory: true, symlink: false, size: 0, mode: "", modifiedAt: "" }; }
 watch(() => props.modelValue, open => {
@@ -60,11 +74,13 @@ watch(() => !!menu.value, open => {
   removeMenuListeners();
   if (open) { document.addEventListener("pointerdown", dismissMenu, true); document.addEventListener("wheel", dismissMenu, { capture: true, passive: true }); window.addEventListener("resize", closeMenu); window.addEventListener("blur", closeMenu); }
 });
-onBeforeUnmount(() => { listController?.abort(); stopResize?.(); removeMenuListeners(); });
+onBeforeUnmount(() => { uploadAbort?.abort(); listController?.abort(); stopResize?.(); removeMenuListeners(); });
 
 async function listFiles(next = currentPath.value, index?: number) {
   if (!props.host || !props.modelValue) return;
   listController?.abort(); const controller = new AbortController(); listController = controller;
+  const sameDirectory = next === currentPath.value;
+  const scroll = sameDirectory ? list.value?.scrollTop || 0 : 0;
   loading.value = true; error.value = ""; menu.value = undefined;
   try {
     const result = await files.value.list(next, controller.signal);
@@ -74,8 +90,9 @@ async function listFiles(next = currentPath.value, index?: number) {
     if (index !== undefined) historyIndex.value = index;
     else if (history.value[historyIndex.value] !== result.path) { history.value.splice(historyIndex.value + 1); history.value.push(result.path); historyIndex.value = history.value.length - 1; }
     selected.value = selected.value.filter(path => result.entries.some(entry => entry.path === path));
-    filter.value = ""; showSidebar.value = false;
-    await nextTick(); tree.value?.setCurrentKey(result.path);
+    if (!sameDirectory) { filter.value = ""; renaming.value = undefined; }
+    showSidebar.value = false;
+    await nextTick(); if (list.value) list.value.scrollTop = scroll; tree.value?.setCurrentKey(result.path);
   } catch (cause) {
     if (!controller.signal.aborted) { error.value = cause instanceof Error ? cause.message : "目录读取失败"; pathInput.value = currentPath.value; }
   } finally { if (listController === controller) loading.value = false; }
@@ -111,12 +128,22 @@ async function createEntry(directory: boolean, parent = currentPath.value) {
     await mutate(async () => { const path = joinRemotePath(parent, value); if (directory) await files.value.mkdir(path); else await files.value.create(path); }, "创建完成");
   } catch (cause) { report(cause); }
 }
-async function renameEntry(entry: FileEntry) {
-  try {
-    const { value } = await ElMessageBox.prompt("输入新名称", "重命名", { inputValue: entry.name, inputValidator: validName, closeOnClickModal: false });
-    if (value === entry.name) return;
-    await mutate(() => files.value.rename(entry.path, joinRemotePath(parentRemotePath(entry.path), value)), "已重命名");
-  } catch (cause) { report(cause); }
+function renameEntry(entry: FileEntry) {
+  if (busy.value || uploading.value) return;
+  menu.value = undefined; selected.value = [entry.path];
+  if (parentRemotePath(entry.path) !== currentPath.value) { void listFiles(parentRemotePath(entry.path)).then(() => { if (entries.value.some(item => item.path === entry.path)) renaming.value = { path: entry.path, error: "" }; }); }
+  else renaming.value = { path: entry.path, error: "" };
+}
+async function finishRename(entry: FileEntry, value: string) {
+  if (!renaming.value || busy.value) return;
+  const validation = validName(value);
+  if (validation !== true) { renaming.value.error = validation; return; }
+  if (value === entry.name) { renaming.value = undefined; list.value?.focus({ preventScroll: true }); return; }
+  const destination = joinRemotePath(parentRemotePath(entry.path), value);
+  if (entries.value.some(item => item.path === destination)) { renaming.value.error = `目标已存在“${value}”`; return; }
+  const ok = await mutate(async () => { await files.value.rename(entry.path, destination); selected.value = [destination]; anchor.value = destination; }, "已重命名");
+  if (ok) { renaming.value = undefined; list.value?.focus({ preventScroll: true }); }
+  else if (renaming.value) renaming.value.error = operationError.value || "操作未完成，请重试";
 }
 async function removeEntries(targets: FileEntry[]) {
   if (!targets.length) return;
@@ -126,11 +153,11 @@ async function removeEntries(targets: FileEntry[]) {
   } catch (cause) { report(cause); }
 }
 async function mutate(operation: () => Promise<unknown>, message?: string) {
-  if (busy.value || uploading.value) return;
-  busy.value = true;
-  try { await operation(); if (message) ElMessage.success(message); }
-  catch (cause) { report(cause); }
-  finally { await refresh(); busy.value = false; }
+  if (busy.value || uploading.value) return false;
+  busy.value = true; operationError.value = "";
+  try { await operation(); if (message) ElMessage.success(message); return true; }
+  catch (cause) { report(cause); return false; }
+  finally { await refresh(); busy.value = false; transferProgress.value = ""; }
 }
 function setClipboard(targets: FileEntry[], cut: boolean) { clipboard.value = { entries: [...targets], cut }; }
 async function paste(directory = currentPath.value) {
@@ -149,7 +176,8 @@ async function transfer(targets: FileEntry[], directory: string, copy: boolean, 
       if (copy && parentRemotePath(entry.path) === directory) {
         const dot = !entry.directory ? name.lastIndexOf(".") : -1, stem = dot > 0 ? name.slice(0, dot) : name, extension = dot > 0 ? name.slice(dot) : "";
         let index = 1; do { name = `${stem} - 副本${index === 1 ? "" : ` (${index})`}${extension}`; index++; } while (names.has(name));
-      } else if (names.has(name)) throw new Error(`目标已存在“${name}”，请先重命名后再操作`);
+      } else { const available = await availableFileName(name, entry.directory, names); if (!available) continue; name = available; }
+      transferProgress.value = `正在${copy ? "复制" : "移动"} ${completed.size + 1}/${targets.length} · ${name}`;
       const destination = joinRemotePath(directory, name);
       if (copy) await files.value.copy("/", entry.path, destination); else await files.value.rename(entry.path, destination);
       names.add(name); completed.add(entry.path);
@@ -160,9 +188,10 @@ async function transfer(targets: FileEntry[], directory: string, copy: boolean, 
 }
 function chooseDestination(targets: FileEntry[], copy: boolean) { pickerEntries.value = [...targets]; pickerCopy.value = copy; pickerOpen.value = true; }
 function downloadEntry(entry: FileEntry) { if (props.host) downloadToolFile(`/api/sftp/${props.host.id}/download?path=${encodeURIComponent(entry.path)}${sessionQuery.value}`); }
-const editableExtensions = new Set(["txt", "text", "md", "markdown", "json", "jsonc", "ini", "env", "properties", "conf", "cfg", "yaml", "yml", "xml", "toml", "csv", "log", "sh", "bash", "zsh", "js", "mjs", "cjs", "ts", "tsx", "jsx", "css", "scss", "less", "html", "htm", "vue", "go", "py", "rb", "php", "java", "c", "h", "cpp", "hpp", "rs", "sql"]);
+const editableExtensions = new Set(["txt", "text", "md", "markdown", "mdx", "json", "jsonc", "json5", "ini", "env", "properties", "conf", "cfg", "yaml", "yml", "xml", "toml", "csv", "log", "sh", "bash", "zsh", "fish", "js", "mjs", "cjs", "ts", "mts", "cts", "tsx", "jsx", "css", "scss", "sass", "less", "styl", "html", "htm", "xhtml", "vue", "svelte", "go", "py", "pyw", "rb", "php", "php3", "php4", "php5", "php8", "phtml", "phps", "java", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs", "scala", "kt", "kts", "m", "mm", "dart", "rs", "sql", "lua", "pl", "pm", "r", "swift", "ps1", "psm1", "cmake", "proto", "diff", "patch", "gradle", "groovy", "gvy", "hs", "lhs", "clj", "cljs", "cljc", "edn", "lisp", "lsp", "scm", "erl", "hrl", "f", "f90", "f95", "pas", "pp", "vb", "vbs", "v", "vh", "sv", "svh", "vhd", "vhdl", "coffee", "elm", "pug", "jade", "j2", "jinja", "jinja2", "feature", "mk"]);
+const editableNames = new Set(["dockerfile", "makefile", "gnumakefile", "bsdmakefile", "cmakelists.txt", "jenkinsfile", "gemfile", "rakefile", "guardfile", "podfile"]);
 const imageExtensions = new Set(["avif", "bmp", "gif", "jpe", "jpeg", "jpg", "png", "webp"]);
-function isEditable(entry: FileEntry) { return !entry.directory && !entry.symlink && entry.size <= 2 * 1024 * 1024 && (entry.name === ".env" || entry.name.startsWith(".env.") || editableExtensions.has(entry.name.split(".").at(-1)?.toLowerCase() || "")); }
+function isEditable(entry: FileEntry) { const name = entry.name.toLowerCase(); return !entry.directory && !entry.symlink && entry.size <= 2 * 1024 * 1024 && (name === ".env" || name.startsWith(".env.") || name.startsWith("dockerfile.") || editableNames.has(name) || editableExtensions.has(name.split(".").at(-1) || "")); }
 function isMarkdown(entry: FileEntry) { return !entry.directory && !entry.symlink && /\.(md|markdown)$/i.test(entry.name); }
 function isImage(entry: FileEntry) { return !entry.directory && !entry.symlink && entry.size > 0 && entry.size <= 32 * 1024 * 1024 && imageExtensions.has(entry.name.split(".").at(-1)?.toLowerCase() || ""); }
 function editEntry(entry: FileEntry, mode: "edit" | "preview" = "edit") { editingFile.value = entry; editorMode.value = mode; editorOpen.value = true; }
@@ -209,10 +238,10 @@ async function openMenu(event: MouseEvent, entry?: FileEntry, fromTree = false) 
   if (root) selected.value = [];
   menu.value = { x: event.clientX, y: event.clientY, targets: entry && !root ? (fromTree ? [entry] : selectedEntries.value) : [], directory: root ? "/" : currentPath.value };
   await nextTick();
-  if (menu.value && menuElement.value) { const box = menuElement.value.getBoundingClientRect(); menu.value.x = Math.max(8, Math.min(event.clientX, window.innerWidth - box.width - 8)); menu.value.y = Math.max(8, Math.min(event.clientY, window.innerHeight - box.height - 8)); menuElement.value.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true }); }
+  if (menu.value && menuElement.value) { Object.assign(menu.value, contextMenuPosition(menu.value, menuElement.value)); menuElement.value.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true }); }
 }
 function runMenu(action: MenuAction) { menu.value = undefined; list.value?.focus(); if (!action.disabled) void action.run(); }
-function menuKey(event: KeyboardEvent) { const buttons = [...(menuElement.value?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") || [])]; const index = buttons.indexOf(document.activeElement as HTMLButtonElement); if (event.key === "Escape" || event.key === "Tab") { menu.value = undefined; list.value?.focus(); } else if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus(); } }
+function menuKey(event: KeyboardEvent) { contextMenuKey(event, menuElement.value, () => { menu.value = undefined; list.value?.focus({ preventScroll: true }); }); }
 function listKey(event: KeyboardEvent) {
   if ((event.target as HTMLElement).closest("input,textarea") || busy.value || uploading.value || menu.value) return;
   const key = event.key.toLowerCase(), control = event.ctrlKey || event.metaKey;
@@ -260,68 +289,88 @@ function resize(event: PointerEvent) {
   stopResize?.(); stopResize = stop; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop);
 }
 
-function uploadChunk(pathname: string, file: Blob, offset: number, overwrite: boolean) {
-	return new Promise<number>((resolve, reject) => {
-		const request = new XMLHttpRequest();
-		request.open("PUT", `/api/sftp/${props.host!.id}/upload?path=${encodeURIComponent(pathname)}&offset=${offset}&overwrite=${overwrite}${sessionQuery.value}`);
-		void csrfHeaders().then((headers) => { Object.entries(headers).forEach(([key, value]) => request.setRequestHeader(key, value)); request.send(file); }).catch(reject);
-		request.onload = () => {
-			if (request.status < 200 || request.status >= 300) { reject(new Error("分块上传失败")); return; }
-			try { resolve(Number(JSON.parse(request.responseText).offset) || offset + file.size); } catch { resolve(offset + file.size); }
-		};
-		request.onerror = () => reject(new Error("网络连接中断"));
-	});
+function uploadChunk(pathname: string, file: Blob, offset: number, overwrite: boolean, signal: AbortSignal, progress: (bytes: number) => void) {
+  return new Promise<number>((resolve, reject) => {
+    if (signal.aborted) { reject(new DOMException("传输已停止", "AbortError")); return; }
+    const request = new XMLHttpRequest();
+    request.open("PUT", `/api/sftp/${props.host!.id}/upload?path=${encodeURIComponent(pathname)}&offset=${offset}&overwrite=${overwrite}${sessionQuery.value}`);
+    request.timeout = 90_000;
+    const abort = () => request.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    request.upload.onprogress = event => progress(event.loaded);
+    request.onload = () => {
+      cleanup();
+      if (request.status < 200 || request.status >= 300) {
+        let message = "分块上传失败"; try { message = JSON.parse(request.responseText).message || message; } catch { /* Use the fallback. */ }
+        reject(new Error(message)); return;
+      }
+      try { resolve(Number(JSON.parse(request.responseText).offset) || offset + file.size); } catch { resolve(offset + file.size); }
+    };
+    request.onerror = () => { cleanup(); reject(new Error("网络连接中断")); };
+    request.ontimeout = () => { cleanup(); reject(new Error("上传超时，请检查主机连接后重试")); };
+    request.onabort = () => { cleanup(); reject(new DOMException("传输已停止", "AbortError")); };
+    void csrfHeaders().then(headers => {
+      if (signal.aborted) { cleanup(); reject(new DOMException("传输已停止", "AbortError")); return; }
+      Object.entries(headers).forEach(([key, value]) => request.setRequestHeader(key, value)); request.send(file);
+    }).catch(cause => { cleanup(); reject(cause); });
+  });
 }
-
-async function uploadOne(file: File, queueItem: { name: string; progress: number; status: string }, directory: string) {
-	if (!props.host) return;
-	const target = joinRemotePath(directory, file.name);
-	let offset = 0;
-	let overwrite = false;
-	const status = await api<{ size: number; exists: boolean }>(`/api/sftp/${props.host.id}/transfer-status?path=${encodeURIComponent(target)}${sessionQuery.value}`);
-	if (status.exists && status.size >= file.size) {
-		await ElMessageBox.confirm("同名远程文件已存在，是否覆盖？", "覆盖文件", { type: "warning" });
-		offset = 0; overwrite = true;
-	} else if (status.exists) {
-		offset = status.size; overwrite = true; queueItem.status = `续传 ${Math.floor(offset / file.size * 100)}%`;
-	}
-	const chunkSize = 8 * 1024 * 1024;
-	if (!file.size) await uploadChunk(target, file, 0, overwrite);
-	while (offset < file.size) {
-		const end = Math.min(file.size, offset + chunkSize);
-		offset = await uploadChunk(target, file.slice(offset, end), offset, overwrite);
-		queueItem.progress = Math.min(100, Math.round(offset / file.size * 100));
-		queueItem.status = `${queueItem.progress}%`;
-	}
-	queueItem.progress = 100; queueItem.status = "完成";
+async function uploadOne(queueItem: TransferItem, signal: AbortSignal) {
+  if (!props.host) return;
+  const file = queueItem.file, directory = queueItem.directory;
+  const names = new Set((await files.value.list(directory)).entries.map(item => item.name));
+  const name = await availableFileName(file.name, false, names);
+  if (!name) { queueItem.status = "已跳过"; return; }
+  if (signal.aborted) throw new DOMException("传输已停止", "AbortError");
+  const target = joinRemotePath(directory, name);
+  queueItem.name = name; queueItem.error = "";
+  let offset = 0;
+  const chunkSize = 8 * 1024 * 1024;
+  if (!file.size) await uploadChunk(target, file, 0, false, signal, () => {});
+  while (offset < file.size) {
+    const end = Math.min(file.size, offset + chunkSize);
+    const next = await uploadChunk(target, file.slice(offset, end), offset, offset > 0, signal, bytes => {
+      queueItem.progress = Math.min(99, Math.round((offset + bytes) / file.size * 100)); queueItem.status = `${queueItem.progress}%`;
+    });
+    if (next <= offset || next > file.size) throw new Error("上传偏移异常，请重新读取目录后重试");
+    offset = next;
+    queueItem.progress = Math.min(100, Math.round(offset / file.size * 100)); queueItem.status = `${queueItem.progress}%`;
+  }
+  queueItem.progress = 100; queueItem.status = "完成";
 }
-
+async function runUploads(items: TransferItem[]) {
+  if (uploading.value || busy.value || !props.host) return;
+  uploading.value = true; uploadAbort = new AbortController(); const signal = uploadAbort.signal;
+  try {
+    for (const item of items) {
+      if (signal.aborted) { item.status = "已停止"; continue; }
+      item.status = "准备中"; item.error = "";
+      try { await uploadOne(item, signal); }
+      catch (cause) {
+        item.status = signal.aborted ? "已停止" : cause === "cancel" || cause === "close" ? "已取消" : "失败";
+        if (item.status === "失败") item.error = cause instanceof Error ? cause.message : "上传失败";
+      }
+    }
+    await refresh();
+  } finally { uploading.value = false; if (fileInput.value) fileInput.value.value = ""; }
+}
+function retryTransfer(item: TransferItem) { item.progress = 0; void runUploads([item]); }
 function pickUpload(directory = currentPath.value) { uploadTarget = directory; fileInput.value?.click(); }
 async function uploadFile(event: Event) {
   const directory = uploadTarget || currentPath.value; uploadTarget = undefined;
   await uploadFiles(Array.from((event.target as HTMLInputElement).files || []), directory);
 }
 
-async function uploadFiles(files: File[], directory = currentPath.value) {
-	if (!props.host || uploading.value || busy.value) return;
-	if (!files.length) return;
-	uploading.value = true;
-	uploadQueue.value = files.map((file) => ({ name: file.name, progress: 0, status: "等待" }));
-	try {
-		for (let index = 0; index < files.length; index++) {
-			try { await uploadOne(files[index], uploadQueue.value[index], directory); }
-			catch (error) { uploadQueue.value[index].status = error === "cancel" || error === "close" ? "已取消" : "失败"; if (error !== "cancel" && error !== "close") ElMessage.error(`${files[index].name}：${error instanceof Error ? error.message : "上传失败"}`); }
-		}
-		await refresh();
-	} finally {
-		uploading.value = false;
-		if (fileInput.value) fileInput.value.value = "";
-	}
+async function uploadFiles(selectedFiles: File[], directory = currentPath.value) {
+  if (!props.host || uploading.value || busy.value || !selectedFiles.length) return;
+  uploadQueue.value = selectedFiles.map(file => ({ name: file.name, file, directory, progress: 0, status: "等待", error: "" }));
+  await runUploads(uploadQueue.value);
 }
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" class="file-manager-dialog explorer-dialog" :title="`文件管理 · ${host?.name || '当前终端'}`" append-to-body :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" class="file-manager-dialog explorer-dialog" @close-auto-focus="restoreFocus" :before-close="beforeClose" :title="`文件管理 · ${host?.name || '当前终端'}`" append-to-body :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
     <div class="explorer" @pointerdown="menu = undefined">
       <div class="explorer-addressbar">
         <div class="explorer-navigation">
@@ -350,6 +399,7 @@ async function uploadFiles(files: File[], directory = currentPath.value) {
         </div>
         <input ref="fileInput" hidden type="file" multiple @change="uploadFile" />
       </div>
+      <OperationFeedback :pending="transferProgress" :error="renaming?.error || operationError" retry-label="重新连接并刷新" @retry="refresh" @dismiss="operationError = ''; if (renaming) renaming.error = ''" />
       <div class="explorer-panes" :style="{ '--explorer-sidebar': `${sidebarWidth}px` }" :class="{ 'show-directories': showSidebar }">
         <aside ref="sidebar" class="explorer-directories" aria-label="文件夹目录">
           <div class="explorer-directory-heading"><Folder :size="14" /><span>文件夹</span><button class="explorer-mobile-tree" aria-label="收起目录栏" @click="showSidebar = false"><X :size="14" /></button></div>
@@ -369,8 +419,8 @@ async function uploadFiles(files: File[], directory = currentPath.value) {
           </div>
           <div ref="list" role="listbox" aria-label="文件列表" aria-multiselectable="true" tabindex="0" class="explorer-file-list" :class="{ 'is-drop-target': dropPath === currentPath, 'is-loading': loading }" @contextmenu="openMenu($event)" @keydown="listKey" @click.self="selected = []" @dragover="allowDrop($event, currentPath)" @dragleave.self="dropPath = ''" @drop="drop($event, currentPath)">
             <div v-if="!shownEntries.length && !error" class="explorer-empty" @contextmenu="openMenu($event)"><component :is="filter ? Search : FolderOpen" :size="30" /><strong>{{ loading ? '正在读取目录…' : filter ? '没有匹配的文件' : '此文件夹为空' }}</strong><span v-if="!loading">{{ filter ? '试试其他名称，或清除筛选' : '右键新建文件，或将文件拖到这里上传' }}</span><button v-if="filter" @click="filter = ''">清除筛选</button></div>
-            <div v-for="entry in shownEntries" :key="entry.path" class="explorer-file-row" role="option" :aria-label="entry.name" :aria-selected="selected.includes(entry.path)" :class="{ 'is-directory': entry.directory, 'is-file': !entry.directory, 'is-selected': selected.includes(entry.path), 'is-cut': clipboard?.cut && clipboard.entries.some(item => item.path === entry.path), 'is-drop-target': dropPath === entry.path, 'is-hidden': entry.name.startsWith('.') }" :draggable="!busy && !uploading" @click="selectEntry(entry, $event); list?.focus()" @dblclick="activateEntry(entry)" @contextmenu="openMenu($event, entry)" @dragstart="startDrag($event, entry)" @dragend="dragged = []; dropPath = ''" @dragover="entry.directory && allowDrop($event, entry.path)" @dragleave="dropPath = ''" @drop="entry.directory ? drop($event, entry.path) : undefined">
-              <span class="explorer-name" :title="entry.name"><component :is="entry.directory ? Folder : FileIcon" :size="17" :class="entry.directory ? 'explorer-folder-icon' : 'explorer-file-icon'" /><span>{{ entry.name }}</span><small v-if="entry.symlink">↗</small></span>
+            <div v-for="entry in shownEntries" :key="entry.path" class="explorer-file-row" role="option" :aria-label="entry.name" :aria-selected="selected.includes(entry.path)" :class="{ 'is-directory': entry.directory, 'is-file': !entry.directory, 'is-selected': selected.includes(entry.path), 'is-cut': clipboard?.cut && clipboard.entries.some(item => item.path === entry.path), 'is-drop-target': dropPath === entry.path, 'is-hidden': entry.name.startsWith('.') }" :draggable="!busy && !uploading && !renaming" @click="selectEntry(entry, $event); list?.focus()" @dblclick="activateEntry(entry)" @contextmenu="openMenu($event, entry)" @dragstart="startDrag($event, entry)" @dragend="dragged = []; dropPath = ''" @dragover="entry.directory && allowDrop($event, entry.path)" @dragleave="dropPath = ''" @drop="entry.directory ? drop($event, entry.path) : undefined">
+              <span class="explorer-name" :title="entry.name"><component :is="entry.directory ? Folder : FileIcon" :size="17" :class="entry.directory ? 'explorer-folder-icon' : 'explorer-file-icon'" /><InlineFileRename v-if="renaming?.path === entry.path" :name="entry.name" :directory="entry.directory" :busy="busy" :error="renaming?.error" @confirm="finishRename(entry, $event)" @cancel="renaming = undefined; list?.focus({ preventScroll: true })" /><span v-else>{{ entry.name }}</span><small v-if="entry.symlink">↗</small></span>
               <span class="explorer-type">{{ typeLabel(entry) }}</span><span class="explorer-size">{{ entry.directory ? '—' : formatBytes(entry.size) }}</span><span class="explorer-date" :title="dateLabel(entry.modifiedAt)">{{ dateLabel(entry.modifiedAt) }}</span>
               <button class="explorer-row-menu" :aria-label="`${entry.name} 的操作`" title="更多操作" @pointerdown.stop @click.stop="openMenu($event, entry)" @dblclick.stop><MoreHorizontal :size="16" /></button>
             </div>
@@ -378,7 +428,7 @@ async function uploadFiles(files: File[], directory = currentPath.value) {
         </section>
       </div>
       <div class="explorer-status" role="status"><span>{{ filter ? `${shownEntries.length} / ${entries.filter(item => showHidden || !item.name.startsWith('.')).length}` : shownEntries.length }} 个项目<span v-if="selectedEntries.length"> · 已选择 {{ selectedEntries.length }} 项<span v-if="selectedSize">，{{ formatBytes(selectedSize) }}</span></span></span><span v-if="busy">正在处理…</span><span v-else-if="clipboard?.entries.length">已{{ clipboard.cut ? '剪切' : '复制' }} {{ clipboard.entries.length }} 项，选择目标目录后粘贴</span><span v-else class="explorer-status-hint">双击打开 · 右键操作 · 拖动移动</span></div>
-      <div v-if="uploadQueue.length" class="explorer-transfers"><div class="explorer-transfer-title"><span>文件传输 · {{ uploadQueue.filter(item => item.status === '完成').length }}/{{ uploadQueue.length }}</span><button v-if="!uploading" aria-label="收起传输记录" @click="uploadQueue = []"><X :size="14" /></button></div><div class="explorer-transfer-items"><div v-for="item in uploadQueue" :key="item.name" class="explorer-transfer"><span :title="item.name">{{ item.name }}</span><el-progress :percentage="item.progress" :show-text="false" :stroke-width="3" :status="item.status === '失败' ? 'exception' : item.status === '完成' ? 'success' : undefined" /><small>{{ item.status }}</small></div></div></div>
+      <div v-if="uploadQueue.length" class="explorer-transfers"><div class="explorer-transfer-title"><span>文件传输 · {{ uploadQueue.filter(item => item.status === '完成').length }}/{{ uploadQueue.length }}</span><button v-if="uploading" @click="uploadAbort?.abort()">停止传输</button><button v-if="!uploading" aria-label="收起传输记录" @click="uploadQueue = []"><X :size="14" /></button></div><div class="explorer-transfer-items"><div v-for="(item, index) in uploadQueue" :key="index" class="explorer-transfer"><span :title="item.name">{{ item.name }}</span><el-progress :percentage="item.progress" :show-text="false" :stroke-width="3" :status="item.status === '失败' ? 'exception' : item.status === '完成' ? 'success' : undefined" /><small :title="item.error">{{ item.status }}</small><button v-if="!uploading && ['失败', '已停止'].includes(item.status)" :aria-label="`重试上传 ${item.name}`" :title="item.error || '重新上传，已有文件将询问新名称'" @click="retryTransfer(item)">重试</button></div></div></div>
     </div>
     <div v-if="menu" ref="menuElement" role="menu" aria-label="文件管理操作" class="explorer-context-menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }" @pointerdown.stop @contextmenu.prevent @keydown="menuKey"><template v-for="action in menuActions" :key="action.label"><div v-if="action.divider" class="explorer-menu-divider" role="separator" /><button role="menuitem" :disabled="action.disabled" :class="{ danger: action.danger }" @click="runMenu(action)"><component :is="action.icon" :size="14" /><span>{{ action.label }}</span><kbd v-if="action.shortcut">{{ action.shortcut }}</kbd></button></template></div>
     <TextFileEditorDialog v-model="editorOpen" :host="host" :session-id="sessionId" :file="editingFile" :initial-mode="editorMode" @saved="refresh" />
@@ -463,7 +513,7 @@ async function uploadFiles(files: File[], directory = currentPath.value) {
 .explorer-transfers { border-top: 1px solid var(--line); padding: 6px 12px; }
 .explorer-transfer-title { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted); }
 .explorer-transfer-items { max-height: 95px; overflow: auto; }
-.explorer-transfer { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(60px, 200px) 50px; gap: 12px; align-items: center; min-height: 26px; font-size: 11px; }
+.explorer-transfer { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(40px, 200px) 50px auto; gap: 12px; align-items: center; min-height: 26px; font-size: 11px; }
 .explorer-transfer > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer-transfer > small { text-align: right; color: var(--muted); }
 .explorer .is-drop-target { background: var(--accent-surface); box-shadow: inset 0 0 0 1px var(--accent); }

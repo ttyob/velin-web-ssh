@@ -15,10 +15,12 @@ function statusLabel(value: string) { return ({ queued: "排队中", running: "�
 </script>
 <template>
   <div class="settings-section task-panel">
-    <div class="tool-heading"><div><strong>命令任务队列</strong><small>适合批量发送，任务状态会持续保存</small></div><el-button :icon="RefreshCw" :loading="loading" @click="load">刷新</el-button></div>
-    <el-input v-model="command" type="textarea" :rows="4" placeholder="输入要发送到多个终端的命令" />
-    <el-select v-model="targets" multiple collapse-tags placeholder="选择目标终端" class="task-targets"><el-option v-for="session in props.sessions.filter((item) => item.status === 'attached')" :key="session.id" :label="session.name" :value="session.id" /></el-select>
-    <el-button type="primary" :icon="Play" :loading="loading" @click="submit">加入队列</el-button>
+    <div class="tool-heading"><div><strong>命令任务队列</strong><small>适合批量发送，任务状态会持续保存</small></div><el-button :icon="RefreshCw" size="small" :loading="loading" @click="load">刷新</el-button></div>
+    <el-input v-model="command" type="textarea" :rows="3" placeholder="输入要发送到多个终端的命令" />
+    <div class="task-submit-row">
+      <el-select v-model="targets" multiple collapse-tags placeholder="选择目标终端" class="task-targets"><el-option v-for="session in props.sessions.filter((item) => item.status === 'attached')" :key="session.id" :label="session.name" :value="session.id" /></el-select>
+      <el-button type="primary" :icon="Play" :loading="loading" @click="submit">加入队列</el-button>
+    </div>
     <div class="task-list"><div v-for="task in tasks" :key="task.id" class="data-row"><div><strong><ListTodo :size="14" /> {{ statusLabel(task.status) }}</strong><small>{{ new Date(task.createdAt).toLocaleString() }} · {{ task.sessionIDs.length }} 个终端</small><code>{{ task.command }}</code><small v-if="task.error" class="danger-text">{{ task.error }}</small></div><span class="task-status" :class="task.status">{{ statusLabel(task.status) }}</span></div><div v-if="!tasks.length" class="empty-small">暂无任务</div></div>
   </div>
 </template>

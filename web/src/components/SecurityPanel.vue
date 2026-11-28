@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import QrcodeVue from "qrcode.vue";
-import { Copy, Download, KeyRound, ShieldCheck, Smartphone } from "@lucide/vue";
+import { ChevronRight, Copy, Download, KeyRound, ShieldCheck, Smartphone } from "@lucide/vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api, json } from "../api";
 import { useAuthStore } from "../stores/auth";
@@ -15,6 +15,7 @@ const setup = ref<{ secret: string; uri: string } | null>(null);
 const setupForm = ref({ password: "", code: "" });
 const disableForm = ref({ password: "", code: "" });
 const recoveryCodes = ref<string[]>([]);
+const disableOpen = ref(false);
 
 async function load() {
   try {
@@ -89,6 +90,7 @@ async function disableTOTP() {
     });
     totp.value = { enabled: false, recoveryCodesRemaining: 0 };
     disableForm.value = { password: "", code: "" };
+    disableOpen.value = false;
     ElMessage.success("双因素认证已关闭");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "关闭失败");
@@ -107,11 +109,11 @@ async function copyValue(value: string, label: string) {
 }
 
 function downloadRecoveryCodes() {
-  const content = `VelinWebSSH 恢复码\n账号：${auth.user?.username || ""}\n生成时间：${new Date().toLocaleString()}\n\n${recoveryCodes.value.join("\n")}\n`;
+  const content = `Jeex Terminal 恢复码\n账号：${auth.user?.username || ""}\n生成时间：${new Date().toLocaleString()}\n\n${recoveryCodes.value.join("\n")}\n`;
   const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "velin-recovery-codes.txt";
+  link.download = "jeex-terminal-recovery-codes.txt";
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -141,11 +143,17 @@ onMounted(load);
       </template>
 
       <template v-else>
-        <div v-if="!setup" class="sec-empty">
-          <KeyRound :size="26" />
-          <strong>尚未设置验证器</strong>
-          <p>使用 Google Authenticator、Microsoft Authenticator 或其他兼容应用扫描二维码。</p>
-          <el-button type="primary" :icon="ShieldCheck" :loading="setupBusy" @click="beginSetup">开始设置</el-button>
+        <div v-if="!setup" class="sx-list">
+          <div class="sx-row">
+            <KeyRound :size="18" class="sec-icon" />
+            <div class="sx-info">
+              <strong>尚未设置验证器</strong>
+              <small>使用 Google Authenticator、Microsoft Authenticator 或其他兼容应用扫描二维码。</small>
+            </div>
+            <div class="sx-ctl">
+              <el-button type="primary" size="small" :icon="ShieldCheck" :loading="setupBusy" @click="beginSetup">开始设置</el-button>
+            </div>
+          </div>
         </div>
         <div v-else class="sec-setup">
           <div class="sec-qr">
@@ -153,7 +161,7 @@ onMounted(load);
               <QrcodeVue :value="setup.uri" :size="188" level="M" render-as="svg" background="#ffffff" foreground="#101817" />
             </div>
             <strong>用验证器扫描二维码</strong>
-            <p>确认应用中显示 VelinWebSSH 后，再输入动态码完成绑定。</p>
+            <p>确认应用中显示 Jeex Terminal 后，再输入动态码完成绑定。</p>
           </div>
           <div class="sec-form">
             <label>手动密钥</label>
@@ -169,12 +177,22 @@ onMounted(load);
     </div>
 
     <div v-if="totp.enabled" class="sx">
-      <h3 class="sx-h">关闭双因素认证</h3>
-      <p class="sx-desc">需要当前密码和验证器动态码才能关闭。</p>
-      <div class="sx-form">
-        <el-input v-model="disableForm.password" type="password" show-password placeholder="当前密码" autocomplete="current-password" />
-        <el-input v-model="disableForm.code" maxlength="6" inputmode="numeric" placeholder="6 位动态码" />
-        <div class="sx-actions"><el-button type="danger" plain :loading="actionBusy" @click="disableTOTP">关闭认证</el-button></div>
+      <button
+        type="button"
+        class="sp-more-toggle"
+        :class="{ open: disableOpen }"
+        @click="disableOpen = !disableOpen"
+      >
+        <ChevronRight :size="13" />
+        <span>关闭双因素认证</span>
+        <small>需要当前密码和 6 位动态码</small>
+      </button>
+      <div v-if="disableOpen" class="sec-disable-panel">
+        <div class="sp-grid-2">
+          <el-input v-model="disableForm.password" type="password" show-password placeholder="当前密码" autocomplete="current-password" />
+          <el-input v-model="disableForm.code" maxlength="6" inputmode="numeric" placeholder="6 位动态码" @keyup.enter="disableTOTP" />
+        </div>
+        <div class="sx-actions"><el-button type="danger" plain size="small" :loading="actionBusy" @click="disableTOTP">关闭认证</el-button></div>
       </div>
     </div>
 
@@ -192,24 +210,14 @@ onMounted(load);
 
 <style scoped>
 .sec-icon { flex: 0 0 auto; color: var(--accent); }
-.sec-empty {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding: 36px 16px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-md);
-  color: var(--accent);
-  text-align: center;
-}
-.sec-empty strong { color: var(--text); font-size: 14px; }
-.sec-empty p, .sec-qr p { margin: 0 0 6px; max-width: 460px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
-.sec-setup { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 28px; padding-top: 4px; }
+.sec-qr p { margin: 0; max-width: 240px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.sec-setup { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; padding-top: 12px; border-top: 1px solid var(--line); }
 .sec-qr { display: grid; justify-items: center; align-content: start; gap: 8px; text-align: center; }
 .sec-qr strong { color: var(--text); font-size: 13px; }
-.sec-qr-frame { padding: 12px; border-radius: var(--radius-md); background: #fff; }
+.sec-qr-frame { padding: 10px; border-radius: var(--radius-md); background: #fff; }
 .sec-form { display: grid; align-content: start; gap: 8px; }
 .sec-form label { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.sec-disable-panel { display: grid; gap: 10px; margin-top: 10px; }
 .sec-copy {
   display: flex;
   align-items: center;

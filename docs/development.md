@@ -64,7 +64,7 @@ Windows GUI 使用 Wails 构建，在项目根目录先构建要内嵌的网页�
 
 登录会话与安全令牌 Cookie 按部署 ID、请求域名和端口生成独立名称，只设置当前主机的根路径 Cookie，不设置父域 `Domain`。相同域名指向同一实例的内外网入口共用登录状态；不同域名、端口或实例分别登录，退出只清理当前范围的 Cookie。新命名不再读取或删除旧 Cookie，避免历史路径、Secure 属性和其他实例的 Cookie 干扰；升级后需要重新登录一次。反向代理须原样传递 `Host`（Nginx 使用 `proxy_set_header Host $http_host;`，保留非默认端口），所有 API 和 WebSocket 路径保持一致，不能缓存 `/api/csrf`。登录后通过 `/api/auth/me` 确认 Cookie 已生效，再进入工作区或首次改密页；改密页遇到会话失效会返回登录页。
 
-内网 Web 代理可在同一域名下代理另一个 Velin：`/workspace` 访问当前控制台，`/login?__velin_web_service=<服务 ID>` 访问所选内网服务。目标返回的 `velin_session*`、`velin_csrf*` 等保留名称使用独立的代理 Cookie 名称保存，按服务、所属用户、入口域名与端口、目标地址隔离，转发到该目标时恢复原名；当前控制台 Cookie 不会转发或被覆盖。代理登录 Cookie 保存在各自浏览器，不使用服务共享 Cookie 缓存。更新须应用在发起代理的 Velin 实例，之后从“内网 Web”重新打开目标服务；无需先升级被代理实例。后端回归覆盖当前控制台及两个被代理 Velin 的同时登录、地址栏标记、代理重连和分别退出。
+内网 Web 代理可在同一域名下代理另一个 Jeex Terminal：`/workspace` 访问当前控制台，`/login?__velin_web_service=<服务 ID>` 访问所选内网服务。目标返回的 `velin_session*`、`velin_csrf*` 等保留名称使用独立的代理 Cookie 名称保存，按服务、所属用户、入口域名与端口、目标地址隔离，转发到该目标时恢复原名；当前控制台 Cookie 不会转发或被覆盖。代理登录 Cookie 保存在各自浏览器，不使用服务共享 Cookie 缓存。更新须应用在发起代理的 Jeex Terminal 实例，之后从“内网 Web”重新打开目标服务；无需先升级被代理实例。后端回归覆盖当前控制台及两个被代理 Jeex Terminal 的同时登录、地址栏标记、代理重连和分别退出。
 
 `npm --prefix web run test:auth` 使用隔离的 API 数据验证验证码、双因素认证、改密确认、手动 / 闲置 / 刷新恢复锁屏、错误 PIN、焦点限制、键盘和窄屏布局，并验证 Windows 初始账户提示、登录 Cookie 未保存及改密会话失效的处理。后端测试覆盖存在历史 Cookie 时的登录、首次改密、访问工作区和退出流程。截图写入 `artifacts/auth-redesign-20261031/`；浏览器检查不能替代 Windows 真机 WebView2 验收。
 

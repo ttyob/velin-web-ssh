@@ -2,9 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/ttyob/velin-web-ssh/internal/config"
+	"github.com/ttyob/velin-web-ssh/internal/store"
+	"github.com/ttyob/velin-web-ssh/internal/version"
 )
 
 func TestParseReleaseVersion(t *testing.T) {
@@ -22,6 +29,23 @@ func TestParseReleaseVersion(t *testing.T) {
 		got, ok := parseReleaseVersion(test.input)
 		if ok != test.ok || ok && got != test.want {
 			t.Errorf("parseReleaseVersion(%q) = %#v, %v; want %#v, %v", test.input, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+func TestValidReleaseImageTag(t *testing.T) {
+	for _, test := range []struct {
+		tag  string
+		want bool
+	}{
+		{tag: "v1.2.3", want: true},
+		{tag: "v1.2.3-beta.1", want: true},
+		{tag: "v1.2.3+build.1", want: false},
+		{tag: "v1.2.3$(touch-bad)", want: false},
+		{tag: "1.2.3", want: false},
+	} {
+		if got := validReleaseImageTag(test.tag); got != test.want {
+			t.Errorf("validReleaseImageTag(%q) = %v, want %v", test.tag, got, test.want)
 		}
 	}
 }
@@ -64,4 +88,53 @@ func TestUpdateCachesReleaseCheck(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("release endpoint requests = %d, want 1", requests)
 	}
+}
+
+func TestStartUpdateCreatesRestrictedRequest(t *testing.T) {
+	previousVersion := version.Current
+	version.Current = "v0.3.57"
+	t.Cleanup(func() { version.Current = previousVersion })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v99.0.0","html_url":"https://github.com/ttyob/velin-web-ssh/releases/tag/v99.0.0"}`))
+	}))
+	defer server.Close()
+	directory := t.TempDir()
+	a := &API{cfg: config.Config{DataDir: directory, SelfUpdate: true}, updateURL: server.URL, updateClient: server.Client()}
+	recording := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/system/update", nil)
+	request = request.WithContext(context.WithValue(request.Context(), userKey, store.User{ID: "admin", Role: "admin"}))
+	a.startUpdate(recording, request)
+	if recording.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", recording.Code, recording.Body.String())
+	}
+	var queued selfUpdateRequest
+	requestPath := filepath.Join(directory, "self-update", "request.json")
+	content, err := os.ReadFile(requestPath)
+	if err != nil || json.Unmarshal(content, &queued) != nil {
+		t.Fatalf("read update request: %v content=%s", err, content)
+	}
+	if queued.RequestID == "" || queued.TargetVersion != "v99.0.0" || queued.RequestedAt == "" {
+		t.Fatalf("unexpected request: %+v", queued)
+	}
+	if mode := fileMode(t, requestPath); mode != 0o600 {
+		t.Fatalf("request mode = %o", mode)
+	}
+}
+
+func TestStartUpdateRequiresEnabledUpdater(t *testing.T) {
+	a := &API{}
+	recording := httptest.NewRecorder()
+	a.startUpdate(recording, httptest.NewRequest(http.MethodPost, "/api/admin/system/update", nil))
+	if recording.Code != http.StatusConflict {
+		t.Fatalf("status = %d body=%s", recording.Code, recording.Body.String())
+	}
+}
+
+func fileMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
 }

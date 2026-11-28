@@ -121,11 +121,15 @@ onBeforeUnmount(() => { clearInterval(timer); botToken.value = ''; proxyURL.valu
     <details v-if="admin" class="tg-card tg-config" :open="!profile?.bot.hasToken">
       <summary>机器人配置<span>管理员</span></summary>
       <div class="tg-fields">
-        <div class="tg-bottom"><span>启用机器人</span><el-switch v-model="enabled" :disabled="busy" aria-label="启用 Telegram 机器人" /></div>
-        <label class="tg-field">Bot Token<el-input v-model="botToken" type="password" show-password autocomplete="off" :placeholder="profile?.bot.hasToken ? '已保存，留空保持原值' : '从 @BotFather 创建机器人后获取'" /></label>
-        <label class="tg-field">手机访问的工作台地址<el-input v-model="publicURL" placeholder="https://ssh.example.com" /><small>用于卡片上的“打开终端”，请填写手机可以访问的服务地址。</small></label>
+        <div class="tg-config-bar">
+          <div class="tg-bottom"><span>启用机器人</span><el-switch v-model="enabled" :disabled="busy" aria-label="启用 Telegram 机器人" /></div>
+          <div class="tg-bottom"><label for="tg-idle">持续无输出提醒</label><div class="tg-duration"><el-input-number id="tg-idle" v-model="idleSeconds" :min="30" :max="3600" :step="30" controls-position="right" /><span>秒</span></div></div>
+        </div>
+        <div class="tg-grid-2">
+          <label class="tg-field">Bot Token<el-input v-model="botToken" type="password" show-password autocomplete="off" :placeholder="profile?.bot.hasToken ? '已保存，留空保持原值' : '从 @BotFather 创建机器人后获取'" /></label>
+          <label class="tg-field">手机访问的工作台地址<el-input v-model="publicURL" placeholder="https://ssh.example.com" /><small>用于卡片上的“打开终端”。</small></label>
+        </div>
         <label class="tg-field">Telegram 代理<el-input v-model="proxyURL" type="password" show-password autocomplete="off" :placeholder="profile?.bot.hasProxy ? '已保存；输入新地址替换，清空后保存可移除' : '可选，例如 socks5://127.0.0.1:1080'" @input="proxyChanged = true" /><small>仅用于 Telegram 请求，与 AI 模型代理独立。<button v-if="profile?.bot.hasProxy" class="tg-text-button" type="button" @click="proxyURL = ''; proxyChanged = true">移除已保存代理</button><span v-if="proxyChanged && !proxyURL">保存后将使用直连。</span></small></label>
-        <div class="tg-bottom"><label for="tg-idle">持续无输出提醒</label><div class="tg-duration"><el-input-number id="tg-idle" v-model="idleSeconds" :min="30" :max="3600" :step="30" controls-position="right" /><span>秒</span></div></div>
         <div class="tg-actions"><el-button :loading="busy" @click="botAction(true)">测试连接</el-button><el-button type="primary" :loading="busy" @click="botAction(false)">保存机器人配置</el-button></div>
       </div>
     </details>
@@ -136,13 +140,17 @@ onBeforeUnmount(() => { clearInterval(timer); botToken.value = ''; proxyURL.valu
       <p>选择主机将包含其当前与后续会话；选择单个会话可精确限定范围。</p>
       <el-alert v-if="accessInactive" title="授权已停用或过期，重新保存后可恢复使用。" type="warning" :closable="false" />
       <div class="tg-fields">
-        <label class="tg-field">允许的会话<el-select v-model="sessionIDs" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择指定会话" aria-label="Telegram 允许的会话"><el-option v-for="session in sessions" :key="session.id" :value="session.id" :label="`${session.name} · ${hostName(session.hostID)}`" /></el-select></label>
-        <label class="tg-field">允许的 SSH 主机<el-select v-model="hostIDs" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择主机，包含后续会话" aria-label="Telegram 允许的主机"><el-option v-for="host in sshHosts" :key="host.id" :value="host.id" :label="host.name" /></el-select></label>
+        <div class="tg-grid-2">
+          <label class="tg-field">允许的会话<el-select v-model="sessionIDs" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择指定会话" aria-label="Telegram 允许的会话"><el-option v-for="session in sessions" :key="session.id" :value="session.id" :label="`${session.name} · ${hostName(session.hostID)}`" /></el-select></label>
+          <label class="tg-field">允许的 SSH 主机<el-select v-model="hostIDs" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择主机，包含后续会话" aria-label="Telegram 允许的主机"><el-option v-for="host in sshHosts" :key="host.id" :value="host.id" :label="host.name" /></el-select></label>
+        </div>
         <div class="tg-permissions"><el-checkbox-group v-model="permissions"><el-checkbox value="read" disabled>读取输出</el-checkbox><el-checkbox value="input">发送需求 / 按键</el-checkbox><el-checkbox value="create">创建 / 恢复</el-checkbox><el-checkbox value="manage">重命名 / 终止</el-checkbox></el-checkbox-group><el-checkbox v-model="allowFiles">项目文件传输</el-checkbox></div>
-        <label class="tg-field">授权有效期<el-date-picker v-model="expiresAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" placeholder="不设置则长期有效" clearable /></label>
+        <div class="tg-access-footer">
+          <label class="tg-field tg-expire">授权有效期<el-date-picker v-model="expiresAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" placeholder="不设置则长期有效" clearable /></label>
+          <el-button type="primary" :loading="busy" @click="saveAccess">保存会话授权</el-button>
+        </div>
         <small class="tg-muted">文件传输需要已连接的 tmux 会话。上传保存在项目 clipboard 目录，单个文件最多 20 MiB。</small>
         <el-alert v-if="accessError" :title="accessError" type="error" :closable="false" />
-        <div class="tg-actions"><el-button type="primary" :loading="busy" @click="saveAccess">保存会话授权</el-button></div>
       </div>
     </section>
 
@@ -170,23 +178,28 @@ onBeforeUnmount(() => { clearInterval(timer); botToken.value = ''; proxyURL.valu
 </template>
 
 <style scoped>
-.tg-panel { display:flex; flex-direction:column; gap:16px; color:var(--text); min-width:0; }
-.tg-card { border:1px solid var(--line); border-radius:12px; padding:18px; background:var(--surface); min-width:0; }
+.tg-panel { display:flex; flex-direction:column; gap:0; color:var(--text); min-width:0; }
+.tg-card { border:0; border-bottom:1px solid var(--line); border-radius:0; padding:14px 0; background:transparent; min-width:0; }
+.tg-card:first-of-type { padding-top:0; }
 .tg-heading,.tg-bottom { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .tg-heading strong,.tg-subscription strong { font-size:13px; font-weight:600; }
-.tg-brand { display:flex; align-items:center; gap:10px; }.tg-brand strong { font-size:17px; }.tg-brand svg { color:var(--muted); }
-.tg-panel p { font-size:12px; color:var(--muted); line-height:1.75; margin:10px 0; }
-.tg-muted { font-size:11px; color:var(--muted); line-height:1.65; overflow-wrap:anywhere; }
-.tg-state { font-size:11px; border:1px solid var(--line); padding:3px 9px; border-radius:20px; color:var(--text); white-space:nowrap; }.tg-state.is-error { color:var(--el-color-danger); }
-.tg-config { padding:0; }.tg-config summary { display:flex; justify-content:space-between; gap:12px; padding:17px 18px; cursor:pointer; font-size:13px; font-weight:600; }.tg-config summary span { font-size:11px; font-weight:400; color:var(--muted); }.tg-config .tg-fields { padding:0 18px 18px; }
-.tg-fields { display:flex; flex-direction:column; gap:17px; margin-top:16px; }.tg-config .tg-fields { margin-top:0; }
-.tg-field { display:flex; flex-direction:column; gap:8px; font-size:12px; }.tg-field small { font-size:11px; color:var(--muted); line-height:1.7; }.tg-field :deep(.el-select),.tg-field :deep(.el-date-editor) { width:100%; }
-.tg-actions { display:flex; justify-content:flex-end; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }.tg-actions :deep(.el-button + .el-button) { margin-left:0; }
-.tg-permissions :deep(.el-checkbox-group) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 8px; }.tg-permissions :deep(.el-checkbox) { margin-right:0; }.tg-permissions :deep(.el-checkbox__label) { font-size:12px; }
-.tg-duration { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }.tg-duration :deep(.el-input-number) { width:112px; }
+.tg-brand { display:flex; align-items:center; gap:8px; }.tg-brand strong { font-size:14px; }.tg-brand svg { color:var(--accent); }
+.tg-panel p { font-size:12px; color:var(--muted); line-height:1.6; margin:6px 0 8px; }
+.tg-muted { font-size:11.5px; color:var(--muted); line-height:1.55; overflow-wrap:anywhere; }
+.tg-state { font-size:11px; border:1px solid var(--line-strong); padding:2px 8px; border-radius:999px; color:var(--text-soft); white-space:nowrap; }.tg-state.is-error { color:var(--el-color-danger); border-color:color-mix(in srgb,var(--el-color-danger) 45%,transparent); }
+.tg-config { padding:0; }.tg-config summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; cursor:pointer; font-size:13px; font-weight:600; color:var(--text); }.tg-config summary span { font-size:11px; font-weight:400; color:var(--muted); }.tg-config .tg-fields { padding:0 0 14px; }
+.tg-config-bar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 16px; align-items:center; padding:8px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.tg-grid-2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 14px; }
+.tg-fields { display:flex; flex-direction:column; gap:12px; margin-top:10px; }.tg-config .tg-fields { margin-top:0; }
+.tg-field { display:flex; flex-direction:column; gap:5px; font-size:11.5px; color:var(--muted); min-width:0; }.tg-field small { font-size:11px; color:var(--muted); line-height:1.5; }.tg-field :deep(.el-select),.tg-field :deep(.el-date-editor) { width:100%; }
+.tg-actions { display:flex; justify-content:flex-end; align-items:center; flex-wrap:wrap; gap:8px; margin-top:6px; }.tg-actions :deep(.el-button + .el-button) { margin-left:0; }
+.tg-permissions { display:flex; flex-wrap:wrap; align-items:center; gap:2px 14px; }
+.tg-permissions :deep(.el-checkbox-group) { display:flex; flex-wrap:wrap; gap:2px 14px; }.tg-permissions :deep(.el-checkbox) { margin-right:0; height:28px; }.tg-permissions :deep(.el-checkbox__label) { font-size:12px; }
+.tg-access-footer { display:flex; align-items:flex-end; gap:12px; }.tg-expire { flex:1 1 220px; min-width:0; }
+.tg-duration { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }.tg-duration :deep(.el-input-number) { width:104px; }
 .tg-bottom { font-size:12px; }.tg-text-button { background:none; border:0; color:var(--accent); cursor:pointer; padding:0 4px; font-size:11px; }
-.tg-pair { display:flex; gap:18px; align-items:center; margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }.tg-qr { padding:8px; border-radius:8px; background:white; flex-shrink:0; line-height:0; }.tg-pair-content { min-width:0; }.tg-pair-content strong { font-size:12px; }.tg-pair-content .tg-actions { justify-content:flex-start; }
-.tg-subscription { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:13px 0; border-top:1px solid var(--line); }.tg-subscription > div { min-width:0; display:flex; flex-direction:column; gap:5px; }.tg-subscription strong { overflow-wrap:anywhere; }.tg-subscription small { color:var(--muted); font-size:11px; }.tg-empty { padding:20px 0; text-align:center; font-size:12px; color:var(--muted); }
-.tg-help { color:var(--muted); font-size:12px; padding:0 4px; }.tg-help summary { cursor:pointer; }.tg-overview :deep(.el-alert) { margin-top:10px; }
-@media(max-width:600px) { .tg-card { padding:14px; }.tg-config { padding:0; }.tg-config summary { padding:15px 14px; }.tg-config .tg-fields { padding:0 14px 14px; }.tg-pair { align-items:flex-start; flex-direction:column; }.tg-pair .tg-qr { align-self:center; }.tg-actions { justify-content:flex-start; }.tg-permissions :deep(.el-checkbox-group) { grid-template-columns:1fr; } }
+.tg-pair { display:flex; gap:16px; align-items:center; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }.tg-qr { padding:8px; border-radius:8px; background:white; flex-shrink:0; line-height:0; }.tg-pair-content { min-width:0; }.tg-pair-content strong { font-size:12.5px; }.tg-pair-content .tg-actions { justify-content:flex-start; }
+.tg-subscription { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0; border-top:1px solid var(--line); }.tg-subscription > div { min-width:0; display:flex; flex-direction:column; gap:3px; }.tg-subscription strong { overflow-wrap:anywhere; }.tg-subscription small { color:var(--muted); font-size:11px; }.tg-empty { padding:14px 0; text-align:center; font-size:12px; color:var(--muted); }
+.tg-help { color:var(--muted); font-size:12px; padding:12px 0 0; }.tg-help summary { cursor:pointer; }.tg-overview :deep(.el-alert) { margin-top:8px; }
+@media(max-width:640px) { .tg-config-bar,.tg-grid-2 { grid-template-columns:1fr; }.tg-access-footer { flex-direction:column; align-items:stretch; }.tg-pair { align-items:flex-start; flex-direction:column; }.tg-pair .tg-qr { align-self:center; }.tg-actions { justify-content:flex-start; } }
 </style>

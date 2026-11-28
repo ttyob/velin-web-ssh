@@ -39,6 +39,7 @@ type Config struct {
 	RDPDriveDir       string
 	RDPResizeMethod   string
 	RDPDisableGFX     bool
+	SelfUpdate        bool
 }
 
 func Load() (Config, error) {
@@ -95,6 +96,7 @@ func Load() (Config, error) {
 		RDPDriveDir:       env("VELIN_RDP_DRIVE_DIR", "/tmp/velin-rdp-drives"),
 		RDPResizeMethod:   rdpResizeMethod,
 		RDPDisableGFX:     strings.EqualFold(env("VELIN_RDP_DISABLE_GFX", "false"), "true"),
+		SelfUpdate:        strings.EqualFold(env("VELIN_SELF_UPDATE", "false"), "true"),
 	}, nil
 }
 

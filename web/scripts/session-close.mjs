@@ -24,7 +24,7 @@ const pane = `
 import { h } from 'vue'
 export default {
   props: ['node', 'sessions'],
-  emits: ['close', 'context', 'title'],
+  emits: ['close', 'context', 'title', 'attention', 'status'],
   setup(props, { emit, expose }) {
     expose({ resize() {}, focusLeaf() {} })
     const leaves = node => node.type === 'leaf' ? [node] : [...leaves(node.first), ...leaves(node.second)]
@@ -34,6 +34,9 @@ export default {
     }, [
       h('button', { class: 'test-pane-close', 'data-session': leaf.sessionID, onClick: () => emit('close', leaf.id) }, 'Close pane ' + leaf.sessionID),
       h('button', { 'data-title-session': leaf.sessionID, onClick: () => emit('title', leaf.sessionID, 'codex: remote program title') }, 'Update remote title'),
+      h('button', { 'data-bell-session': leaf.sessionID, onClick: () => emit('attention', leaf.sessionID, 'bell') }, 'Bell ' + leaf.sessionID),
+      h('button', { 'data-settled-session': leaf.sessionID, onClick: () => emit('attention', leaf.sessionID, 'settled') }, 'Settled ' + leaf.sessionID),
+      h('button', { 'data-activity-session': leaf.sessionID, onClick: () => emit('attention', leaf.sessionID, 'activity') }, 'Activity ' + leaf.sessionID),
     ])))
   },
 }
@@ -153,6 +156,33 @@ try {
     await tab(name).waitFor({ state: 'hidden' })
   }
   await page.locator('.terminal-tab').first().waitFor()
+  await page.locator('.tabs-overview-btn').waitFor()
+
+  // Inactive tabs with pending/completed events flash; active tab never flashes.
+  assert.equal(await tab('unreachable').evaluate(el => el.classList.contains('tab-alert')), false)
+  assert.equal(await tab('auth').evaluate(el => el.classList.contains('tab-alert-required')), true)
+  assert.equal(await tab('ended').evaluate(el => el.classList.contains('tab-alert')), false)
+  await page.evaluate(() => {
+    document.querySelector('[data-bell-session="background"]')?.click()
+    document.querySelector('[data-activity-session="background"]')?.click()
+    document.querySelector('[data-settled-session="background"]')?.click()
+    document.querySelector('[data-settled-session="dismiss"]')?.click()
+  })
+  assert.equal(await tab('background').evaluate(el => el.classList.contains('tab-alert-bell')), true)
+  assert.equal(await tab('dismiss').evaluate(el => el.classList.contains('tab-alert-settled')), true)
+  assert.equal(await page.locator('.tabs-overview-alert-dot.required').count(), 1)
+
+  await page.locator('.tabs-overview-btn').click()
+  await page.getByRole('menu', { name: '全部标签', exact: true }).waitFor()
+  await page.screenshot({ path: '/tmp/velin-tabbar-many-overview.png' })
+  await page.locator('.tabs-overview-btn').click()
+
+  // Activating a flashing tab clears its transient notice and stops flashing.
+  await tab('background').click()
+  assert.equal(await tab('background').evaluate(el => el.classList.contains('tab-alert')), false)
+  await tab('unreachable').click()
+  assert.equal(await tab('background').evaluate(el => el.classList.contains('tab-alert')), false)
+  assert.equal(await tab('dismiss').evaluate(el => el.classList.contains('tab-alert-settled')), true)
 
   // Remote deletion can hang or fail, but the tab closes immediately.
   await confirm('unreachable')
@@ -226,17 +256,20 @@ try {
   const prompt = page.locator('.el-message-box')
   const nameInput = prompt.locator('input')
   const saveName = () => prompt.getByRole('button', { name: '保存', exact: true }).click()
+  const inlineInput = page.locator('.tab-rename-input')
   await page.locator('.terminal-tab .tab-title').first().dblclick()
-  await nameInput.fill('   ')
-  await saveName()
-  await prompt.getByText('会话名称需为 1 到 80 个字符', { exact: true }).waitFor()
-  await nameInput.fill('名'.repeat(81))
-  await saveName()
+  await inlineInput.waitFor()
+  await inlineInput.fill('   ')
+  await inlineInput.press('Enter')
+  await page.getByText('会话名称需为 1 到 80 个字符', { exact: true }).first().waitFor()
+  await inlineInput.fill('名'.repeat(81))
+  await inlineInput.press('Enter')
   assert.equal(renamed.length, 0)
-  await nameInput.fill('  前端开发  ')
-  await saveName()
+  await inlineInput.fill('  前端开发  ')
+  await inlineInput.press('Enter')
   await tab('前端开发').waitFor()
   assert.deepEqual(renamed.at(-1), { id: 'pane-live', name: '前端开发' })
+  assert.equal(await tab('前端开发').locator('.tab-pane-badge').innerText(), '2')
   await page.locator('[data-title-session="pane-live"]:visible').click()
   assert.equal(await tab('前端开发').count(), 1, 'Remote OSC titles must not overwrite the saved name')
   assert.match(await tab('前端开发').locator('.tab-title').getAttribute('title'), /codex: remote program title/)
@@ -244,16 +277,22 @@ try {
   // Right-clicking an inactive tab must target that tab without switching away.
   rejectRename = true
   await tab('开发主机').click({ button: 'right' })
-  await page.getByRole('navigation', { name: '标签操作' }).getByRole('button', { name: '重命名', exact: true }).click()
-  await nameInput.fill('后端开发')
-  await saveName()
+  const tabMenu = page.getByRole('menu', { name: '标签操作' })
+  await tabMenu.waitFor()
+  assert.deepEqual(await tabMenu.locator('button').allTextContents(), ['重命名', '移到后台', '关闭标签', '关闭其他标签', '关闭右侧标签', '关闭全部标签'])
+  await tabMenu.screenshot({ path: '/tmp/velin-tab-context-menu.png' })
+  await tabMenu.getByRole('button', { name: '重命名', exact: true }).click()
+  await inlineInput.waitFor()
+  await inlineInput.fill('后端开发')
+  await inlineInput.press('Enter')
   await page.getByText('保存会话名称失败，请重试', { exact: true }).waitFor()
   assert.equal(await tab('开发主机').count(), 1, 'Failed persistence must preserve the original label')
   rejectRename = false
   await tab('开发主机').click({ button: 'right' })
-  await page.getByRole('navigation', { name: '标签操作' }).getByRole('button', { name: '重命名', exact: true }).click()
-  await nameInput.fill('后端开发')
-  await saveName()
+  await tabMenu.getByRole('button', { name: '重命名', exact: true }).click()
+  await inlineInput.waitFor()
+  await inlineInput.fill('后端开发')
+  await inlineInput.press('Enter')
   await tab('后端开发').waitFor()
   assert.equal(renamed.at(-1).id, 'dismiss')
   assert.equal(await tab('前端开发').evaluate(el => el.classList.contains('active')), true)
@@ -267,7 +306,10 @@ try {
   assert.deepEqual(renamed.at(-1), { id: 'background', name: '日志排查' })
   assert.equal(await tab('前端开发').count(), 1)
   await tab('前端开发').locator('.tab-title').dblclick()
-  await prompt.getByRole('button', { name: '取消', exact: true }).click()
+  await inlineInput.waitFor()
+  await inlineInput.fill('不该保存')
+  await inlineInput.press('Escape')
+  await inlineInput.waitFor({ state: 'hidden' })
   assert.equal(renamed.length, 4, 'Cancelling must not send a rename request')
   await page.reload()
   await tab('前端开发').waitFor()
@@ -275,6 +317,21 @@ try {
   assert.equal(sessions.find(item => item.id === 'background').name, '日志排查')
   await page.locator('[data-title-session="pane-live"]:visible').click()
   assert.equal(await tab('前端开发').count(), 1, 'Replayed remote titles must preserve names after reload')
+
+  // Capture the new VS Code / Ghostty flat flush tabbar.
+  await page.screenshot({ path: '/tmp/velin-tabbar-flush.png' })
+
+  // Drag-and-drop reorder swaps tabs and persists order.
+  await tab('后端开发').dragTo(tab('前端开发'), { targetPosition: { x: 8, y: 18 } })
+  await page.waitForFunction(() => [...document.querySelectorAll('.terminal-tab .tab-title')].map(el => el.textContent).join(',') === '后端开发,前端开发')
+
+  // Middle-click opens close confirmation for a running tab; dismissing keeps it.
+  await tab('后端开发').click({ button: 'middle' })
+  await prompt.waitFor()
+  await prompt.locator('.el-message-box__headerbtn').click()
+  await prompt.waitFor({ state: 'hidden' })
+  assert.equal(await page.locator('.terminal-tab').count(), 2)
+
   const shots = new URL('../../artifacts/session-renaming-20261031/', import.meta.url)
   await mkdir(shots, { recursive: true })
   await page.screenshot({ path: new URL('renamed-tabs.png', shots).pathname })

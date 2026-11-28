@@ -51,9 +51,108 @@ services:
       VELIN_AI_BASE_URL: ${VELIN_AI_BASE_URL:-}
       VELIN_AI_MODEL: ${VELIN_AI_MODEL:-}
       VELIN_AI_API_KEY: ${VELIN_AI_API_KEY:-}
+      VELIN_SELF_UPDATE: "true"
     volumes:
       - ./data:/app/data
       - rdp-drives:/tmp/velin-rdp-drives
+
+  updater:
+    image: docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
+    container_name: velin-updater
+    restart: unless-stopped
+    environment:
+      VELIN_INSTALL_DIR: ${VELIN_INSTALL_DIR:-/opt/velin}
+      VELIN_UPDATE_HEALTH_ATTEMPTS: ${VELIN_UPDATE_HEALTH_ATTEMPTS:-60}
+    working_dir: ${VELIN_INSTALL_DIR:-/opt/velin}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "${VELIN_INSTALL_DIR:-/opt/velin}:${VELIN_INSTALL_DIR:-/opt/velin}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        state_dir="$${VELIN_INSTALL_DIR}/data/self-update"
+        request_file="$${state_dir}/request.json"
+        status_file="$${state_dir}/status.json"
+        write_status() {
+          state="$$1"
+          message="$$2"
+          updated_at="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          temp="$${status_file}.tmp"
+          printf '{"enabled":true,"requestID":"%s","state":"%s","targetVersion":"%s","message":"%s","requestedAt":"%s","updatedAt":"%s"}\n' \
+            "$$request_id" "$$state" "$$target_version" "$$message" "$$requested_at" "$$updated_at" > "$$temp"
+          chmod 644 "$$temp"
+          mv "$$temp" "$$status_file"
+        }
+        rollback() {
+          write_status rolling_back "新版本启动失败，正在恢复上一版本"
+          cp "$${env_backup}" "$${env_file}"
+          chown "$${env_owner}" "$${env_file}"
+          chmod "$${env_mode}" "$${env_file}"
+          VELIN_IMAGE="$${old_image}" docker compose up -d --no-deps --force-recreate velin >/dev/null 2>&1 || true
+          write_status failed "更新失败，已恢复上一版本"
+          rm -f "$${request_file}" "$${env_backup}"
+        }
+        while true; do
+          if [ ! -s "$${request_file}" ]; then sleep 2; continue; fi
+          request_id="$$(sed -n 's/.*"requestID":"\([^"]*\)".*/\1/p' "$${request_file}")"
+          target_version="$$(sed -n 's/.*"targetVersion":"\([^"]*\)".*/\1/p' "$${request_file}")"
+          requested_at="$$(sed -n 's/.*"requestedAt":"\([^"]*\)".*/\1/p' "$${request_file}")"
+          case "$${target_version}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) sleep 2; continue ;;
+          esac
+          [ -n "$${request_id}" ] || { sleep 2; continue; }
+          image="ghcr.io/ttyob/velin-web-ssh:$${target_version#v}"
+          env_file="$${VELIN_INSTALL_DIR}/.env"
+          env_backup="$${VELIN_INSTALL_DIR}/.env.velin-update-backup"
+          if [ ! -f "$${env_file}" ]; then
+            write_status failed "未找到安装配置，无法执行更新"
+            rm -f "$${request_file}"
+            continue
+          fi
+          write_status pulling "正在下载 $${target_version} 镜像"
+          if ! docker pull "$${image}" >/dev/null; then
+            write_status failed "镜像下载失败，当前版本未变更"
+            rm -f "$${request_file}"
+            continue
+          fi
+          old_image="$$(sed -n 's/^VELIN_IMAGE=//p' "$${env_file}" | tail -n 1)"
+          [ -n "$${old_image}" ] || old_image="ghcr.io/ttyob/velin-web-ssh:latest"
+          if ! env_owner="$$(stat -c '%u:%g' "$${env_file}")" || ! env_mode="$$(stat -c '%a' "$${env_file}")" || ! cp "$${env_file}" "$${env_backup}"; then
+            write_status failed "无法备份安装配置，当前版本未变更"
+            rm -f "$${request_file}" "$${env_backup}"
+            continue
+          fi
+          if ! awk -v image="$${image}" 'BEGIN{found=0} /^VELIN_IMAGE=/{print "VELIN_IMAGE=" image; found=1; next} {print} END{if(!found) print "VELIN_IMAGE=" image}' "$${env_file}" > "$${env_file}.tmp" || ! chmod 600 "$${env_file}.tmp" || ! chown "$${env_owner}" "$${env_file}.tmp" || ! chmod "$${env_mode}" "$${env_file}.tmp" || ! mv "$${env_file}.tmp" "$${env_file}"; then
+            cp "$${env_backup}" "$${env_file}"
+            chown "$${env_owner}" "$${env_file}"
+            chmod "$${env_mode}" "$${env_file}"
+            write_status failed "无法更新安装配置，当前版本未变更"
+            rm -f "$${request_file}" "$${env_backup}" "$${env_file}.tmp"
+            continue
+          fi
+          write_status restarting "正在重启 Jeex Terminal"
+          if ! VELIN_IMAGE="$${image}" docker compose up -d --no-deps --force-recreate velin >/dev/null 2>&1; then
+            rollback
+            continue
+          fi
+          write_status verifying "正在检查新版本运行状态"
+          healthy=false
+          attempt=0
+          while [ "$$attempt" -lt "$${VELIN_UPDATE_HEALTH_ATTEMPTS}" ]; do
+            health="$$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' velin 2>/dev/null || true)"
+            if [ "$$health" = healthy ] || [ "$$health" = running ]; then healthy=true; break; fi
+            attempt=$$((attempt + 1))
+            sleep 2
+          done
+          if [ "$$healthy" != true ]; then
+            rollback
+            continue
+          fi
+          write_status succeeded "已更新到 $${target_version}"
+          rm -f "$${request_file}" "$${env_backup}"
+        done
 
 volumes:
   rdp-drives:

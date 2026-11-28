@@ -60,14 +60,14 @@
 .el-dialog.file-manager-dialog .file-kind-icon svg { font-size: initial; }
 
 /* ---- Docker ---- */
-.el-dialog.docker-dialog .docker-heading { margin-bottom: 0; }
+.el-dialog.docker-dialog .docker-heading { margin-bottom: 10px; }
 .el-dialog.docker-dialog .docker-summary { font-size: 13px; font-weight: 600; }
-.el-dialog.docker-dialog .docker-tabs { margin-top: 2px; }
+.el-dialog.docker-dialog .docker-tabs { margin-top: 0; }
 .el-dialog.docker-dialog .docker-list { min-height: 180px; }
 .el-dialog.docker-dialog .docker-row {
-  min-height: 60px;
-  gap: 12px;
-  padding: 8px 6px;
+  min-height: 64px;
+  gap: 14px;
+  padding: 12px 14px;
 }
 .el-dialog.docker-dialog .docker-row-main { gap: 1px; }
 .el-dialog.docker-dialog .docker-row-main strong { font-size: 13px; font-weight: 600; }
@@ -83,7 +83,7 @@
 .el-dialog.docker-dialog .docker-row-actions .el-button + .el-button { margin-left: 0; }
 
 /* ---- Git ---- */
-.el-dialog.git-dialog .git-heading { gap: 10px; }
+.el-dialog.git-dialog .git-heading { min-height: 0; gap: 16px; margin-bottom: 12px; }
 .el-dialog.git-dialog .git-tabs { margin-top: 4px; }
 .el-dialog.git-dialog .el-button { min-height: 28px; padding: 0 10px; font-size: 12.5px; }
 .el-dialog.git-dialog .git-history-list > *,
@@ -156,24 +156,20 @@
 }
 
 /* Git manager: toolbar first, dense rows, commit actions anchored to the right. */
-.el-dialog.git-dialog .git-heading { min-height: 31px; gap: 8px; margin-bottom: 7px; }
-.el-dialog.git-dialog .git-path-form { gap: 7px; }
-.el-dialog.git-dialog .git-path-form > svg { width: 15px; height: 15px; }
-.el-dialog.git-dialog .git-path-form .el-input { max-width: none; }
-.el-dialog.git-dialog .git-heading-actions { flex-wrap: nowrap; gap: 3px; }
+.el-dialog.git-dialog .git-heading { min-height: 0; gap: 16px; margin-bottom: 12px; }
+.el-dialog.git-dialog .git-heading-actions { flex-wrap: wrap; gap: 6px; }
 .el-dialog.git-dialog .git-heading-actions .el-button + .el-button { margin-left: 0; }
-.el-dialog.git-dialog .git-remote-select { width: 112px; }
+.el-dialog.git-dialog .git-remote-select { width: 132px; }
 .el-dialog.git-dialog .git-repo-meta {
-  min-height: 30px;
-  gap: 8px;
-  margin: 0 -14px 6px;
-  padding: 5px 14px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
+  min-height: 0;
+  gap: 7px;
+  margin: 0 2px 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-size: 11px;
 }
-.el-dialog.git-dialog .git-branch-pill { padding: 2px 6px; border-color: var(--line); border-radius: 3px; background: transparent; }
+.el-dialog.git-dialog .git-branch-pill { padding: 3px 8px; border-color: #46566f; border-radius: 10px; background: #202d47; }
 .el-dialog.git-dialog .git-tabs { margin-top: 0; }
 .el-dialog.git-dialog .git-status-summary { gap: 12px; padding: 2px 1px 8px; font-size: 11px; }
 .el-dialog.git-dialog .git-toolbar { min-height: 32px; margin-bottom: 5px; }
@@ -197,15 +193,15 @@
 .el-dialog.git-dialog .git-conflicts { margin-bottom: 8px; border-color: color-mix(in srgb, var(--icon-warm) 45%, var(--line)); background: color-mix(in srgb, var(--icon-warm) 7%, var(--surface)); }
 
 /* Docker manager: slim header, compact resource rows and restrained panels. */
-.el-dialog.docker-dialog .docker-heading { min-height: 31px; gap: 10px; margin-bottom: 2px; }
+.el-dialog.docker-dialog .docker-heading { min-height: 0; gap: 18px; margin-bottom: 10px; }
 .el-dialog.docker-dialog .docker-summary { gap: 7px; font-size: 12px; font-weight: 550; }
 .el-dialog.docker-dialog .docker-summary > svg { width: 16px; height: 16px; }
-.el-dialog.docker-dialog .docker-heading-actions { flex-wrap: nowrap; gap: 3px; }
+.el-dialog.docker-dialog .docker-heading-actions { flex-wrap: wrap; gap: 7px; }
 .el-dialog.docker-dialog .docker-heading-actions .el-button + .el-button { margin-left: 0; }
 .el-dialog.docker-dialog .docker-tabs { margin-top: 0; }
 .el-dialog.docker-dialog .docker-list { min-height: 180px; max-height: min(57vh, 500px); overflow: auto; border-color: var(--line); }
-.el-dialog.docker-dialog .docker-row { min-height: 52px; gap: 9px; padding: 6px 5px; border-color: var(--line); }
-.el-dialog.docker-dialog .docker-subrow { min-height: 48px; padding: 5px 8px; border-color: var(--line); }
+.el-dialog.docker-dialog .docker-row { min-height: 52px; gap: 14px; padding: 6px 14px; border-color: var(--line); }
+.el-dialog.docker-dialog .docker-subrow { min-height: 52px; padding: 9px 14px; border-color: var(--line); }
 .el-dialog.docker-dialog .docker-row-status { width: 6px; height: 6px; }
 .el-dialog.docker-dialog .docker-row-status.running { box-shadow: none; }
 .el-dialog.docker-dialog .docker-row-main { gap: 2px; }

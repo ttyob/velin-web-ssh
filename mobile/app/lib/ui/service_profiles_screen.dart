@@ -30,7 +30,7 @@ class _ServiceProfilesScreenState extends State<ServiceProfilesScreen> {
     final next = await showDialog<ServiceProfile>(
       context: context,
       builder: (c) => AlertDialog(
-        title: Text(previous == null ? '添加 Velin 服务' : '编辑 Velin 服务'),
+        title: Text(previous == null ? '添加 Jeex Terminal 服务' : '编辑 Jeex Terminal 服务'),
         content: SizedBox(
           width: 380,
           child: Form(
@@ -150,10 +150,10 @@ class _ServiceProfilesScreenState extends State<ServiceProfilesScreen> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       toolbarHeight: 52,
-      title: const Text('Velin 服务', style: TextStyle(fontSize: 16)),
+      title: const Text('Jeex Terminal 服务', style: TextStyle(fontSize: 16)),
       actions: [
         IconButton(
-          tooltip: '添加 Velin 服务',
+          tooltip: '添加 Jeex Terminal 服务',
           onPressed: _edit,
           icon: const Icon(Icons.add),
         ),

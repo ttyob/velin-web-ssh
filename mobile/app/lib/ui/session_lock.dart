@@ -201,7 +201,7 @@ class _SessionLockState extends State<SessionLock> {
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  'velin',
+                                  'Jeex Terminal',
                                   style: TextStyle(
                                     color: V.muted,
                                     fontSize: 14,

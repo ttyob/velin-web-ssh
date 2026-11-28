@@ -2,6 +2,13 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Check, ChevronDown, ChevronsDownUp, CodeXml, File, FileDiff, Files, FolderOpen, GitBranch, GitPullRequest, RefreshCw, Save, Search, Settings2, Sparkles, TerminalSquare, X } from "@lucide/vue";
+import FloatingTerminalPanel from "./FloatingTerminalPanel.vue";
+import type { FloatingPanelBounds } from "../floatingPanel";
+import OperationFeedback from "./OperationFeedback.vue";
+import EditorStatusControls from "./EditorStatusControls.vue";
+import { operationLabel } from "../operationFeedback";
+import { detectIndent, withLineEnding, type EditorIndent } from "../editorPreferences";
+import type { CodeLanguageId } from "../codeLanguageDetection";
 import CodeProjectSearch from "./CodeProjectSearch.vue";
 import { useAuthStore } from "../stores/auth";
 import { loadWorkspaceState, saveWorkspaceState, workspaceStateKey, type WorkspaceDocumentState } from "../codeWorkspaceState";
@@ -14,27 +21,29 @@ import { codeLanguage } from "../codeLanguages";
 import type { Host } from "../types";
 import RemoteCodeEditor from "./RemoteCodeEditor.vue";
 import CodeDiffDialog from "./CodeDiffDialog.vue";
+import { canLoadDiff, emptyDiffFile, needsDiffPreview, type DiffFilePreview } from "../codeDiff";
 import RemoteFileTree, { type FileMutation } from "./RemoteFileTree.vue";
 import CodeGitChanges from "./CodeGitChanges.vue";
 
 const GitDialog = defineAsyncComponent(() => import("./GitDialog.vue"));
 const CodeFileAnalysis = defineAsyncComponent(() => import("./CodeFileAnalysis.vue"));
 const props = defineProps<{ host: Host; sessionId: string; rootPath: string; visible: boolean; locked?: boolean }>();
-const emit = defineEmits<{ dirty: [value: boolean]; terminal: []; files: [path: string]; dock: [target: HTMLElement | undefined] }>();
+const emit = defineEmits<{ dirty: [value: boolean]; terminal: []; files: [path: string]; dock: [target: HTMLElement | undefined, resizing: boolean] }>();
 const stateKey = workspaceStateKey(useAuthStore().user?.id || "local", props.host.id, props.rootPath);
 const remembered = loadWorkspaceState(stateKey);
 const restoring = ref(true), storageError = ref("");
 const projectSearch = ref<InstanceType<typeof CodeProjectSearch>>();
 const terminalOpen = ref(Boolean(remembered.terminalOpen));
-const terminalHeight = ref(Math.max(120, Math.min(500, Number(remembered.terminalHeight) || 240)));
+const terminalResizing = ref(false);
+const terminalBounds = ref<FloatingPanelBounds>(remembered.terminalBounds || { width: 640, height: 300, right: 12, bottom: 12 });
 const dockElement = ref<HTMLElement>();
 let persistenceTimer: number | undefined;
 let autoRefreshTimer: number | undefined;
 const workspaceElement = ref<HTMLElement>();
 const files = createRemoteFiles(props.host.id, props.sessionId);
 const git = createRemoteGit(props.host.id);
-type FileDocument = { id: string; kind: "file"; path: string; content: string; saved: string; version: string; loading: boolean; saving: boolean; error: string; conflict: boolean; line: number; column: number; scroll: number; recovery?: WorkspaceDocumentState };
-type DiffDocument = { id: string; kind: "diff"; path: string; left: string; right: string; leftLabel: string; rightLabel: string; loading: boolean; error: string; leftExists?: boolean; rightExists?: boolean; version?: string; group?: "staged" | "worktree" | "changes"; change?: GitChange };
+type FileDocument = { id: string; kind: "file"; path: string; content: string; saved: string; version: string; loading: boolean; saving: boolean; error: string; saveError?: string; savedAt?: number; language?: CodeLanguageId; indent?: EditorIndent; conflict: boolean; line: number; column: number; scroll: number; recovery?: WorkspaceDocumentState };
+type DiffDocument = { id: string; kind: "diff"; path: string; left: string; right: string; leftLabel: string; rightLabel: string; loading: boolean; error: string; preview?: DiffFilePreview; largeAccepted?: boolean; leftExists?: boolean; rightExists?: boolean; version?: string; group?: "staged" | "worktree" | "changes"; change?: GitChange };
 type Document = FileDocument;
 const documents = ref<Document[]>([]);
 let documentSequence = 0;
@@ -64,6 +73,8 @@ const repository = ref("");
 const gitLoading = ref(false);
 const gitError = ref("");
 const gitBusy = ref("");
+const gitProgress = ref(""), gitOperationError = ref("");
+const fileSaveStatus = computed(() => { const doc = activeDocument.value; if (!doc) return ""; return doc.loading ? "读取中…" : doc.saving ? "保存中…" : doc.conflict ? "远程版本已变化" : doc.saveError ? "保存失败" : isDirty(doc) ? "未保存" : doc.savedAt ? "已保存" : ""; });
 const aiCommitLoading = ref(false);
 const gitChangeView = ref<"list" | "tree">(remembered.gitView === "tree" ? "tree" : "list");
 const commitMessage = ref(remembered.commitMessage || "");
@@ -73,7 +84,7 @@ const branchPopoverOpen = ref(false), branchLoading = ref(false), branchesLoaded
 const workspaceBranches = ref<GitBranchInfo[]>([]);
 const localBranches = computed(() => workspaceBranches.value.filter(item => !item.remote));
 const remoteBranches = computed(() => workspaceBranches.value.filter(item => item.remote));
-const fullGitRef = ref<{ confirmClose: () => Promise<boolean>; refresh: () => Promise<void>; saveCurrent: () => Promise<void>; selectTab: (tab: "status" | "history" | "branches") => void }>();
+const fullGitRef = ref<{ confirmClose: () => Promise<boolean>; refresh: (silent?: boolean) => Promise<void>; saveCurrent: () => Promise<void>; selectTab: (tab: "status" | "history" | "branches") => void }>();
 const fullGitDirty = ref(false), fullGitBusy = ref(false);
 const gitTab = ref<"status" | "history" | "branches">("status");
 const gitDialogOpen = ref(false);
@@ -122,6 +133,8 @@ let disposed = false;
 let gitRequest = 0;
 let gitRefreshInFlight: Promise<void> | undefined;
 let autoRefreshing = false;
+let lastRemoteFetchAttempt = 0;
+const REMOTE_FETCH_INTERVAL = 30_000;
 watch([gitBusy, fullGitBusy, fileMutationBusy], () => { gitRequest++; }, { flush: "sync" });
 const changes = computed(() => (gitStatus.value?.changes || []).filter(change => !isConflict(change)));
 const conflicts = computed(() => (gitStatus.value?.changes || []).filter(isConflict));
@@ -198,16 +211,16 @@ async function openFile(path: string, size?: number, location?: { line: number; 
   if (location) { doc.line = location.line; doc.column = location.column; await nextTick(); editorRefs.get(doc.id)?.goTo(location.line, location.column); }
 }
 async function loadDocument(doc: FileDocument) {
-  doc.loading = true; doc.error = "";
+  doc.loading = true; doc.error = ""; doc.saveError = "";
   try {
     const text = await files.read(doc.path);
-    doc.content = text.content; doc.saved = text.content; doc.version = text.version; doc.conflict = false; doc.recovery = undefined;
+    doc.content = text.content; doc.saved = text.content; doc.version = text.version; doc.conflict = false; doc.recovery = undefined; doc.indent ??= detectIndent(text.content);
   } catch (error) { doc.error = message(error); }
   finally { doc.loading = false; }
 }
 async function reloadDocument(doc: FileDocument) {
   if (isDirty(doc)) {
-    try { await ElMessageBox.confirm("重新加载会放弃该文件尚未保存的修改。", "重新加载文件", { confirmButtonText: "重新加载", cancelButtonText: "取消", type: "warning" }); }
+    try { await ElMessageBox.confirm("重新加载会放弃该文件尚未保存的修改。", "重新加载文件", { confirmButtonText: "重新加载", cancelButtonText: "取消", type: "warning", closeOnClickModal: false }); }
     catch { return; }
   }
   await loadDocument(doc);
@@ -221,13 +234,14 @@ async function saveDocument(doc: FileDocument): Promise<boolean> {
     try { await ElMessageBox.confirm("保存后远程文件将变为 0 字节，确认清空？", "保存空文件", { confirmButtonText: "确认清空", cancelButtonText: "取消", type: "warning" }); }
     catch { return false; }
   }
-  doc.saving = true;
+  doc.saving = true; doc.saveError = "";
   try {
     const result = await files.save(doc.path, content, doc.version, empty);
-    doc.saved = content; doc.version = result.version; doc.conflict = false;
+    doc.saved = content; doc.version = result.version; doc.conflict = false; doc.savedAt = Date.now();
     if (repository.value) void refreshGit(false);
     return true;
   } catch (error) {
+    doc.saveError = message(error);
     if (error instanceof ApiError && error.status === 409) {
       doc.conflict = true;
       ElMessage.warning("远程文件已变化，未覆盖。请比较远程版本后重新加载或合并。");
@@ -246,7 +260,7 @@ async function confirmDocumentClose(doc: Document) {
   if (!isDirty(doc)) return true;
   try {
     await ElMessageBox.confirm(`“${fileName(doc.path)}”有未保存的修改。`, "关闭文件", {
-      confirmButtonText: "保存并关闭", cancelButtonText: "放弃修改", distinguishCancelAndClose: true, type: "warning",
+      confirmButtonText: "保存并关闭", cancelButtonText: "放弃修改", distinguishCancelAndClose: true, type: "warning", closeOnClickModal: false,
     });
     return doc.kind === "file" && await saveDocument(doc);
   } catch (action) { return action === "cancel"; }
@@ -264,7 +278,7 @@ async function confirmClose() {
   if (!dirtyDocuments.value.length) return true;
   try {
     await ElMessageBox.confirm(`有 ${dirtyDocuments.value.length} 个文件尚未保存。`, "关闭代码编辑器", {
-      confirmButtonText: "全部保存并关闭", cancelButtonText: "放弃修改", distinguishCancelAndClose: true, type: "warning",
+      confirmButtonText: "全部保存并关闭", cancelButtonText: "放弃修改", distinguishCancelAndClose: true, type: "warning", closeOnClickModal: false,
     });
     return await saveAll();
   } catch (action) { if (action !== "cancel") return false; for (const doc of documents.value) { doc.content = doc.saved; doc.recovery = undefined; } persistWorkspace(); return true; }
@@ -273,14 +287,21 @@ function focus() {
   if (activeDocument.value?.kind === "file") editorRefs.get(activeID.value)?.focus();
   else workspaceElement.value?.focus();
 }
-async function refresh() { refreshTree(); await refreshCleanFiles(); if (repository.value || panel.value === "git") await refreshGit(); }
+async function refresh() { refreshTree(); await refreshCleanFiles(); if (repository.value || panel.value === "git") await refreshGit(true, false, true); }
 defineExpose({ confirmClose, focus, refresh });
-async function refreshGit(connect = true, silent = false): Promise<void> {
+function updateGitStatus(status: GitStatus) {
+  if (JSON.stringify(gitStatus.value) !== JSON.stringify(status)) {
+    const previous = new Map(gitStatus.value?.changes.map(change => [change.path, change]));
+    status.changes = status.changes.map(change => JSON.stringify(previous.get(change.path)) === JSON.stringify(change) ? previous.get(change.path)! : change);
+    gitStatus.value = status;
+  }
+}
+async function refreshGit(connect = true, silent = false, fetchRemote = false): Promise<void> {
   if (props.locked || disposed) return;
   if (gitRefreshInFlight) {
     if (silent) return;
     await gitRefreshInFlight;
-    return refreshGit(connect, silent);
+    return refreshGit(connect, silent, fetchRemote);
   }
   const request = ++gitRequest;
   if (!silent) { gitLoading.value = true; gitError.value = ""; }
@@ -288,14 +309,21 @@ async function refreshGit(connect = true, silent = false): Promise<void> {
     try {
       if (connect || !repository.value) await git.connect();
       const root = repository.value && !connect ? repository.value : await git.root(props.rootPath);
-      const status = await git.status(root);
+      let status = await git.status(root);
+      if (fetchRemote) {
+        lastRemoteFetchAttempt = Date.now();
+        if (status.tracking) {
+          try {
+            await git.fetch(root, status.tracking);
+            status = await git.status(root);
+          } catch (error) {
+            if (!silent) throw error;
+          }
+        }
+      }
       if (disposed || props.locked || request !== gitRequest) return;
       repository.value = root; gitError.value = "";
-      if (JSON.stringify(gitStatus.value) !== JSON.stringify(status)) {
-        const previous = new Map(gitStatus.value?.changes.map(change => [change.path, change]));
-        status.changes = status.changes.map(change => JSON.stringify(previous.get(change.path)) === JSON.stringify(change) ? previous.get(change.path)! : change);
-        gitStatus.value = status;
-      }
+      updateGitStatus(status);
     } catch (error) {
       if (!silent && !disposed && request === gitRequest) gitError.value = message(error);
     } finally { if (!silent) gitLoading.value = false; }
@@ -304,16 +332,21 @@ async function refreshGit(connect = true, silent = false): Promise<void> {
   try { await task; } finally { gitRefreshInFlight = undefined; }
 }
 async function gitOperation(key: string, operation: () => Promise<unknown>, success: string) {
-  if (gitBusy.value || fullGitBusy.value || fileMutationBusy.value || gitLoading.value) return;
+  if (gitLoading.value && gitRefreshInFlight) await gitRefreshInFlight;
+  if (props.locked || disposed) return;
+  if (gitBusy.value || fullGitBusy.value || fileMutationBusy.value) { ElMessage.info("请等待当前操作完成后重试"); return; }
   if (fullGitDirty.value) { ElMessage.warning("请先保存或关闭正在编辑的合并文件"); return; }
-  gitBusy.value = key;
+  gitBusy.value = key; gitProgress.value = ""; gitOperationError.value = "";
   try {
-    await operation();
-    ElMessage.success(success);
+    const result = await operation();
+    if (result !== false) ElMessage.success(success);
     await gitChanged();
     if (gitDialogOpen.value) await fullGitRef.value?.refresh();
-  } catch (error) { ElMessage.error(message(error)); }
-  finally { gitBusy.value = ""; }
+  } catch (error) {
+    gitOperationError.value = message(error);
+    await gitChanged();
+  }
+  finally { gitBusy.value = ""; gitProgress.value = ""; }
 }
 async function gitChanged() {
     await refreshGit(false);
@@ -345,22 +378,61 @@ async function commit(action: CommitAction = "commit") {
   if (action !== "amend" && !changes.value.length) return ElMessage.warning("没有可提交的更改");
   if (action === "sync" && dirtyDocuments.value.length) return ElMessage.warning("请先保存或关闭未保存的文件，再同步代码");
   const success = action === "amend" ? "上次提交已修改" : action === "push" ? "提交已创建并推送" : action === "sync" ? "提交已创建并同步" : "提交已创建";
+  let pulledLatest = false;
   await gitOperation(`commit-${action}`, async () => {
-    if (changes.value.length) await git.stage(repository.value);
+    if (gitStatus.value?.tracking) {
+      gitProgress.value = "正在检查远程是否有更新…";
+      await git.fetch(repository.value, gitStatus.value.tracking);
+      lastRemoteFetchAttempt = Date.now();
+      const current = await git.status(repository.value);
+      updateGitStatus(current);
+      if (current.behind > 0) {
+        try {
+          await ElMessageBox.confirm(
+            `远程分支“${current.tracking}”比本地新 ${current.behind} 个提交。先拉取最新代码吗？拉取后请检查变更，再重新提交。`,
+            "远程代码有更新",
+            { confirmButtonText: "拉取最新代码", cancelButtonText: "暂不拉取", type: "warning", closeOnClickModal: false },
+          );
+        } catch { return false; }
+        if (dirtyDocuments.value.length) {
+          ElMessage.warning("请先保存或关闭未保存的文件，再拉取远程更新");
+          return false;
+        }
+        await git.pull(repository.value);
+        pulledLatest = true;
+        return false;
+      }
+    }
+    if (changes.value.length) { gitProgress.value = "正在准备全部更改…"; await git.stage(repository.value); }
+    gitProgress.value = "正在创建提交…";
     await git.commit(repository.value, text, action === "amend");
-    if (action === "push") await git.push(repository.value);
-    if (action === "sync") { await git.pull(repository.value); await git.push(repository.value); }
     commitMessage.value = "";
+    try {
+      if (action === "sync") { gitProgress.value = "提交已创建，正在拉取…"; await git.pull(repository.value); }
+      if (action === "push" || action === "sync") { gitProgress.value = "提交已创建，正在推送…"; await git.push(repository.value); }
+    } catch (error) { throw new Error(`提交已创建，后续同步未完成。请刷新状态后使用推送或拉取继续，无需重复提交。\n${message(error)}`); }
   }, success);
+  if (pulledLatest) ElMessage.success("已拉取最新代码，请检查变更后重新提交");
 }
-function commitPrimary() { commitDropdown.value?.handleClose(); void commit(); }
+function commitPrimary() {
+  commitDropdown.value?.handleClose();
+  if (gitStatus.value?.behind) void sync("pull");
+  else void commit();
+}
 function commitMenuAction(action: CommitAction) { commitDropdown.value?.handleClose(); void commit(action); }
 async function sync(direction: "pull" | "push") {
-  if (direction === "pull" && dirtyDocuments.value.length) return ElMessage.warning("请先保存或关闭未保存的文件，再拉取更新");
   try {
-    await ElMessageBox.confirm(direction === "pull" ? "从上游拉取更新，仅允许快进合并。" : `推送分支“${gitStatus.value?.branch}”到上游？`, direction === "pull" ? "拉取更新" : "推送提交", { confirmButtonText: "确认", cancelButtonText: "取消" });
+    await ElMessageBox.confirm(direction === "pull" ? `从“${gitStatus.value?.tracking || "上游分支"}”拉取最新代码，仅允许快进合并。` : `推送分支“${gitStatus.value?.branch}”到上游？`, direction === "pull" ? "拉取更新" : "推送提交", { confirmButtonText: direction === "pull" ? "拉取最新代码" : "确认", cancelButtonText: "取消", closeOnClickModal: false });
   } catch { return; }
-  await gitOperation(direction, () => git[direction](repository.value), direction === "pull" ? "已拉取更新" : "已推送提交");
+  if (direction === "pull" && dirtyDocuments.value.length) return ElMessage.warning("请先保存或关闭未保存的文件，再拉取更新");
+  await gitOperation(direction, async () => {
+    if (direction === "pull" && gitStatus.value?.tracking) {
+      await git.fetch(repository.value, gitStatus.value.tracking);
+      lastRemoteFetchAttempt = Date.now();
+      updateGitStatus(await git.status(repository.value));
+    }
+    await git[direction](repository.value);
+  }, direction === "pull" ? "已拉取更新" : "已推送提交");
 }
 function toggleGitChangeView() {
   gitChangeView.value = gitChangeView.value === "tree" ? "list" : "tree";
@@ -419,22 +491,42 @@ async function generateCommitMessage() {
   } catch (error) { ElMessage.error(message(error)); }
   finally { aiCommitLoading.value = false; gitBusy.value = ""; }
 }
-async function loadDiff(doc: DiffDocument) {
+const diffRequests = new WeakMap<DiffDocument, number>();
+async function loadDiff(doc: DiffDocument, force = false) {
   if (!doc.change || !doc.group) return;
+  const request = (diffRequests.get(doc) || 0) + 1;
+  diffRequests.set(doc, request);
+  if (force) doc.largeAccepted = true;
   doc.loading = true; doc.error = "";
   try {
     const change = doc.change;
+    const leftRevision = doc.group === "worktree" ? "0" : "HEAD";
+    const leftPath = doc.group === "worktree" ? change.path : change.originalPath || change.path;
+    const remotePath = joinRemotePath(repository.value, change.path);
+    const deleted = change.worktree === "D" || (change.index === "D" && change.worktree === " ");
+    const [leftInfo, rightInfo] = await Promise.all([
+      change.index === "?" ? emptyDiffFile() : git.fileInfo(repository.value, leftPath, leftRevision),
+      doc.group === "staged" ? git.fileInfo(repository.value, change.path, "0") : deleted ? emptyDiffFile() : files.info(remotePath),
+    ]);
+    if (request !== diffRequests.get(doc)) return;
+    const preview = { left: { ...leftInfo, imageURL: git.imageURL(repository.value, leftPath, leftRevision) },
+      right: { ...rightInfo, imageURL: doc.group === "staged" ? git.imageURL(repository.value, change.path, "0") : files.imageURL(remotePath),
+        ...(doc.group !== "staged" ? { downloadURL: files.downloadURL(remotePath) } : {}) } };
+    if (needsDiffPreview(preview) && (!doc.largeAccepted || !canLoadDiff(preview))) { doc.preview = preview; return; }
+    doc.preview = undefined;
     if (doc.group === "staged") {
       const [left, right] = await Promise.all([
         git.blob(repository.value, change.originalPath || change.path, "HEAD"),
         git.blob(repository.value, change.path, "0"),
       ]);
+      if (request !== diffRequests.get(doc)) return;
       doc.left = left.content; doc.right = right.content; doc.leftExists = left.exists; doc.rightExists = right.exists; doc.version = undefined;
     } else if (doc.group === "worktree") {
       const [left, right] = await Promise.all([
         change.index === "?" ? Promise.resolve({ content: "", exists: false }) : git.blob(repository.value, change.path, "0"),
         change.worktree === "D" ? Promise.resolve({ content: "", version: "" }) : files.read(joinRemotePath(repository.value, change.path)),
       ]);
+      if (request !== diffRequests.get(doc)) return;
       doc.left = left.content; doc.right = right.content; doc.leftExists = left.exists; doc.rightExists = change.worktree !== "D"; doc.version = right.version;
     } else {
       const deleted = change.worktree === "D" || (change.index === "D" && change.worktree === " ");
@@ -442,10 +534,11 @@ async function loadDiff(doc: DiffDocument) {
         change.index === "?" ? Promise.resolve({ content: "", exists: false }) : git.blob(repository.value, change.originalPath || change.path, "HEAD"),
         deleted ? Promise.resolve({ content: "", version: "" }) : files.read(joinRemotePath(repository.value, change.path)),
       ]);
+      if (request !== diffRequests.get(doc)) return;
       doc.left = left.content; doc.right = right.content; doc.leftExists = left.exists; doc.rightExists = !deleted; doc.version = right.version;
     }
-  } catch (error) { doc.error = message(error); }
-  finally { doc.loading = false; }
+  } catch (error) { if (request === diffRequests.get(doc)) doc.error = message(error); }
+  finally { if (request === diffRequests.get(doc)) doc.loading = false; }
 }
 async function openDiff(change: GitChange, group: "staged" | "worktree" | "changes" = "changes") {
   const doc = reactive<DiffDocument>({ id: `diff:${group}:${change.path}`, kind: "diff", path: change.path, group, change,
@@ -548,7 +641,7 @@ async function discardDrafts() {
 function persistWorkspace() {
   if (restoring.value) return;
   try {
-    saveWorkspaceState(stateKey, { documents: documents.value.map(doc => ({ path: doc.path, line: doc.line, column: doc.column, scroll: doc.scroll, ...(doc.recovery ? { draft: doc.recovery.draft, saved: doc.recovery.saved, version: doc.recovery.version } : isDirty(doc) ? { draft: doc.content, saved: doc.saved, version: doc.version } : {}) })), activePath: activeDocument.value?.path || "", panel: panel.value, panelOpen: panelOpen.value, width: panelWidth.value, gitView: gitChangeView.value, expanded: expandedPaths.value, terminalOpen: terminalOpen.value, terminalHeight: terminalHeight.value, commitMessage: commitMessage.value });
+    saveWorkspaceState(stateKey, { documents: documents.value.map(doc => ({ path: doc.path, line: doc.line, column: doc.column, scroll: doc.scroll, language: doc.language, indent: doc.indent, ...(doc.recovery ? { draft: doc.recovery.draft, saved: doc.recovery.saved, version: doc.recovery.version } : isDirty(doc) ? { draft: doc.content, saved: doc.saved, version: doc.version } : {}) })), activePath: activeDocument.value?.path || "", panel: panel.value, panelOpen: panelOpen.value, width: panelWidth.value, gitView: gitChangeView.value, expanded: expandedPaths.value, terminalOpen: terminalOpen.value, terminalHeight: terminalBounds.value.height, terminalBounds: terminalBounds.value, commitMessage: commitMessage.value });
     storageError.value = "";
   } catch { storageError.value = "浏览器存储空间不足，草稿尚未备份，请保存远程文件。"; }
 }
@@ -560,7 +653,7 @@ async function restoreWorkspace() {
       await openFile(saved.path);
       const doc = documents.value.find(doc => doc.path === saved.path);
       if (!doc) continue;
-      doc.line = saved.line || 1; doc.column = saved.column || 1; doc.scroll = saved.scroll || 0;
+      doc.line = saved.line || 1; doc.column = saved.column || 1; doc.scroll = saved.scroll || 0; doc.language = saved.language; doc.indent = saved.indent || doc.indent;
       if (typeof saved.draft === "string") doc.recovery = saved;
       await nextTick(); editorRefs.get(doc.id)?.restorePosition(doc.line, doc.column, doc.scroll);
     }
@@ -573,7 +666,8 @@ async function autoRefresh() {
   autoRefreshing = true;
   try {
   const previous = JSON.stringify(gitStatus.value);
-  if (repository.value || panel.value === "git") await refreshGit(false, true);
+  const fetchRemote = !gitDialogOpen.value && Date.now() - lastRemoteFetchAttempt >= REMOTE_FETCH_INTERVAL;
+  if (repository.value || panel.value === "git") await refreshGit(false, true, fetchRemote);
   if (disposed || gitBusy.value || fullGitBusy.value || fileMutationBusy.value) return;
   await refreshCleanFiles();
   if (previous !== JSON.stringify(gitStatus.value)) {
@@ -583,19 +677,11 @@ async function autoRefresh() {
       const change = gitStatus.value?.changes.find(item => item.path === doc.path);
       if (change) { doc.change = change; await loadDiff(doc); } else diffOpen.value = false;
     }
-    if (gitDialogOpen.value) void fullGitRef.value?.refresh();
+    if (gitDialogOpen.value) void fullGitRef.value?.refresh(true);
   }
   } finally { autoRefreshing = false; }
 }
 function toggleTerminal() { terminalOpen.value = !terminalOpen.value; }
-function startTerminalResize(event: PointerEvent) {
-  if (event.button !== 0) return; event.preventDefault();
-  const target = event.currentTarget as HTMLElement, start = event.clientY, height = terminalHeight.value;
-  target.setPointerCapture(event.pointerId);
-  const move = (next: PointerEvent) => { terminalHeight.value = Math.round(Math.max(100, Math.min((workspaceElement.value?.clientHeight || 800) * .65, height + start - next.clientY))); };
-  const stop = () => { target.removeEventListener("pointermove", move); target.removeEventListener("pointerup", stop); target.removeEventListener("pointercancel", stop); target.removeEventListener("lostpointercapture", stop); };
-  target.addEventListener("pointermove", move); target.addEventListener("pointerup", stop); target.addEventListener("pointercancel", stop); target.addEventListener("lostpointercapture", stop);
-}
 function showQuickOpen() {
   quickOpen.value = true; quickQuery.value = "";
   void indexFiles();
@@ -605,7 +691,7 @@ function openSearchResult(entry: RemoteFileEntry) { quickOpen.value = false; voi
 function showPanel(next: typeof panel.value) {
   panelOpen.value = panel.value === next ? !panelOpen.value : true;
   panel.value = next;
-  if (next === "git" && !gitStatus.value && !gitLoading.value) void refreshGit();
+  if (next === "git" && !gitStatus.value && !gitLoading.value) void refreshGit(true, false, true);
   if (next === "search") nextTick(() => projectSearch.value?.focus());
 }
 function handleKeyboard(event: KeyboardEvent) {
@@ -618,7 +704,7 @@ function handleKeyboard(event: KeyboardEvent) {
     if (event.shiftKey) void saveAll();
     else if (activeDocument.value?.kind === "file") void saveDocument(activeDocument.value);
   } else if (mod && event.shiftKey && ["KeyE", "KeyG"].includes(event.code)) {
-    event.preventDefault(); event.stopPropagation(); panelOpen.value = true; panel.value = event.code === "KeyE" ? "files" : "git"; if (panel.value === "git" && !gitStatus.value) void refreshGit();
+    event.preventDefault(); event.stopPropagation(); panelOpen.value = true; panel.value = event.code === "KeyE" ? "files" : "git"; if (panel.value === "git" && !gitStatus.value) void refreshGit(true, false, true);
   } else if (mod && event.shiftKey && event.code === "KeyF") {
     event.preventDefault(); event.stopPropagation(); panel.value = "search"; panelOpen.value = true; nextTick(() => projectSearch.value?.focus());
   } else if (mod && event.code === "Backquote") {
@@ -649,12 +735,12 @@ onMounted(() => {
   workspaceObserver = new ResizeObserver(() => { if (window.innerWidth > 640) resizePanel(panelWidth.value, false); });
   if (workspaceElement.value) workspaceObserver.observe(workspaceElement.value);
   if (props.visible) nextTick(focus);
-  if (props.host.credentialID || props.host.hasPassword) void refreshGit();
+  if (props.host.credentialID || props.host.hasPassword) void refreshGit(true, false, true);
 });
-watch([documents, activeID, panel, panelOpen, panelWidth, gitChangeView, expandedPaths, terminalOpen, terminalHeight, commitMessage], schedulePersist, { deep: true });
+watch([documents, activeID, panel, panelOpen, panelWidth, gitChangeView, expandedPaths, terminalOpen, terminalBounds, commitMessage], schedulePersist, { deep: true });
 watch(() => props.visible, visible => { if (visible) void autoRefresh(); });
-watch([terminalOpen, dockElement, () => props.visible, () => props.locked], () => { emit("dock", terminalOpen.value && props.visible && !props.locked ? dockElement.value : undefined); }, { flush: "post" });
-onBeforeUnmount(() => { persistWorkspace(); window.clearTimeout(persistenceTimer); window.clearInterval(autoRefreshTimer); emit("dock", undefined); window.removeEventListener("pagehide", persistWorkspace); window.removeEventListener("focus", autoRefresh); document.removeEventListener("visibilitychange", autoRefresh); stopPanelDrag(); workspaceObserver?.disconnect(); disposed = true; gitRequest++; indexController?.abort(); window.removeEventListener("beforeunload", beforeUnload); });
+watch([terminalOpen, dockElement, terminalResizing, () => props.visible, () => props.locked], () => { emit("dock", terminalOpen.value && props.visible && !props.locked ? dockElement.value : undefined, terminalResizing.value); }, { flush: "post" });
+onBeforeUnmount(() => { persistWorkspace(); window.clearTimeout(persistenceTimer); window.clearInterval(autoRefreshTimer); emit("dock", undefined, false); window.removeEventListener("pagehide", persistWorkspace); window.removeEventListener("focus", autoRefresh); document.removeEventListener("visibilitychange", autoRefresh); stopPanelDrag(); workspaceObserver?.disconnect(); disposed = true; gitRequest++; indexController?.abort(); window.removeEventListener("beforeunload", beforeUnload); });
 </script>
 
 <template>
@@ -665,7 +751,7 @@ onBeforeUnmount(() => { persistWorkspace(); window.clearTimeout(persistenceTimer
         <button title="SFTP 文件管理" aria-label="SFTP 文件管理" @click="emit('files', rootPath)"><FolderOpen :size="16" /></button>
         <button title="快速打开文件 (Ctrl+P)" aria-label="快速打开文件" @click="showQuickOpen"><Search :size="15" /><kbd>Ctrl P</kbd></button>
         <button title="保存全部 (Ctrl+Shift+S)" aria-label="保存全部" :disabled="!dirtyDocuments.length && !fullGitDirty" @click="saveAll"><Save :size="15" /></button>
-        <button title="切换底部终端 (Ctrl+`)" aria-label="切换底部终端" :aria-pressed="terminalOpen" @click="toggleTerminal"><TerminalSquare :size="16" /></button>
+        <button title="切换悬浮终端 (Ctrl+`)" aria-label="切换悬浮终端" :aria-pressed="terminalOpen" @click="toggleTerminal"><TerminalSquare :size="16" /></button>
         <button title="返回终端" aria-label="返回终端" @click="emit('terminal')"><TerminalSquare :size="16" /></button>
       </div>
     </header>
@@ -680,19 +766,20 @@ onBeforeUnmount(() => { persistWorkspace(); window.clearTimeout(persistenceTimer
       <aside v-show="panelOpen" class="code-side-panel">
         <header class="code-panel-title"><strong>{{ panel === 'files' ? '资源管理器' : panel === 'search' ? '文件搜索' : '源代码管理' }}</strong>
           <template v-if="panel === 'files'"><button aria-label="全部折叠目录" title="全部折叠目录" :disabled="treeLoading || !expandedPaths.length" @click="fileTree?.collapseAll()"><ChevronsDownUp :size="14" /></button><button aria-label="刷新目录" title="刷新目录" :disabled="treeLoading" @click="refreshTree"><RefreshCw :size="14" /></button></template>
-          <template v-else-if="panel === 'git'"><button aria-label="刷新 Git" title="刷新 Git" :disabled="gitLoading || (!!gitBusy || fullGitBusy || fileMutationBusy)" @click="refreshGit()"><RefreshCw :size="14" /></button><button aria-label="拉取更新" :title="gitStatus?.tracking ? `从 ${gitStatus.tracking} 拉取更新` : '当前分支没有上游分支'" :disabled="!gitStatus?.tracking || gitLoading || !!gitBusy || fullGitBusy || fileMutationBusy" @click="sync('pull')"><GitPullRequest :size="15" /></button><button aria-label="打开 Git 管理" title="打开 Git 管理" :disabled="fullGitBusy || fileMutationBusy" @click="openGitManager('status')"><Settings2 :size="15" /></button></template>
+          <template v-else-if="panel === 'git'"><button aria-label="刷新 Git" title="刷新 Git" :disabled="gitLoading || (!!gitBusy || fullGitBusy || fileMutationBusy)" @click="refreshGit(true, false, true)"><RefreshCw :size="14" /></button><button aria-label="拉取更新" :title="gitStatus?.tracking ? `从 ${gitStatus.tracking} 拉取更新` : '当前分支没有上游分支'" :disabled="!gitStatus?.tracking || gitLoading || !!gitBusy || fullGitBusy || fileMutationBusy" @click="sync('pull')"><GitPullRequest :size="15" /></button><button aria-label="打开 Git 管理" title="打开 Git 管理" :disabled="fullGitBusy || fileMutationBusy" @click="openGitManager('status')"><Settings2 :size="15" /></button></template>
         </header>
         <div v-show="panel === 'files'" class="code-file-panel-host"><RemoteFileTree ref="fileTree" :hostID="host.id" :sessionID="sessionId" :root-path="rootPath" :active-path="activeDocument?.path" :visible="visible && panelOpen && panel === 'files'" :locked="locked" :badge="badge" :before-mutation="beforeFileMutation" :delete-warning="deleteWarning" :expanded-paths="expandedPaths" @expanded="expandedPaths = $event" @open="selectFile" @changed="filesChanged" @loading="treeLoading = $event" @busy="fileMutationBusy = $event" /></div>
         <CodeProjectSearch v-show="panel === 'search'" ref="projectSearch" :hostID="host.id" :sessionID="sessionId" :root-path="rootPath" :locked="locked" @open="(path, line, column) => openFile(path, undefined, { line, column })" />
         <div v-show="panel === 'git'" class="code-git-panel" :aria-busy="gitLoading || (!!gitBusy || fullGitBusy || fileMutationBusy)">
           <div v-if="gitLoading && !gitStatus" class="code-panel-empty">正在读取仓库…</div>
-          <div v-if="gitError" class="code-inline-error">{{ gitError }}<button :disabled="gitLoading" @click="refreshGit()">重新连接</button><button @click="openGitManager('status')">仓库设置 / 初始化</button></div>
+          <div v-if="gitError" class="code-inline-error">{{ gitError }}<button :disabled="gitLoading" @click="refreshGit(true, false, true)">重新连接</button><button @click="openGitManager('status')">仓库设置 / 初始化</button></div>
           <template v-if="gitStatus">
             <div class="code-scm-repository" :title="repository"><button :aria-label="gitRepositoryOpen ? '折叠仓库' : '展开仓库'" :aria-expanded="gitRepositoryOpen" @click="gitRepositoryOpen = !gitRepositoryOpen"><ChevronDown :size="14" :class="{ closed: !gitRepositoryOpen }" /></button><strong @click="gitRepositoryOpen = !gitRepositoryOpen">{{ gitStatus.branch || rootName }}</strong><span>{{ gitStatus.changes.length }}</span><small v-if="gitStatus.ahead || gitStatus.behind">↑{{ gitStatus.ahead }} ↓{{ gitStatus.behind }}</small></div>
             <div v-if="gitRepositoryOpen" class="code-scm-repository-body">
             <div class="code-scm-fixed">
             <div class="code-commit-composer"><textarea v-model="commitMessage" aria-label="提交说明" :placeholder="`消息 (Ctrl+Enter) 在“${gitStatus.branch}”上提交`" rows="2" :disabled="aiCommitLoading" @keydown.ctrl.enter.prevent="commit()" @keydown.meta.enter.prevent="commit()" /><button aria-label="AI 生成提交说明" :disabled="!!gitBusy || fullGitBusy || fileMutationBusy || gitLoading" :title="conflicts.length ? '请先处理合并冲突' : !changes.length ? '没有可分析的代码变更' : '根据全部代码变更生成提交说明'" @click="generateCommitMessage"><Sparkles :size="14" /><span>{{ aiCommitLoading ? '生成中' : 'AI' }}</span></button></div>
-            <div class="code-commit-actions"><button class="code-commit-button" aria-label="提交更改" :title="changes.length ? '暂存全部更改并提交' : '没有可提交的更改'" :disabled="!changes.length || !!conflicts.length || !commitMessage.trim() || (!!gitBusy || fullGitBusy || fileMutationBusy) || gitLoading" @click="commitPrimary"><Check :size="14" />{{ gitBusy.startsWith('commit') ? '正在提交…' : '提交' }}</button><el-dropdown ref="commitDropdown" trigger="click" placement="bottom-end" :disabled="!!conflicts.length || !commitMessage.trim() || (!!gitBusy || fullGitBusy || fileMutationBusy) || gitLoading" @command="commitMenuAction"><button class="code-commit-menu-button" aria-label="更多提交操作" title="更多提交操作" :disabled="!!conflicts.length || !commitMessage.trim() || (!!gitBusy || fullGitBusy || fileMutationBusy) || gitLoading"><ChevronDown :size="14" /></button><template #dropdown><el-dropdown-menu class="code-commit-menu"><el-dropdown-item command="commit" :disabled="!changes.length">提交</el-dropdown-item><el-dropdown-item command="amend">提交(修改)</el-dropdown-item><el-dropdown-item command="push" :disabled="!changes.length" divided>提交和推送</el-dropdown-item><el-dropdown-item command="sync" :disabled="!changes.length">提交和同步</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
+            <div class="code-commit-actions"><button class="code-commit-button" :aria-label="gitStatus.behind ? '拉取最新代码' : '提交更改'" :title="gitStatus.behind ? `本地分支落后 ${gitStatus.behind} 个提交，点击拉取` : changes.length ? '暂存全部更改并提交' : '没有可提交的更改'" :disabled="(!gitStatus.behind && (!changes.length || !commitMessage.trim())) || !!conflicts.length || (!!gitBusy || fullGitBusy || fileMutationBusy) || gitLoading" @click="commitPrimary"><GitPullRequest v-if="gitStatus.behind" :size="14" /><Check v-else :size="14" />{{ gitBusy === 'pull' ? '正在拉取…' : gitBusy.startsWith('commit') ? '正在提交…' : gitStatus.behind ? '拉取最新代码' : '提交' }}</button><el-dropdown ref="commitDropdown" trigger="click" placement="bottom-end" :disabled="!!conflicts.length || !commitMessage.trim() || (!!gitBusy || fullGitBusy || fileMutationBusy) || gitLoading" @command="commitMenuAction"><button class="code-commit-menu-button" aria-label="更多提交操作" title="更多提交操作" :disabled="!!conflicts.length || !commitMessage.trim() || (!!gitBusy || fullGitBusy || fileMutationBusy) || gitLoading"><ChevronDown :size="14" /></button><template #dropdown><el-dropdown-menu class="code-commit-menu"><el-dropdown-item command="commit" :disabled="!changes.length">提交</el-dropdown-item><el-dropdown-item command="amend">提交(修改)</el-dropdown-item><el-dropdown-item command="push" :disabled="!changes.length" divided>提交和推送</el-dropdown-item><el-dropdown-item command="sync" :disabled="!changes.length">提交和同步</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
+            <OperationFeedback :pending="gitBusy ? gitProgress || operationLabel(gitBusy) : undefined" :error="gitOperationError" retry-label="刷新 Git 状态" @retry="refreshGit(true, false, true)" @dismiss="gitOperationError = ''" />
             <p v-if="dirtyDocuments.length" class="code-git-note">{{ dirtyDocuments.length }} 个文件尚未保存，Git 操作使用远程已保存的内容。</p>
             <section v-if="conflicts.length" class="code-change-group"><header><strong>合并冲突</strong><span>{{ conflicts.length }}</span></header><button v-for="change in conflicts" :key="change.path" class="code-conflict-file" @click="openGitManager('status', change)"><FileDiff :size="14" />{{ change.path }}</button><button class="code-inline-link" @click="openGitManager('status')">处理合并冲突</button></section>
             </div>
@@ -710,18 +797,19 @@ onBeforeUnmount(() => { persistWorkspace(); window.clearTimeout(persistenceTimer
         </nav>
         <template v-if="activeDocument">
           <div class="code-breadcrumb"><span :title="activeDocument.path">{{ relativeRemotePath(rootPath, activeDocument.path) }}</span><div><button title="分析当前文件的错误和潜在问题" aria-label="AI 分析当前文件" :disabled="activeDocument.loading || !!activeDocument.error" @click="analyzeFile(activeDocument)"><Sparkles :size="14" /><span class="code-analysis-label">AI 分析</span></button><button title="文件内查找" aria-label="文件内查找" @click="editorRefs.get(activeID)?.search()"><Search :size="14" /></button><button title="重新加载文件" aria-label="重新加载文件" :disabled="activeDocument.loading || activeDocument.saving || fileMutationBusy" @click="reloadDocument(activeDocument)"><RefreshCw :size="14" /></button><button :disabled="!isDirty(activeDocument) || activeDocument.saving || fileMutationBusy" aria-label="保存文件" @click="saveDocument(activeDocument)"><Save :size="14" />{{ activeDocument.saving ? '保存中' : '保存' }}</button></div></div>
+          <OperationFeedback v-if="activeDocument.saveError && !activeDocument.conflict" :error="activeDocument.saveError" hint="修改仍保留在编辑器中，请检查连接后重试保存。" retry-label="重试保存" @retry="saveDocument(activeDocument)" @dismiss="activeDocument.saveError = ''" />
           <div v-if="activeDocument.conflict" class="code-conflict-banner"><span>远程版本已变化，当前修改尚未保存。</span><button @click="compareRemote(activeDocument)">比较远程版本</button><button @click="reloadDocument(activeDocument)">重新加载</button></div>
         </template>
         <div v-if="!documents.length" class="code-editor-empty"><CodeXml :size="38" /><h2>{{ rootName }}</h2><p>从左侧选择文件，或查看 Git 更改</p><button @click="showQuickOpen">快速打开文件<kbd>Ctrl P</kbd></button><button @click="showPanel('git')">源代码管理<GitBranch :size="14" /></button></div>
         <div v-for="doc in documents" v-show="doc.id === activeID" :key="doc.id" class="code-document-surface" v-loading="doc.loading">
           <div v-if="doc.error" class="code-document-error"><File :size="26" /><p>{{ doc.error }}</p><button @click="loadDocument(doc)">重新读取</button></div>
-          <RemoteCodeEditor v-else-if="!doc.loading" :ref="value => setEditorRef(doc.id, value)" :path="doc.path" :content="doc.content" :visible="visible && !locked && doc.id === activeID" :initial-line="doc.line" :initial-column="doc.column" :initial-scroll="doc.scroll" @save="saveDocument(doc)" @analyze="analyzeFile(doc)" @scroll="doc.scroll = $event" @change="doc.content = $event" @position="(line, column) => { doc.line = line; doc.column = column; }" />
+          <RemoteCodeEditor v-else-if="!doc.loading" :ref="value => setEditorRef(doc.id, value)" :path="doc.path" :content="doc.content" :language-i-d="doc.language" :indent="doc.indent" :visible="visible && !locked && doc.id === activeID" :initial-line="doc.line" :initial-column="doc.column" :initial-scroll="doc.scroll" @save="saveDocument(doc)" @analyze="analyzeFile(doc)" @scroll="doc.scroll = $event" @change="doc.content = $event" @position="(line, column) => { doc.line = line; doc.column = column; }" />
         </div>
-        <div v-show="terminalOpen" class="code-terminal-panel" :style="{ height: `${terminalHeight}px` }"><div class="code-terminal-separator" role="separator" tabindex="0" aria-label="调整终端高度" aria-orientation="horizontal" @pointerdown="startTerminalResize" @keydown.up.prevent="terminalHeight = Math.min(500, terminalHeight + 20)" @keydown.down.prevent="terminalHeight = Math.max(100, terminalHeight - 20)" /><header><strong>终端</strong><span>{{ host.name }} · 当前会话</span><button title="收起终端" aria-label="收起终端" @click="terminalOpen = false"><X :size="14" /></button></header><div ref="dockElement" class="code-terminal-mount" /></div>
+        <FloatingTerminalPanel v-model="terminalOpen" v-model:bounds="terminalBounds" :host-name="host.name" :active="visible && !locked" @resizing="terminalResizing = $event"><div ref="dockElement" class="code-terminal-mount" /></FloatingTerminalPanel>
       </main>
     </div>
-    <footer class="code-status-bar"><el-popover v-model:visible="branchPopoverOpen" placement="top-start" trigger="manual" :width="250" popper-class="code-branch-popper"><template #reference><button aria-label="切换 Git 分支" :disabled="!repository || branchLoading" @click="toggleBranchPopover"><GitBranch :size="12" />{{ gitStatus?.branch || 'Git' }}<span v-if="gitStatus">{{ gitStatus.changes.length }} 个更改</span></button></template><section class="code-branch-picker" role="dialog" aria-label="切换分支"><header><strong>切换分支</strong><button aria-label="刷新分支" title="刷新分支" :disabled="branchLoading" @click="loadBranches"><RefreshCw :size="13" /></button></header><p v-if="branchError" class="error">{{ branchError }}</p><p v-else-if="branchLoading && !branchesLoaded">正在读取分支…</p><div v-else class="code-branch-groups"><section class="code-branch-group" role="group" aria-label="本地分支"><h4><span>本地分支</span><small>{{ localBranches.length }}</small></h4><button v-for="item in localBranches" :key="item.name" :class="{ current: item.current }" :disabled="item.current || !!gitBusy" @click="switchWorkspaceBranch(item)"><GitBranch :size="13" /><span>{{ item.name }}</span><Check v-if="item.current" :size="13" /></button><p v-if="!localBranches.length" class="empty">暂无本地分支</p></section><section class="code-branch-group" role="group" aria-label="远程分支"><h4><span>远程分支</span><small>{{ remoteBranches.length }}</small></h4><button v-for="item in remoteBranches" :key="item.name" :disabled="!!gitBusy" @click="switchWorkspaceBranch(item)"><GitPullRequest :size="13" /><span>{{ item.name }}</span></button><p v-if="!remoteBranches.length" class="empty">暂无远程分支</p></section></div></section></el-popover><span class="code-status-host">{{ host.username }}@{{ host.address }}</span><span v-if="activeDocument?.kind === 'file'">行 {{ activeDocument.line }}，列 {{ activeDocument.column }}</span><span v-if="activeDocument">{{ codeLanguage(activeDocument.path).name }}</span><span>UTF-8</span><span v-if="activeDocument?.kind === 'file'">{{ activeDocument.content.includes('\r\n') ? 'CRLF' : 'LF' }}</span></footer>
-    <CodeDiffDialog v-if="diffPreview && !locked" v-model="diffOpen" :path="diffPreview.path" :left="diffPreview.left" :right="diffPreview.right" :left-label="diffPreview.leftLabel" :right-label="diffPreview.rightLabel" :loading="diffPreview.loading" :error="diffPreview.error" :refreshable="!!diffPreview.group" :can-edit="!!diffPreview.group && diffPreview.change?.worktree !== 'D' && !(diffPreview.change?.index === 'D' && diffPreview.change?.worktree === ' ')" :group="diffPreview.group" :hunk-allowed="hunkAllowed" :busy="!!gitBusy || fullGitBusy || fileMutationBusy || gitLoading" :hunk-hint="!hunkAllowed && diffPreview.group ? '重命名、复制及冲突文件请按文件操作' : undefined" @apply-hunk="applyHunk" @refresh="loadDiff(diffPreview)" @edit="editComparedFile" />
+    <footer class="code-status-bar"><el-popover v-model:visible="branchPopoverOpen" placement="top-start" trigger="manual" :width="250" popper-class="code-branch-popper"><template #reference><button aria-label="切换 Git 分支" :disabled="!repository || branchLoading" @click="toggleBranchPopover"><GitBranch :size="12" />{{ gitStatus?.branch || 'Git' }}<span v-if="gitStatus">{{ gitStatus.changes.length }} 个更改</span></button></template><section class="code-branch-picker" role="dialog" aria-label="切换分支"><header><strong>切换分支</strong><button aria-label="刷新分支" title="刷新分支" :disabled="branchLoading" @click="loadBranches"><RefreshCw :size="13" /></button></header><p v-if="branchError" class="error">{{ branchError }}<button :disabled="branchLoading" @click="loadBranches">重试</button></p><p v-else-if="branchLoading && !branchesLoaded">正在读取分支…</p><div v-else class="code-branch-groups"><section class="code-branch-group" role="group" aria-label="本地分支"><h4><span>本地分支</span><small>{{ localBranches.length }}</small></h4><button v-for="item in localBranches" :key="item.name" :class="{ current: item.current }" :disabled="item.current || !!gitBusy" @click="switchWorkspaceBranch(item)"><GitBranch :size="13" /><span>{{ item.name }}</span><Check v-if="item.current" :size="13" /></button><p v-if="!localBranches.length" class="empty">暂无本地分支</p></section><section class="code-branch-group" role="group" aria-label="远程分支"><h4><span>远程分支</span><small>{{ remoteBranches.length }}</small></h4><button v-for="item in remoteBranches" :key="item.name" :disabled="!!gitBusy" @click="switchWorkspaceBranch(item)"><GitPullRequest :size="13" /><span>{{ item.name }}</span></button><p v-if="!remoteBranches.length" class="empty">暂无远程分支</p></section></div></section></el-popover><span class="code-status-host">{{ host.username }}@{{ host.address }}</span><span v-if="fileSaveStatus" class="code-save-status" :class="{ error: activeDocument?.saveError || activeDocument?.conflict, pending: activeDocument?.saving }" role="status" aria-live="polite" :title="activeDocument?.savedAt ? `上次保存 ${new Date(activeDocument.savedAt).toLocaleTimeString()}` : ''">{{ fileSaveStatus }}</span><EditorStatusControls v-if="activeDocument && !activeDocument.loading && !activeDocument.error" :path="activeDocument.path" :content="activeDocument.content" :line="activeDocument.line" :column="activeDocument.column" :language="activeDocument.language" :indent="activeDocument.indent || '4'" :disabled="activeDocument.saving || fileMutationBusy || locked" @language="activeDocument.language = $event" @indent="activeDocument.indent = $event" @ending="activeDocument.content = withLineEnding(activeDocument.content, $event)" @goto="editorRefs.get(activeID)?.promptGoTo()" /></footer>
+    <CodeDiffDialog v-if="diffPreview && !locked" v-model="diffOpen" :path="diffPreview.path" :state-key="`${stateKey}:${diffPreview.id}`" :preview="diffPreview.preview" :left="diffPreview.left" :right="diffPreview.right" :left-label="diffPreview.leftLabel" :right-label="diffPreview.rightLabel" :loading="diffPreview.loading" :error="diffPreview.error" :refreshable="!!diffPreview.group" :can-edit="!!diffPreview.group && diffPreview.change?.worktree !== 'D' && !(diffPreview.change?.index === 'D' && diffPreview.change?.worktree === ' ')" :group="diffPreview.group" :hunk-allowed="hunkAllowed" :busy="!!gitBusy || fullGitBusy || fileMutationBusy || gitLoading" :hunk-hint="!hunkAllowed && diffPreview.group ? '重命名、复制及冲突文件请按文件操作' : undefined" @apply-hunk="applyHunk" @refresh="loadDiff(diffPreview)" @load="loadDiff(diffPreview, true)" @edit="editComparedFile" />
     <GitDialog v-if="!locked" ref="fullGitRef" v-model="gitDialogOpen" :host="host" :session-id="sessionId" :initial-path="repository || rootPath" :initial-tab="gitTab" :initial-conflict="gitConflict" :before-operation="beforeFullGitOperation" @changed="gitChanged" @dirty="fullGitDirty = $event" @busy="fullGitBusy = $event" />
     <CodeFileAnalysis v-if="analysisDocument && !locked" v-model="analysisOpen" :path="analysisDocument.path" :content="analysisDocument.content" :dirty="isDirty(analysisDocument)" @locate="locateAnalysis" />
     <div v-if="quickOpen" class="code-quick-overlay" @click.self="quickOpen = false"><section class="code-quick-open" role="dialog" aria-label="快速打开文件" aria-modal="true"><header><Search :size="16" /><input ref="quickInput" v-model="quickQuery" role="combobox" aria-label="快速搜索文件" aria-controls="code-quick-results" aria-expanded="true" :aria-activedescendant="searchResults.length ? `code-quick-result-${quickSelected}` : undefined" placeholder="按文件名或路径查找" @keydown="quickNavigate" /><button aria-label="关闭快速打开" @click="quickOpen = false"><X :size="15" /></button></header><div class="code-quick-heading"><span>文件</span><span>所在目录</span></div><div id="code-quick-results" class="code-search-results" role="listbox" aria-label="文件搜索结果"><button v-for="(entry, index) in searchResults" :id="`code-quick-result-${index}`" :key="entry.path" class="code-quick-result" :class="{ active: quickSelected === index }" role="option" :aria-selected="quickSelected === index" :title="relativeRemotePath(rootPath, entry.path)" @pointermove="quickSelected = index" @click="openSearchResult(entry)"><File :size="14" /><span>{{ fileName(entry.path) }}</span><small>{{ directoryLabel(entry.path) }}</small></button><p v-if="!searchResults.length" class="code-panel-empty">{{ indexing ? '正在查找文件…' : '没有匹配的文件' }}</p></div><footer><span>{{ indexing ? '正在索引目录…' : `${indexedFiles.length} 个文件` }}{{ indexLimited ? ' · 已达索引上限' : '' }}<span v-if="indexError"> · {{ indexError }}</span></span><span>↑ ↓ 选择 · Enter 打开 · Esc 关闭</span></footer></section></div>

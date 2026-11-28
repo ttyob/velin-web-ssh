@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
   CheckSquare,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Copy,
+  Eye,
+  EyeOff,
+  FilePenLine,
+  FlaskConical,
   FolderInput,
+  FolderOpen,
   Plus,
   Server,
   Tags,
@@ -11,6 +19,8 @@ import {
 } from "@lucide/vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api, json } from "../api";
+import { contextMenuPosition, contextMenuKey } from "../contextMenu";
+import { maskHostAddress } from "../hostAddress";
 import type { Host } from "../types";
 import HostGroupNode, {
   type HostDropTarget,
@@ -20,10 +30,12 @@ import HostGroupNode, {
 const props = defineProps<{
   hosts: Host[];
   testing?: string;
+  activeHostId?: string;
+  connectedHostIds?: Set<string>;
 }>();
 const emit = defineEmits<{
   connect: [Host];
-  web: [Host];
+  files: [Host];
   test: [Host];
   edit: [Host];
   duplicate: [Host];
@@ -32,13 +44,110 @@ const emit = defineEmits<{
   refresh: [];
   reorder: [{ hostID: string; target: HostDropTarget }];
 }>();
+type HostMenuState = { host: Host; x: number; y: number };
 const selecting = ref(false),
   selected = ref(new Set<string>()),
   collapsed = ref(new Set<string>()),
   busy = ref(false),
   draggingHostID = ref(""),
-  dropTarget = ref<HostDropTarget | null>(null);
+  dropTarget = ref<HostDropTarget | null>(null),
+  hostMenu = ref<HostMenuState>(),
+  hostMenuElement = ref<HTMLElement>();
+const maskAddressStorageKey = "velin-mask-host-address";
+const maskAddresses = ref(loadMaskAddresses());
 const groups = computed(() => buildGroups(props.hosts));
+const allGroupPaths = computed(() => collectGroupPaths(groups.value));
+const allGroupsCollapsed = computed(
+  () =>
+    allGroupPaths.value.length > 0 &&
+    allGroupPaths.value.every((path) => collapsed.value.has(path)),
+);
+
+function loadMaskAddresses() {
+  try {
+    return localStorage.getItem(maskAddressStorageKey) === "1";
+  } catch {
+    return false;
+  }
+}
+function toggleMaskAddresses() {
+  maskAddresses.value = !maskAddresses.value;
+  try {
+    localStorage.setItem(maskAddressStorageKey, maskAddresses.value ? "1" : "0");
+  } catch {}
+}
+function collectGroupPaths(items: HostTreeGroup[]): string[] {
+  const paths: string[] = [];
+  for (const item of items) {
+    paths.push(item.path);
+    if (item.children.length) paths.push(...collectGroupPaths(item.children));
+  }
+  return paths;
+}
+function toggleAllGroups() {
+  collapsed.value = allGroupsCollapsed.value
+    ? new Set()
+    : new Set(allGroupPaths.value);
+}
+
+function closeHostMenu() {
+  hostMenu.value = undefined;
+}
+async function openHostMenu(state: HostMenuState) {
+  closeHostMenu();
+  hostMenu.value = { ...state };
+  await nextTick();
+  if (!hostMenu.value || !hostMenuElement.value) return;
+  Object.assign(hostMenu.value, contextMenuPosition(hostMenu.value, hostMenuElement.value));
+  hostMenuElement.value
+    .querySelector<HTMLButtonElement>("button:not(:disabled)")
+    ?.focus({ preventScroll: true });
+}
+function outsideHostMenu(event: PointerEvent) {
+  if (!hostMenuElement.value?.contains(event.target as Node)) closeHostMenu();
+}
+function wheelHostMenu(event: WheelEvent) {
+  if (!hostMenuElement.value?.contains(event.target as Node)) closeHostMenu();
+}
+function hostMenuKey(event: KeyboardEvent) { contextMenuKey(event, hostMenuElement.value, closeHostMenu); }
+function runHostMenu(action: (host: Host) => void) {
+  const host = hostMenu.value?.host;
+  closeHostMenu();
+  if (host) action(host);
+}
+function canOpenHostFiles(host: Host) {
+  return (
+    (host.protocol || "ssh") === "ssh" &&
+    (Boolean(host.credentialID) || Boolean(host.hasPassword))
+  );
+}
+watch(
+  () => Boolean(hostMenu.value),
+  (open) => {
+    if (open) {
+      document.addEventListener("pointerdown", outsideHostMenu, true);
+      document.addEventListener("wheel", wheelHostMenu, {
+        capture: true,
+        passive: true,
+      });
+      window.addEventListener("resize", closeHostMenu);
+      window.addEventListener("blur", closeHostMenu);
+    } else {
+      document.removeEventListener("pointerdown", outsideHostMenu, true);
+      document.removeEventListener("wheel", wheelHostMenu, true);
+      window.removeEventListener("resize", closeHostMenu);
+      window.removeEventListener("blur", closeHostMenu);
+    }
+  },
+);
+watch(() => props.hosts, closeHostMenu);
+onBeforeUnmount(() => {
+  closeHostMenu();
+  document.removeEventListener("pointerdown", outsideHostMenu, true);
+  document.removeEventListener("wheel", wheelHostMenu, true);
+  window.removeEventListener("resize", closeHostMenu);
+  window.removeEventListener("blur", closeHostMenu);
+});
 
 function buildGroups(hosts: Host[]): HostTreeGroup[] {
   const roots: HostTreeGroup[] = [];
@@ -210,6 +319,27 @@ async function batch(action: "group" | "tags" | "delete") {
     <template v-else
       ><span>{{ hosts.length }} 台主机</span>
       <div>
+        <button
+          v-if="allGroupPaths.length > 1"
+          class="icon-btn"
+          :title="allGroupsCollapsed ? '展开全部分组' : '折叠全部分组'"
+          :aria-label="allGroupsCollapsed ? '展开全部分组' : '折叠全部分组'"
+          @click="toggleAllGroups"
+        >
+          <ChevronsUpDown v-if="allGroupsCollapsed" :size="15" />
+          <ChevronsDownUp v-else :size="15" />
+        </button>
+        <button
+          class="icon-btn"
+          :class="{ active: maskAddresses }"
+          :title="maskAddresses ? '显示主机 IP/地址' : '隐藏主机 IP/地址（打码）'"
+          :aria-label="maskAddresses ? '显示主机 IP/地址' : '隐藏主机 IP/地址（打码）'"
+          :aria-pressed="maskAddresses"
+          @click="toggleMaskAddresses"
+        >
+          <EyeOff v-if="maskAddresses" :size="15" />
+          <Eye v-else :size="15" />
+        </button>
         <button class="icon-btn" title="批量选择" @click="selecting = true">
           <CheckSquare :size="15" /></button
         ><button class="icon-btn" title="新增主机" @click="emit('add')">
@@ -232,8 +362,11 @@ async function batch(action: "group" | "tags" | "delete") {
       :testing="testing"
       :dragging-host-id="draggingHostID"
       :drop-target="dropTarget"
+      :mask-addresses="maskAddresses"
+      :active-host-id="activeHostId"
+      :connected-host-ids="connectedHostIds"
       @connect="emit('connect', $event)"
-      @web="emit('web', $event)"
+      @context="openHostMenu($event)"
       @test="emit('test', $event)"
       @edit="emit('edit', $event)"
       @duplicate="emit('duplicate', $event)"
@@ -246,4 +379,66 @@ async function batch(action: "group" | "tags" | "delete") {
       @drop="completeDrop"
     />
   </div>
+  <Teleport to="body">
+    <nav
+      v-if="hostMenu"
+      ref="hostMenuElement"
+      class="host-context-menu"
+      role="menu"
+      aria-label="主机操作"
+      :style="{ left: `${hostMenu.x}px`, top: `${hostMenu.y}px` }"
+      @pointerdown.stop
+      @contextmenu.prevent.stop
+      @keydown="hostMenuKey"
+    >
+      <div class="host-context-heading">
+        <strong>{{ hostMenu.host.name }}</strong>
+        <small>{{ hostMenu.host.username }}@{{ maskAddresses ? maskHostAddress(hostMenu.host.address) : hostMenu.host.address }}</small>
+      </div>
+      <button
+        class="action-files"
+        role="menuitem"
+        :disabled="!canOpenHostFiles(hostMenu.host)"
+        :title="
+          canOpenHostFiles(hostMenu.host)
+            ? '打开 SFTP 文件管理'
+            : '请先为这台主机保存 SSH 密码或密钥'
+        "
+        @click="runHostMenu((host) => emit('files', host))"
+      >
+        <FolderOpen :size="14" /><span>SFTP</span>
+      </button>
+      <button
+        class="action-test"
+        role="menuitem"
+        :disabled="testing === hostMenu.host.id"
+        @click="runHostMenu((host) => emit('test', host))"
+      >
+        <FlaskConical :size="14" />
+        <span>{{ testing === hostMenu.host.id ? "正在测试…" : "测试连接" }}</span>
+      </button>
+      <button
+        class="action-edit"
+        role="menuitem"
+        @click="runHostMenu((host) => emit('edit', host))"
+      >
+        <FilePenLine :size="14" /><span>编辑</span>
+      </button>
+      <button
+        class="action-copy"
+        role="menuitem"
+        @click="runHostMenu((host) => emit('duplicate', host))"
+      >
+        <Copy :size="14" /><span>复制主机</span>
+      </button>
+      <div class="host-context-separator" role="separator" />
+      <button
+        class="danger"
+        role="menuitem"
+        @click="runHostMenu((host) => emit('delete', host))"
+      >
+        <Trash2 :size="14" /><span>删除</span>
+      </button>
+    </nav>
+  </Teleport>
 </template>

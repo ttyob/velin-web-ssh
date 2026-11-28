@@ -36,8 +36,8 @@ async function remove(credential: Credential) {
 
 <template>
   <div class="tool-heading">
-    <span>已保存凭据</span>
-    <el-button :icon="Plus" type="primary" @click="dialogOpen = true"
+    <span>已保存凭据 · {{ credentials.length }}</span>
+    <el-button :icon="Plus" type="primary" size="small" @click="dialogOpen = true"
       >新增凭据</el-button
     >
   </div>

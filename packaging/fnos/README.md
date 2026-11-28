@@ -1,7 +1,7 @@
-# VelinWebSSH for fnOS
+# Jeex Terminal for fnOS
 
 This directory is a native fnOS application package source. The package runs
-the VelinWebSSH Go binary and guacd as native processes. Docker is not required on
+the Jeex Terminal Go binary and guacd as native processes. Docker is not required on
 the NAS.
 
 Build it from the repository root:

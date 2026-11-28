@@ -1,0 +1,28 @@
+/* Shared surfaces and color semantics; preserve each list's typography. */
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) {
+  padding: 5px; border: 1px solid var(--line-strong, var(--line)); border-radius: 5px; background: var(--surface);
+  box-shadow: 0 8px 24px #0004; max-height: calc(100dvh - 12px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) button:not(:disabled):is(:hover, :focus-visible) {
+  background: var(--surface-2); outline: none;
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) button svg.lucide {
+  --icon-color: var(--icon-neutral);
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) button.danger {
+  color: var(--danger);
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) button.danger svg.lucide {
+  --icon-color: var(--icon-danger);
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) button.danger:not(:disabled):is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) kbd {
+  margin-left: auto; color: var(--muted); white-space: nowrap;
+}
+:is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) button:disabled { cursor: default; }
+.operation-feedback .lucide-circle-alert { --icon-color: var(--icon-danger); }
+@media (prefers-reduced-motion: reduce) {
+  :is(.host-context-menu, .pane-context-menu, .code-file-context-menu, .code-editor-context-menu, .explorer-context-menu) { animation: none !important; transition: none !important; }
+}
